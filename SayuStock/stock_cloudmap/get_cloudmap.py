@@ -17,6 +17,7 @@ from ..utils.constant import market_dict, request_header, trade_detail_dict
 
 view_port: int = STOCK_CONFIG.get_config('mapcloud_viewport').data
 scale: int = STOCK_CONFIG.get_config('mapcloud_scale').data
+minutes: int = STOCK_CONFIG.get_config('mapcloud_refresh_minutes').data
 
 
 async def load_data_from_file(file: Path):
@@ -53,8 +54,10 @@ async def get_data(market: str = '沪深A') -> Union[Dict, str]:
     if file.exists():
         # 检查文件的修改时间是否在一分钟以内
         file_mod_time = datetime.fromtimestamp(file.stat().st_mtime)
-        if datetime.now() - file_mod_time < timedelta(minutes=2):
-            logger.info("[SayuStock] json文件在一分钟内，直接返回文件数据。")
+        if datetime.now() - file_mod_time < timedelta(minutes=minutes):
+            logger.info(
+                f"[SayuStock] json文件在{minutes}分钟内，直接返回文件数据。"
+            )
             return await load_data_from_file(file)
 
     fs = market_dict[market]
@@ -98,8 +101,10 @@ async def render_html(
     if file.exists():
         # 检查文件的修改时间是否在一分钟以内
         file_mod_time = datetime.fromtimestamp(file.stat().st_mtime)
-        if datetime.now() - file_mod_time < timedelta(minutes=2):
-            logger.info("[SayuStock] html文件在一分钟内，直接返回文件数据。")
+        if datetime.now() - file_mod_time < timedelta(minutes=minutes):
+            logger.info(
+                f"[SayuStock] html文件在{minutes}分钟内，直接返回文件数据。"
+            )
             return file
 
     result = {}

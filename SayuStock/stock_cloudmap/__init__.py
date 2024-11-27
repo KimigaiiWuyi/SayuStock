@@ -1,11 +1,22 @@
 from gsuid_core.sv import SV
 from gsuid_core.bot import Bot
 from gsuid_core.models import Event
+from gsuid_core.aps import scheduler
 from gsuid_core.logger import logger
 
-from .get_cloudmap import render_image
+from .get_cloudmap import DATA_PATH, render_image
 
 sv_stock_cloudmap = SV("大盘云图")
+
+
+# 每日零点二十删除全部缓存数据
+@scheduler.scheduled_job('cron', hour=0, minute=20)
+async def delete_all_data():
+    logger.info("[SayuStock] 开始执行[删除全部缓存数据]")
+    for i in DATA_PATH.iterdir():
+        if i.is_file():
+            i.unlink()
+    logger.success("[SayuStock] [删除全部缓存数据] 执行完成！")
 
 
 @sv_stock_cloudmap.on_command(("大盘云图"))

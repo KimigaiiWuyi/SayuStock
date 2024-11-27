@@ -15,4 +15,10 @@ CONFIG_DEFAULT: Dict[str, GSC] = {
         2,
         options=[1, 2, 3],
     ),
+    "mapcloud_refresh_minutes": GsIntConfig(
+        "大盘云图刷新时间(分钟)",
+        "隔多久之后才会重新请求新数据",
+        3,
+        options=[1, 2, 3, 4, 5, 10, 30, 60],
+    ),
 }
