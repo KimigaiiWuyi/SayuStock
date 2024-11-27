@@ -152,6 +152,9 @@ async def render_html(
             d_str = '+' + str(_d) if _d > 0 else str(_d)
             custom_info.append(f"{d_str}%")
 
+    if not diff:
+        return '❌不存在该板块或市场, 暂无数据...'
+
     data = {
         "Category": category,
         "StockName": stock_name,
