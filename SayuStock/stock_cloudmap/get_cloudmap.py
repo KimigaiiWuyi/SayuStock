@@ -1,0 +1,239 @@
+import json
+from pathlib import Path
+from typing import Dict, Union
+from datetime import datetime, timedelta
+
+import aiofiles
+import pandas as pd
+import plotly.express as px
+from httpx import AsyncClient
+from gsuid_core.logger import logger
+from playwright.async_api import async_playwright
+from gsuid_core.utils.image.convert import convert_img
+
+from ..utils.resource_path import DATA_PATH
+from ..stock_config.stock_config import STOCK_CONFIG
+from ..utils.constant import market_dict, request_header, trade_detail_dict
+
+view_port: int = STOCK_CONFIG.get_config('mapcloud_viewport').data
+scale: int = STOCK_CONFIG.get_config('mapcloud_scale').data
+
+
+async def load_data_from_file(file: Path):
+    async with aiofiles.open(file, 'r', encoding='UTF-8') as f:
+        return json.loads(await f.read())
+
+
+def get_file(market: str, suffix: str):
+    """生成以当前时间命名的文件名。"""
+    current_time = datetime.now()
+    return (
+        DATA_PATH
+        / f"{market}_data_{current_time.strftime('%Y%m%d_%H%M')}.{suffix}"
+    )
+
+
+async def get_data(market: str = '沪深A') -> Union[Dict, str]:
+    market = market.upper()
+    if not market:
+        market = '沪深A'
+
+    file = get_file(market, 'json')
+    if market not in market_dict:
+        for m in market_dict:
+            if m in market:
+                market = m
+                break
+        else:
+            return '❌未找到对应板块, 请重新输入\n📄例如: 大盘云图沪深A\n大盘云图创业板 等等...'
+
+    # 检查当前目录下是否有符合条件的文件
+    if file.exists():
+        # 检查文件的修改时间是否在一分钟以内
+        file_mod_time = datetime.fromtimestamp(file.stat().st_mtime)
+        if datetime.now() - file_mod_time < timedelta(minutes=2):
+            logger.info("[SayuStock] json文件在一分钟内，直接返回文件数据。")
+            return await load_data_from_file(file)
+
+    fs = market_dict[market]
+    fields = ",".join(trade_detail_dict.keys())
+    params = (
+        ('pn', '1'),
+        ('pz', '1000000'),
+        ('po', '1'),
+        ('np', '1'),
+        ('fltt', '2'),
+        ('invt', '2'),
+        ('fid', 'f3'),
+        ('fs', fs),
+        ('fields', fields),
+    )
+    url = 'http://push2.eastmoney.com/api/qt/clist/get'
+    async with AsyncClient() as client:
+        response = await client.get(url, headers=request_header, params=params)
+        response = response.json()
+
+    async with aiofiles.open(file, 'w', encoding='UTF-8') as f:
+        await f.write(json.dumps(response, ensure_ascii=False, indent=4))
+
+    return response
+
+
+async def render_html(market: str = '沪深A') -> Union[str, Path]:
+    if not market:
+        market = '沪深A'
+    raw_data = await get_data(market)
+    if raw_data is None:
+        return '数据处理失败, 请检查后台...'
+    elif isinstance(raw_data, str):
+        return raw_data
+
+    file = get_file(market, 'html')
+    # 检查当前目录下是否有符合条件的文件
+    if file.exists():
+        # 检查文件的修改时间是否在一分钟以内
+        file_mod_time = datetime.fromtimestamp(file.stat().st_mtime)
+        if datetime.now() - file_mod_time < timedelta(minutes=2):
+            return file
+
+    result = {}
+    for i in raw_data['data']['diff']:
+        if i['f14'].startswith(('ST', '*ST')):
+            i['f100'] = 'ST'
+
+        if i['f20'] != '-' and i['f100'] != '-' and i['f3'] != '-':
+            # stock = {'市值': i['f20'], '股票名称': i['f14']}
+            if i['f100'] not in result:
+                result[i['f100']] = {'总市值': i['f20'], '个股': [i]}
+            else:
+                result[i['f100']]['总市值'] += i['f20']
+                result[i['f100']]['个股'].append(i)
+
+    for r in result:
+        stock_item = result[r]['个股']
+        sorted_stock = sorted(stock_item, key=lambda x: x['f20'], reverse=True)
+        num_items = len(sorted_stock)
+        num_to_extract = int(num_items * 0.2)
+        subset_data = sorted_stock[:num_to_extract]
+        result[r]['个股'] = subset_data
+
+    sorted_result = dict(
+        sorted(
+            result.items(),
+            key=lambda item: item[1]['总市值'],
+            reverse=True,
+        )
+    )
+
+    category = []
+    stock_name = []
+    values = []
+    diff = []
+    custom_info = []
+
+    for r in sorted_result:
+        for s in sorted_result[r]['个股']:
+            category.append(f'<b>{r}</b>')
+            stock_name.append(s['f14'])
+            values.append(s['f20'])
+            _d: float = s['f3']
+            diff.append(_d)
+            d_str = '+' + str(_d) if _d > 0 else str(_d)
+            custom_info.append(f"{d_str}%")
+
+    data = {
+        "Category": category,
+        "StockName": stock_name,
+        "Values": values,
+        "Diff": diff,
+        "Custom Info": custom_info,
+    }
+
+    df = pd.DataFrame(data)
+
+    df["DisplayText"] = '<b>' + df['Custom Info'].astype('str') + "</b>"
+
+    # 生成 Treemap
+    fig = px.treemap(
+        df,
+        path=["Category", "StockName"],
+        values="Values",  # 定义块的大小
+        color="Diff",  # 根据数值上色
+        color_continuous_scale=[
+            [0, 'rgba(0, 255, 0, 1)'],  # 绿色，透明度1
+            [0.49, 'rgba(0, 255, 0, 0.05)'],
+            [0.51, 'rgba(255, 0, 0, 0.05)'],
+            [1, 'rgba(255, 0, 0, 1)'],  # 红色，透明度1
+        ],  # 渐变颜色
+        range_color=[-10, 10],  # 设置数值范围
+        custom_data=["DisplayText"],
+        branchvalues="total",
+    )
+
+    # 控制显示内容
+    fig.update_traces(
+        marker=dict(
+            colorscale=[
+                [0, 'rgba(10, 204, 49, 1)'],  # 绿色，透明度1
+                [0.49, 'rgba(10, 204, 49, 0.05)'],
+                [0.51, 'rgba(238, 55, 58, 0.05)'],
+                [1, 'rgba(238, 55, 58, 1)'],  # 红色，透明度1
+            ],
+            cmin=-10,  # 设置最小值
+            cmax=10,  # 设置最大值
+            cornerradius=5,
+        ),
+        marker_pad=dict(
+            l=5,
+            r=5,
+            b=5,
+            t=60,
+        ),
+        textfont=dict(
+            color="white",
+        ),
+        textfont_family='MiSans',
+        textfont_weight=350,
+        texttemplate="%{label}<br>%{customdata[0]}",
+        textinfo="label+text",
+        textfont_size=50,  # 设置字体大小
+        textposition="middle center",
+    )
+
+    fig.update_layout(
+        # uniformtext=dict(minsize=30, mode='hide'),
+        margin=dict(t=0, b=0, l=0, r=0),
+        paper_bgcolor="black",
+        plot_bgcolor="black",
+        font=dict(color="white"),
+        coloraxis_showscale=False,
+    )
+
+    # fig.show()
+    fig.write_html(file)
+    return file
+
+
+async def render_image(market: str = '沪深A'):
+    if not market:
+        market = '沪深A'
+    html_path = await render_html(market)
+    if isinstance(html_path, str):
+        return html_path
+
+    async with async_playwright() as p:
+        browser = await p.chromium.launch(headless=True)
+        context = await browser.new_context(
+            viewport={
+                "width": view_port,
+                "height": view_port,
+            },
+            device_scale_factor=scale,
+        )
+        page = await context.new_page()
+        await page.goto(str(html_path))
+        await page.wait_for_selector(".plot-container")
+        png_bytes = await page.screenshot(type='png')
+        await browser.close()
+        return await convert_img(png_bytes)
+        return await convert_img(png_bytes)
