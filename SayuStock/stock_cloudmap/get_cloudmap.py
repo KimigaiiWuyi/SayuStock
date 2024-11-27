@@ -1,7 +1,7 @@
 import json
 from pathlib import Path
-from typing import Dict, Union
 from datetime import datetime, timedelta
+from typing import Dict, Union, Optional
 
 import aiofiles
 import pandas as pd
@@ -24,13 +24,15 @@ async def load_data_from_file(file: Path):
         return json.loads(await f.read())
 
 
-def get_file(market: str, suffix: str):
+def get_file(
+    market: str,
+    suffix: str,
+    sector: Optional[str] = None,
+):
     """生成以当前时间命名的文件名。"""
     current_time = datetime.now()
-    return (
-        DATA_PATH
-        / f"{market}_data_{current_time.strftime('%Y%m%d_%H%M')}.{suffix}"
-    )
+    a = f'{market}_{sector}_data'
+    return DATA_PATH / f"{a}_{current_time.strftime('%Y%m%d_%H%M')}.{suffix}"
 
 
 async def get_data(market: str = '沪深A') -> Union[Dict, str]:
@@ -45,7 +47,7 @@ async def get_data(market: str = '沪深A') -> Union[Dict, str]:
                 market = m
                 break
         else:
-            return '❌未找到对应板块, 请重新输入\n📄例如: 大盘云图沪深A\n大盘云图创业板 等等...'
+            return '❌未找到对应板块, 请重新输入📄例如: \n大盘云图沪深A\n大盘云图创业板 \n等等...'
 
     # 检查当前目录下是否有符合条件的文件
     if file.exists():
@@ -79,7 +81,10 @@ async def get_data(market: str = '沪深A') -> Union[Dict, str]:
     return response
 
 
-async def render_html(market: str = '沪深A') -> Union[str, Path]:
+async def render_html(
+    market: str = '沪深A',
+    sector: Optional[str] = None,
+) -> Union[str, Path]:
     if not market:
         market = '沪深A'
     raw_data = await get_data(market)
@@ -88,12 +93,13 @@ async def render_html(market: str = '沪深A') -> Union[str, Path]:
     elif isinstance(raw_data, str):
         return raw_data
 
-    file = get_file(market, 'html')
+    file = get_file(market, 'html', sector)
     # 检查当前目录下是否有符合条件的文件
     if file.exists():
         # 检查文件的修改时间是否在一分钟以内
         file_mod_time = datetime.fromtimestamp(file.stat().st_mtime)
         if datetime.now() - file_mod_time < timedelta(minutes=2):
+            logger.info("[SayuStock] html文件在一分钟内，直接返回文件数据。")
             return file
 
     result = {}
@@ -109,13 +115,16 @@ async def render_html(market: str = '沪深A') -> Union[str, Path]:
                 result[i['f100']]['总市值'] += i['f20']
                 result[i['f100']]['个股'].append(i)
 
-    for r in result:
-        stock_item = result[r]['个股']
-        sorted_stock = sorted(stock_item, key=lambda x: x['f20'], reverse=True)
-        num_items = len(sorted_stock)
-        num_to_extract = int(num_items * 0.2)
-        subset_data = sorted_stock[:num_to_extract]
-        result[r]['个股'] = subset_data
+    if sector is None:
+        for r in result:
+            stock_item = result[r]['个股']
+            sorted_stock = sorted(
+                stock_item, key=lambda x: x['f20'], reverse=True
+            )
+            num_items = len(sorted_stock)
+            num_to_extract = int(num_items * 0.2)
+            subset_data = sorted_stock[:num_to_extract]
+            result[r]['个股'] = subset_data
 
     sorted_result = dict(
         sorted(
@@ -132,6 +141,8 @@ async def render_html(market: str = '沪深A') -> Union[str, Path]:
     custom_info = []
 
     for r in sorted_result:
+        if sector and sector not in r:
+            continue
         for s in sorted_result[r]['个股']:
             category.append(f'<b>{r}</b>')
             stock_name.append(s['f14'])
@@ -214,10 +225,13 @@ async def render_html(market: str = '沪深A') -> Union[str, Path]:
     return file
 
 
-async def render_image(market: str = '沪深A'):
+async def render_image(
+    market: str = '沪深A',
+    sector: Optional[str] = None,
+):
     if not market:
         market = '沪深A'
-    html_path = await render_html(market)
+    html_path = await render_html(market, sector)
     if isinstance(html_path, str):
         return html_path
 
@@ -235,5 +249,4 @@ async def render_image(market: str = '沪深A'):
         await page.wait_for_selector(".plot-container")
         png_bytes = await page.screenshot(type='png')
         await browser.close()
-        return await convert_img(png_bytes)
         return await convert_img(png_bytes)
