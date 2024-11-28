@@ -93,6 +93,14 @@ async def render_html(
     _sp_str = None
     sp = None
     logger.info(f"[SayuStock] market: {market} sector: {sector}")
+
+    if market == '沪深300':
+        market = '300'
+    elif market == '1000':
+        market = '中证1000'
+    elif market == '中证2000':
+        market = '2000'
+
     if market in mdata:
         _sp_str = market
         sp = mdata[market]
