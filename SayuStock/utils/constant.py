@@ -9,7 +9,7 @@ request_header = {
 
 
 trade_detail_dict = {
-    # 'f12': '代码',
+    'f12': '代码',
     'f14': '名称',
     'f3': '涨幅',
     # 'f2': '最新',

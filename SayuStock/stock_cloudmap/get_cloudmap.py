@@ -11,6 +11,7 @@ from gsuid_core.logger import logger
 from playwright.async_api import async_playwright
 from gsuid_core.utils.image.convert import convert_img
 
+from ..utils.load_data import mdata
 from ..utils.resource_path import DATA_PATH
 from ..stock_config.stock_config import STOCK_CONFIG
 from ..utils.constant import market_dict, request_header, trade_detail_dict
@@ -29,10 +30,11 @@ def get_file(
     market: str,
     suffix: str,
     sector: Optional[str] = None,
+    sp: Optional[str] = None,
 ):
     """生成以当前时间命名的文件名。"""
     current_time = datetime.now()
-    a = f'{market}_{sector}_data'
+    a = f'{market}_{sector}_{sp}_data'
     return DATA_PATH / f"{a}_{current_time.strftime('%Y%m%d_%H%M')}.{suffix}"
 
 
@@ -88,15 +90,25 @@ async def render_html(
     market: str = '沪深A',
     sector: Optional[str] = None,
 ) -> Union[str, Path]:
+    _sp_str = None
+    sp = None
+    logger.info(f"[SayuStock] market: {market} sector: {sector}")
+    if market in mdata:
+        _sp_str = market
+        sp = mdata[market]
+        logger.info(f"[SayuStock] 触发SP数据{_sp_str}: {len(sp)}...")
+        market = '沪深A'
+
     if not market:
         market = '沪深A'
+
     raw_data = await get_data(market)
     if raw_data is None:
         return '数据处理失败, 请检查后台...'
     elif isinstance(raw_data, str):
         return raw_data
 
-    file = get_file(market, 'html', sector)
+    file = get_file(market, 'html', sector, _sp_str)
     # 检查当前目录下是否有符合条件的文件
     if file.exists():
         # 检查文件的修改时间是否在一分钟以内
@@ -149,6 +161,8 @@ async def render_html(
         if sector and sector not in r:
             continue
         for s in sorted_result[r]['个股']:
+            if sp and s['f12'] not in sp:
+                continue
             category.append(f'<b>{r}</b>')
             stock_name.append(s['f14'])
             values.append(s['f20'])
@@ -237,8 +251,6 @@ async def render_image(
     market: str = '沪深A',
     sector: Optional[str] = None,
 ):
-    if not market:
-        market = '沪深A'
     html_path = await render_html(market, sector)
     if isinstance(html_path, str):
         return html_path
