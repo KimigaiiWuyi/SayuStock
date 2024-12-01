@@ -3,10 +3,10 @@ from pathlib import Path
 from datetime import datetime, timedelta
 from typing import Dict, Union, Optional
 
+import aiohttp
 import aiofiles
 import pandas as pd
 import plotly.express as px
-from httpx import AsyncClient
 from gsuid_core.logger import logger
 from playwright.async_api import async_playwright
 from gsuid_core.utils.image.convert import convert_img
@@ -50,7 +50,7 @@ async def get_data(market: str = '沪深A') -> Union[Dict, str]:
                 market = m
                 break
         else:
-            return '❌未找到对应板块, 请重新输入📄例如: \n大盘云图沪深A\n大盘云图创业板 \n等等...'
+            return '❌未找到对应板块, 请重新输入\n📄例如: \n大盘云图沪深A\n大盘云图创业板 \n等等...'
 
     # 检查当前目录下是否有符合条件的文件
     if file.exists():
@@ -76,14 +76,18 @@ async def get_data(market: str = '沪深A') -> Union[Dict, str]:
         ('fields', fields),
     )
     url = 'http://push2.eastmoney.com/api/qt/clist/get'
-    async with AsyncClient() as client:
-        response = await client.get(url, headers=request_header, params=params)
-        response = response.json()
+    async with aiohttp.ClientSession() as session:
+        async with session.get(
+            url,
+            headers=request_header,
+            params=params,
+        ) as response:
+            resp = await response.json()
 
     async with aiofiles.open(file, 'w', encoding='UTF-8') as f:
-        await f.write(json.dumps(response, ensure_ascii=False, indent=4))
+        await f.write(json.dumps(resp, ensure_ascii=False, indent=4))
 
-    return response
+    return resp
 
 
 async def render_html(
