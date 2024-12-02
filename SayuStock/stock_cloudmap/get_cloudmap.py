@@ -292,7 +292,7 @@ async def render_image(
             device_scale_factor=scale,
         )
         page = await context.new_page()
-        await page.goto(str(html_path))
+        await page.goto(html_path.absolute().as_uri())
         await page.wait_for_selector(".plot-container")
         png_bytes = await page.screenshot(type='png')
         await browser.close()
