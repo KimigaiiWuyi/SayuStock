@@ -14,7 +14,12 @@ from gsuid_core.utils.image.convert import convert_img
 from ..utils.load_data import mdata
 from ..utils.resource_path import DATA_PATH
 from ..stock_config.stock_config import STOCK_CONFIG
-from ..utils.constant import market_dict, request_header, trade_detail_dict
+from ..utils.constant import (
+    SP_STOCK,
+    market_dict,
+    request_header,
+    trade_detail_dict,
+)
 
 view_port: int = STOCK_CONFIG.get_config('mapcloud_viewport').data
 scale: int = STOCK_CONFIG.get_config('mapcloud_scale').data
@@ -44,7 +49,31 @@ async def get_data(market: str = '沪深A') -> Union[Dict, str]:
         market = '沪深A'
 
     file = get_file(market, 'json')
-    if market not in market_dict:
+
+    params = [
+        ('pn', '1'),
+        ('pz', '1000000'),
+        ('po', '1'),
+        ('np', '1'),
+        ('fltt', '2'),
+        ('invt', '2'),
+        ('fid', 'f3'),
+    ]
+
+    Y = True
+    if market in SP_STOCK:
+        fields = 'f58,f57,f107,f43,f59,f169,f170,f152'
+        url = 'https://push2.eastmoney.com/api/qt/stock/get'
+        params.append(('secid', SP_STOCK[market]))
+        Y = False
+    else:
+        url = 'http://push2.eastmoney.com/api/qt/clist/get'
+        fs = market_dict[market]
+        fields = ",".join(trade_detail_dict.keys())
+        params.append(('fs', fs))
+    params.append(('fields', fields))
+
+    if Y and market not in market_dict:
         for m in market_dict:
             if m in market:
                 market = m
@@ -62,20 +91,6 @@ async def get_data(market: str = '沪深A') -> Union[Dict, str]:
             )
             return await load_data_from_file(file)
 
-    fs = market_dict[market]
-    fields = ",".join(trade_detail_dict.keys())
-    params = (
-        ('pn', '1'),
-        ('pz', '1000000'),
-        ('po', '1'),
-        ('np', '1'),
-        ('fltt', '2'),
-        ('invt', '2'),
-        ('fid', 'f3'),
-        ('fs', fs),
-        ('fields', fields),
-    )
-    url = 'http://push2.eastmoney.com/api/qt/clist/get'
     async with aiohttp.ClientSession() as session:
         async with session.get(
             url,

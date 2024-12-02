@@ -29,6 +29,9 @@ trade_detail_dict = {
     # 'f124': '更新时间戳',
 }
 
+SP_STOCK = {
+    'A500': '1.000510',
+}
 
 market_dict = {
     '主要指数': 'b:MK0010',

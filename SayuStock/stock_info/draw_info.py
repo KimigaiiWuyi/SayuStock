@@ -9,19 +9,31 @@ from ..utils.image import get_footer
 from ..stock_cloudmap.get_cloudmap import get_data
 
 TEXT_PATH = Path(__file__).parent / 'texture2d'
+DIFF_MAP = {
+    1.3: '1',
+    0.7: '2',
+    0.2: '3',
+    -0.5: '4',
+    -1.3: '5',
+}
 
 
 async def draw_info_img():
     data_zs = await get_data('主要指数')
     data_hy = await get_data('行业板块')
+    data_a500 = await get_data('A500')
 
     if isinstance(data_zs, str):
         return data_zs
     if isinstance(data_hy, str):
         return data_hy
+    if isinstance(data_a500, str):
+        return data_a500
+    print(data_a500)
+    data_a500 = data_a500['data']
 
-    img = Image.new('RGBA', (850, 1650), (7, 9, 27))
-    title = Image.open(TEXT_PATH / 'title.png')
+    img = Image.new('RGBA', (850, 1950), (7, 9, 27))
+
     bar1 = Image.open(TEXT_PATH / 'bar1.png')
     bar2 = Image.open(TEXT_PATH / 'bar2.png')
 
@@ -29,7 +41,7 @@ async def draw_info_img():
         '上证指数',
         '深证成指',
         '创业板指',
-        '创业大盘',
+        '中证A500',
         '北证50',
         '中证全指',
         '上证50',
@@ -41,7 +53,17 @@ async def draw_info_img():
     ]
 
     n = 0
+    sz_diff = 0
+    data_zs['data']['diff'].append(
+        {
+            'f14': data_a500['f58'],
+            'f2': data_a500['f43'],
+            'f3': data_a500['f170'],
+        }
+    )
     for zs_diff in data_zs['data']['diff']:
+        if zs_diff['f14'] == '上证指数':
+            sz_diff = zs_diff['f3']
         if zs_diff['f14'] in zyzs:
             diff = zs_diff['f3']
             zs_img = Image.new('RGBA', (200, 140))
@@ -73,7 +95,7 @@ async def draw_info_img():
 
             zs_draw.text(
                 (100, 70),
-                f"{'+' if diff >=0 else ''}{diff}%",
+                f"{'+' if diff >= 0 else ''}{diff}%",
                 zsc2,
                 ss_font(30),
                 'mm',
@@ -85,6 +107,15 @@ async def draw_info_img():
             )
             n += 1
 
+    for i in DIFF_MAP:
+        if sz_diff >= i:
+            title_num = DIFF_MAP[i]
+            break
+    else:
+        title_num = 6
+
+    title = Image.open(TEXT_PATH / f'title{title_num}.png')
+
     img.paste(bar1, (0, 351), bar1)
     img.paste(bar2, (0, 863), bar2)
     img.paste(title, (10, 10), title)
@@ -95,21 +126,22 @@ async def draw_info_img():
         reverse=True,
     )
 
-    await draw_bar(sorted_hy[:10], img, 10)
-    await draw_bar(sorted_hy[-1:-11:-1], img, 415)
+    await draw_bar(sorted_hy[:15], img, 10)
+    await draw_bar(sorted_hy[-1:-16:-1], img, 415)
 
     footer = get_footer()
-    img.paste(footer, (0, 1605), footer)
+    img.paste(footer, (0, 1905), footer)
 
     res = await convert_img(img)
     return res
 
 
 async def draw_bar(sd: List[dict], img: Image.Image, start: int):
+    ls = len(sd)
     for hindex, hy in enumerate(sd):
         hy_diff = hy['f3']
         hy_img = Image.new('RGBA', (425, 60))
-        base_o = int(255 * ((11 - hindex) / 10))
+        base_o = int(255 * (((ls + 1) - hindex) / ls))
         if hy_diff >= 0:
             hyc2 = (140, 18, 22, base_o)
         else:
@@ -126,7 +158,7 @@ async def draw_bar(sd: List[dict], img: Image.Image, start: int):
 
         hy_draw.text(
             (384, 30),
-            f"{'+' if hy_diff >=0 else ''}{hy_diff}%",
+            f"{'+' if hy_diff >= 0 else ''}{hy_diff}%",
             (255, 255, 255),
             ss_font(30),
             'rm',
