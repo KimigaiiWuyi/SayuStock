@@ -16,6 +16,7 @@ from ..stock_config.stock_config import STOCK_CONFIG
 from ..utils.resource_path import DATA_PATH, GN_BK_PATH
 from ..utils.constant import (
     SP_STOCK,
+    bk_dict,
     market_dict,
     request_header,
     trade_detail_dict,
@@ -151,10 +152,16 @@ async def to_fig(
         if i['f20'] != '-' and i['f100'] != '-' and i['f3'] != '-':
             # stock = {'市值': i['f20'], '股票名称': i['f14']}
             if i['f100'] not in result:
-                result[i['f100']] = {'总市值': i['f20'], '个股': [i]}
+                result[i['f100']] = {
+                    '总市值': i['f20'],
+                    '个股': [i],
+                    'name': [i['f14']],
+                }
             else:
-                result[i['f100']]['总市值'] += i['f20']
-                result[i['f100']]['个股'].append(i)
+                if i['f14'] not in result[i['f100']]['name']:
+                    result[i['f100']]['总市值'] += i['f20']
+                    result[i['f100']]['个股'].append(i)
+                    result[i['f100']]['name'].append(i['f14'])
 
     if sector is None:
         fit = 0.2
@@ -200,7 +207,7 @@ async def to_fig(
             values.append(s['f20'])
             _d: float = s['f3']
             diff.append(_d)
-            d_str = '+' + str(_d) if _d > 0 else str(_d)
+            d_str = '+' + str(_d) if _d >= 0 else str(_d)
             custom_info.append(f"{d_str}%")
 
     if not diff:
@@ -211,12 +218,15 @@ async def to_fig(
         "StockName": stock_name,
         "Values": values,
         "Diff": diff,
-        "Custom Info": custom_info,
+        "CustomInfo": custom_info,
     }
+
+    async with aiofiles.open('dd.json', 'w', encoding='UTF-8') as f:
+        await f.write(json.dumps(data, ensure_ascii=False, indent=4))
 
     df = pd.DataFrame(data)
 
-    df["DisplayText"] = '<b>' + df['Custom Info'].astype('str') + "</b>"
+    df = df.sort_values(by='Values', ascending=False, inplace=False)
 
     # 生成 Treemap
     fig = px.treemap(
@@ -231,7 +241,7 @@ async def to_fig(
             [1, 'rgba(255, 0, 0, 1)'],  # 红色，透明度1
         ],  # 渐变颜色
         range_color=[-10, 10],  # 设置数值范围
-        custom_data=["DisplayText"],
+        custom_data=["CustomInfo"],
         branchvalues="total",
     )
 
@@ -260,7 +270,7 @@ async def to_fig(
         textfont_family='MiSans',
         textfont_weight=350,
         texttemplate="%{label}<br>%{customdata[0]}",
-        textinfo="label+text",
+        # textinfo="label+text",
         textfont_size=50,  # 设置字体大小
         textposition="middle center",
     )
@@ -293,7 +303,7 @@ async def render_html(
 
     if market in market_dict and 'b:' in market_dict[market]:
         sector = market
-    elif market in ['概念', '概念板块']:
+    elif market in bk_dict:
         sector = market
 
     if market in mdata:
