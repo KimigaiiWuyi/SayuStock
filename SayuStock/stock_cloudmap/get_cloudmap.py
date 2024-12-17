@@ -158,7 +158,7 @@ async def to_fig(
 
     if sector is None:
         fit = 0.2
-    elif sector and len(result[sector]) > 100:
+    elif sector and layer == 1 and len(result[sector]) > 100:
         scale = 1 - (len(result[sector]) - 100) * 0.7 / 500
         fit = max(0.3, min(scale, 1))
     else:
@@ -291,6 +291,11 @@ async def render_html(
     elif market == '中证2000':
         market = '2000'
 
+    if market in market_dict and 'b:' in market_dict[market]:
+        sector = market
+    elif market in ['概念', '概念板块']:
+        sector = market
+
     if market in mdata:
         _sp_str = market
         sp = mdata[market]
@@ -321,7 +326,7 @@ async def render_html(
         raw_data,
         sector,
         sp,
-        2,
+        2 if market != sector else 1,
     )
     if isinstance(fig, str):
         return fig
@@ -353,5 +358,4 @@ async def render_image(
         await page.wait_for_selector(".plot-container")
         png_bytes = await page.screenshot(type='png')
         await browser.close()
-        return await convert_img(png_bytes)
         return await convert_img(png_bytes)

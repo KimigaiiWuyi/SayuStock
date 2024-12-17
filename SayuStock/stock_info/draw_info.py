@@ -21,6 +21,7 @@ DIFF_MAP = {
 async def draw_info_img():
     data_zs = await get_data('主要指数')
     data_hy = await get_data('行业板块')
+    data_gn = await get_data('概念板块')
     data_a500 = await get_data('A500')
 
     if isinstance(data_zs, str):
@@ -29,10 +30,12 @@ async def draw_info_img():
         return data_hy
     if isinstance(data_a500, str):
         return data_a500
-    print(data_a500)
+    if isinstance(data_gn, str):
+        return data_gn
+
     data_a500 = data_a500['data']
 
-    img = Image.new('RGBA', (850, 1950), (7, 9, 27))
+    img = Image.new('RGBA', (850, 2215), (7, 9, 27))
 
     bar1 = Image.open(TEXT_PATH / 'bar1.png')
     bar2 = Image.open(TEXT_PATH / 'bar2.png')
@@ -125,18 +128,26 @@ async def draw_info_img():
         key=lambda x: x["f3"],
         reverse=True,
     )
+    sorted_gn = sorted(
+        data_gn['data']['diff'],
+        key=lambda x: x["f3"],
+        reverse=True,
+    )
 
-    await draw_bar(sorted_hy[:15], img, 10)
-    await draw_bar(sorted_hy[-1:-16:-1], img, 415)
+    await draw_bar(sorted_hy[:13], img, 10, 967)
+    await draw_bar(sorted_hy[-1:-14:-1], img, 415, 967)
+
+    await draw_bar(sorted_gn[:5], img, 10, 1840)
+    await draw_bar(sorted_gn[-1:-6:-1], img, 415, 1840)
 
     footer = get_footer()
-    img.paste(footer, (0, 1905), footer)
+    img.paste(footer, (0, 2165), footer)
 
     res = await convert_img(img)
     return res
 
 
-async def draw_bar(sd: List[dict], img: Image.Image, start: int):
+async def draw_bar(sd: List[dict], img: Image.Image, start: int, y: int):
     ls = len(sd)
     for hindex, hy in enumerate(sd):
         hy_diff = hy['f3']
@@ -166,6 +177,6 @@ async def draw_bar(sd: List[dict], img: Image.Image, start: int):
 
         img.paste(
             hy_img,
-            (start, 967 + 60 * hindex),
+            (start, y + 60 * hindex),
             hy_img,
         )
