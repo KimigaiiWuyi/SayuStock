@@ -70,12 +70,10 @@ async def get_data(market: str = '沪深A') -> Union[Dict, str]:
         ('fid', 'f3'),
     ]
 
-    Y = True
     if market in SP_STOCK:
         fields = 'f58,f57,f107,f43,f59,f169,f170,f152'
         url = 'https://push2.eastmoney.com/api/qt/stock/get'
         params.append(('secid', SP_STOCK[market]))
-        Y = False
     else:
         url = 'http://push2.eastmoney.com/api/qt/clist/get'
         if market in market_dict:
@@ -92,14 +90,6 @@ async def get_data(market: str = '沪深A') -> Union[Dict, str]:
         fields = ",".join(trade_detail_dict.keys())
         params.append(('fs', fs))
     params.append(('fields', fields))
-
-    if Y and market not in market_dict:
-        for m in market_dict:
-            if m in market:
-                market = m
-                break
-        else:
-            return '❌未找到对应板块, 请重新输入\n📄例如: \n大盘云图沪深A\n大盘云图创业板 \n等等...'
 
     # 检查当前目录下是否有符合条件的文件
     if file.exists():

@@ -22,23 +22,20 @@ async def draw_info_img():
     data_zs = await get_data('主要指数')
     data_hy = await get_data('行业板块')
     data_gn = await get_data('概念板块')
-    data_a500 = await get_data('A500')
+    # data_a500 = await get_data('A500')
 
     if isinstance(data_zs, str):
         return data_zs
     if isinstance(data_hy, str):
         return data_hy
-    if isinstance(data_a500, str):
-        return data_a500
     if isinstance(data_gn, str):
         return data_gn
 
-    data_a500 = data_a500['data']
-
-    img = Image.new('RGBA', (850, 2215), (7, 9, 27))
+    img = Image.new('RGBA', (850, 2260), (7, 9, 27))
 
     bar1 = Image.open(TEXT_PATH / 'bar1.png')
     bar2 = Image.open(TEXT_PATH / 'bar2.png')
+    bar3 = Image.open(TEXT_PATH / 'bar3.png')
 
     zyzs = [
         '上证指数',
@@ -57,13 +54,7 @@ async def draw_info_img():
 
     n = 0
     sz_diff = 0
-    data_zs['data']['diff'].append(
-        {
-            'f14': data_a500['f58'],
-            'f2': data_a500['f43'],
-            'f3': data_a500['f170'],
-        }
-    )
+
     for zs_diff in data_zs['data']['diff']:
         if zs_diff['f14'] == '上证指数':
             sz_diff = zs_diff['f3']
@@ -105,7 +96,7 @@ async def draw_info_img():
             )
             img.paste(
                 zs_img,
-                (25 + 200 * (n % 4), 440 + 140 * (n // 4)),
+                (25 + 200 * (n % 4), 420 + 140 * (n // 4)),
                 zs_img,
             )
             n += 1
@@ -119,9 +110,10 @@ async def draw_info_img():
 
     title = Image.open(TEXT_PATH / f'title{title_num}.png')
 
-    img.paste(bar1, (0, 351), bar1)
-    img.paste(bar2, (0, 863), bar2)
-    img.paste(title, (10, 10), title)
+    img.paste(bar1, (0, 331), bar1)
+    img.paste(bar2, (0, 843), bar2)
+    img.paste(bar3, (0, 1730), bar3)
+    img.paste(title, (0, -30), title)
 
     sorted_hy = sorted(
         data_hy['data']['diff'],
@@ -134,14 +126,14 @@ async def draw_info_img():
         reverse=True,
     )
 
-    await draw_bar(sorted_hy[:13], img, 10, 967)
-    await draw_bar(sorted_hy[-1:-14:-1], img, 415, 967)
+    await draw_bar(sorted_hy[:13], img, 10, 947)
+    await draw_bar(sorted_hy[-1:-14:-1], img, 415, 947)
 
-    await draw_bar(sorted_gn[:5], img, 10, 1840)
-    await draw_bar(sorted_gn[-1:-6:-1], img, 415, 1840)
+    await draw_bar(sorted_gn[:6], img, 10, 1830)
+    await draw_bar(sorted_gn[-1:-7:-1], img, 415, 1830)
 
     footer = get_footer()
-    img.paste(footer, (0, 2165), footer)
+    img.paste(footer, (0, 2210), footer)
 
     res = await convert_img(img)
     return res
