@@ -12,8 +12,8 @@ from playwright.async_api import async_playwright
 from gsuid_core.utils.image.convert import convert_img
 
 from ..utils.load_data import mdata
-from ..utils.resource_path import DATA_PATH
 from ..stock_config.stock_config import STOCK_CONFIG
+from ..utils.resource_path import DATA_PATH, GN_BK_PATH
 from ..utils.constant import (
     SP_STOCK,
     market_dict,
@@ -25,10 +25,19 @@ view_port: int = STOCK_CONFIG.get_config('mapcloud_viewport').data
 scale: int = STOCK_CONFIG.get_config('mapcloud_scale').data
 minutes: int = STOCK_CONFIG.get_config('mapcloud_refresh_minutes').data
 
+GK_DATA = {}
+
 
 async def load_data_from_file(file: Path):
     async with aiofiles.open(file, 'r', encoding='UTF-8') as f:
         return json.loads(await f.read())
+
+
+async def load_bk_data():
+    global GK_DATA
+    if GN_BK_PATH.exists():
+        GK_DATA = await load_data_from_file(GN_BK_PATH)
+    return GK_DATA
 
 
 def get_file(
@@ -68,7 +77,17 @@ async def get_data(market: str = '沪深A') -> Union[Dict, str]:
         Y = False
     else:
         url = 'http://push2.eastmoney.com/api/qt/clist/get'
-        fs = market_dict[market]
+        if market in market_dict:
+            fs = market_dict[market]
+        else:
+            if not GK_DATA:
+                await load_bk_data()
+
+            if market in GK_DATA:
+                fs = GK_DATA[market]
+            else:
+                return '❌未找到对应板块, 请重新输入\n📄例如: \n大盘云图沪深A\n大盘云图创业板 \n等等...'
+
         fields = ",".join(trade_detail_dict.keys())
         params.append(('fs', fs))
     params.append(('fields', fields))
@@ -102,54 +121,32 @@ async def get_data(market: str = '沪深A') -> Union[Dict, str]:
     async with aiofiles.open(file, 'w', encoding='UTF-8') as f:
         await f.write(json.dumps(resp, ensure_ascii=False, indent=4))
 
+    if market == '概念板块':
+        sresult = {}
+        for a in resp['data']['diff']:
+            sresult[a['f14']] = f"b:{a['f12']}+f:!50"
+        async with aiofiles.open(GN_BK_PATH, 'w', encoding='UTF-8') as f:
+            await f.write(json.dumps(sresult, ensure_ascii=False, indent=4))
+
+        if not GK_DATA:
+            await load_bk_data()
     return resp
 
 
-async def render_html(
-    market: str = '沪深A',
+async def to_fig(
+    raw_data: Dict,
     sector: Optional[str] = None,
-) -> Union[str, Path]:
-    _sp_str = None
-    sp = None
-    logger.info(f"[SayuStock] market: {market} sector: {sector}")
-
-    if market == '沪深300':
-        market = '300'
-    elif market == '1000':
-        market = '中证1000'
-    elif market == '中证2000':
-        market = '2000'
-
-    if market in mdata:
-        _sp_str = market
-        sp = mdata[market]
-        logger.info(f"[SayuStock] 触发SP数据{_sp_str}: {len(sp)}...")
-        market = '沪深A'
-
-    if not market:
-        market = '沪深A'
-
-    raw_data = await get_data(market)
-    if raw_data is None:
-        return '数据处理失败, 请检查后台...'
-    elif isinstance(raw_data, str):
-        return raw_data
-
-    file = get_file(market, 'html', sector, _sp_str)
-    # 检查当前目录下是否有符合条件的文件
-    if file.exists():
-        # 检查文件的修改时间是否在一分钟以内
-        file_mod_time = datetime.fromtimestamp(file.stat().st_mtime)
-        if datetime.now() - file_mod_time < timedelta(minutes=minutes):
-            logger.info(
-                f"[SayuStock] html文件在{minutes}分钟内，直接返回文件数据。"
-            )
-            return file
-
+    sp: Optional[str] = None,
+    layer: int = 2,
+):
     result = {}
+
     for i in raw_data['data']['diff']:
         if i['f14'].startswith(('ST', '*ST')):
             i['f100'] = 'ST'
+
+        if layer == 1:
+            i['f100'] = sector
 
         if i['f20'] != '-' and i['f100'] != '-' and i['f3'] != '-':
             # stock = {'市值': i['f20'], '股票名称': i['f14']}
@@ -160,13 +157,21 @@ async def render_html(
                 result[i['f100']]['个股'].append(i)
 
     if sector is None:
+        fit = 0.2
+    elif sector and len(result[sector]) > 100:
+        scale = 1 - (len(result[sector]) - 100) * 0.7 / 500
+        fit = max(0.3, min(scale, 1))
+    else:
+        fit = 1
+
+    if fit != 1:
         for r in result:
             stock_item = result[r]['个股']
             sorted_stock = sorted(
                 stock_item, key=lambda x: x['f20'], reverse=True
             )
             num_items = len(sorted_stock)
-            num_to_extract = int(num_items * 0.2)
+            num_to_extract = int(num_items * fit)
             subset_data = sorted_stock[:num_to_extract]
             result[r]['个股'] = subset_data
 
@@ -268,6 +273,58 @@ async def render_html(
         font=dict(color="white"),
         coloraxis_showscale=False,
     )
+    return fig
+
+
+async def render_html(
+    market: str = '沪深A',
+    sector: Optional[str] = None,
+) -> Union[str, Path]:
+    _sp_str = None
+    sp = None
+    logger.info(f"[SayuStock] market: {market} sector: {sector}")
+
+    if market == '沪深300':
+        market = '300'
+    elif market == '1000':
+        market = '中证1000'
+    elif market == '中证2000':
+        market = '2000'
+
+    if market in mdata:
+        _sp_str = market
+        sp = mdata[market]
+        logger.info(f"[SayuStock] 触发SP数据{_sp_str}: {len(sp)}...")
+        market = '沪深A'
+
+    if not market:
+        market = '沪深A'
+
+    raw_data = await get_data(market)
+    if raw_data is None:
+        return '数据处理失败, 请检查后台...'
+    elif isinstance(raw_data, str):
+        return raw_data
+
+    file = get_file(market, 'html', sector, _sp_str)
+    # 检查当前目录下是否有符合条件的文件
+    if file.exists():
+        # 检查文件的修改时间是否在一分钟以内
+        file_mod_time = datetime.fromtimestamp(file.stat().st_mtime)
+        if datetime.now() - file_mod_time < timedelta(minutes=minutes):
+            logger.info(
+                f"[SayuStock] html文件在{minutes}分钟内，直接返回文件数据。"
+            )
+            return file
+
+    fig = await to_fig(
+        raw_data,
+        sector,
+        sp,
+        2,
+    )
+    if isinstance(fig, str):
+        return fig
 
     # fig.show()
     fig.write_html(file)
@@ -296,4 +353,5 @@ async def render_image(
         await page.wait_for_selector(".plot-container")
         png_bytes = await page.screenshot(type='png')
         await browser.close()
+        return await convert_img(png_bytes)
         return await convert_img(png_bytes)
