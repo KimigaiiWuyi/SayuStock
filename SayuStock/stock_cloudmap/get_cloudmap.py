@@ -2,6 +2,7 @@ import json
 from pathlib import Path
 from datetime import datetime, timedelta
 from typing import Dict, Union, Optional
+from uu import Error
 
 import aiohttp
 import aiofiles
@@ -11,7 +12,10 @@ from gsuid_core.logger import logger
 from playwright.async_api import async_playwright
 from gsuid_core.utils.image.convert import convert_img
 
-from ..utils.load_data import mdata
+from ..utils.load_data import (
+    mdata,
+    get_full_security_code,
+)
 from ..stock_config.stock_config import STOCK_CONFIG
 from ..utils.resource_path import DATA_PATH, GN_BK_PATH
 from ..utils.constant import (
@@ -28,6 +32,11 @@ minutes: int = STOCK_CONFIG.get_config('mapcloud_refresh_minutes').data
 
 GK_DATA = {}
 
+ErroText = {
+    'typemap': '❌未找到对应板块, 请重新输入\n📄例如: \n大盘云图沪深A\n大盘云图创业板 \n等等...',
+    'notData': '❌不存在该板块或市场, 暂无数据...',
+    'notStock': '❌不存在该股票，暂无数据...'
+}
 
 async def load_data_from_file(file: Path):
     async with aiofiles.open(file, 'r', encoding='UTF-8') as f:
@@ -53,7 +62,7 @@ def get_file(
     return DATA_PATH / f"{a}_{current_time.strftime('%Y%m%d_%H%M')}.{suffix}"
 
 
-async def get_data(market: str = '沪深A') -> Union[Dict, str]:
+async def get_data(market: str = '沪深A', sector: Optional[str] = None,) -> Union[Dict, str]:
     market = market.upper()
     if not market:
         market = '沪深A'
@@ -74,6 +83,14 @@ async def get_data(market: str = '沪深A') -> Union[Dict, str]:
         fields = 'f58,f57,f107,f43,f59,f169,f170,f152'
         url = 'https://push2.eastmoney.com/api/qt/stock/get'
         params.append(('secid', SP_STOCK[market]))
+    elif sector == 'stock':
+        fields = "f58,f734,f107,f57,f43,f59,f169,f170,f152,f177,f111,f46,f60,f44,f45,f47,f260,f48,f261,f279,f277,f278,f288,f19,f17,f531,f15,f13,f11,f20,f18,f16,f14,f12,f39,f37,f35,f33,f31,f40,f38,f36,f34,f32,f211,f212,f213,f214,f215,f210,f209,f208,f207,f206,f161,f49,f171,f50,f86,f84,f85,f168,f108,f116,f167,f164,f162,f163,f92,f71,f117,f292,f51,f52,f191,f192,f262,f294,f295,f269,f270,f256,f257,f285,f286"
+        url = 'https://push2.eastmoney.com/api/qt/stock/get'
+        try:
+            secid = get_full_security_code(market)
+        except:
+            return ErroText['notStock']
+        params.append(('secid', secid))
     else:
         url = 'http://push2.eastmoney.com/api/qt/clist/get'
         if market in market_dict:
@@ -85,7 +102,7 @@ async def get_data(market: str = '沪深A') -> Union[Dict, str]:
             if market in GK_DATA:
                 fs = GK_DATA[market]
             else:
-                return '❌未找到对应板块, 请重新输入\n📄例如: \n大盘云图沪深A\n大盘云图创业板 \n等等...'
+                return ErroText['typemap']
 
         fields = ",".join(trade_detail_dict.keys())
         params.append(('fs', fs))
@@ -201,7 +218,7 @@ async def to_fig(
             custom_info.append(f"{d_str}%")
 
     if not diff:
-        return '❌不存在该板块或市场, 暂无数据...'
+        return ErroText['notData']
 
     data = {
         "Category": category,
@@ -302,10 +319,14 @@ async def render_html(
         logger.info(f"[SayuStock] 触发SP数据{_sp_str}: {len(sp)}...")
         market = '沪深A'
 
+    # 如果是个股错误
+    if sector == "stock" and not market:
+        return ErroText['notMarket']
+
     if not market:
         market = '沪深A'
 
-    raw_data = await get_data(market)
+    raw_data = await get_data(market, sector)
     if raw_data is None:
         return '数据处理失败, 请检查后台...'
     elif isinstance(raw_data, str):
