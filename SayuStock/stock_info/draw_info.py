@@ -6,6 +6,7 @@ from gsuid_core.utils.image.convert import convert_img
 from gsuid_core.utils.fonts.fonts import core_font as ss_font
 
 from ..utils.image import get_footer
+from ..utils.request import get_image_from_em
 from ..stock_cloudmap.get_cloudmap import get_data
 
 TEXT_PATH = Path(__file__).parent / 'texture2d'
@@ -22,6 +23,8 @@ async def draw_info_img():
     data_zs = await get_data('主要指数')
     data_hy = await get_data('行业板块')
     data_gn = await get_data('概念板块')
+    raw_data = await get_data()
+
     # data_a500 = await get_data('A500')
 
     if isinstance(data_zs, str):
@@ -30,12 +33,37 @@ async def draw_info_img():
         return data_hy
     if isinstance(data_gn, str):
         return data_gn
+    if isinstance(raw_data, str):
+        return raw_data
 
-    img = Image.new('RGBA', (850, 2260), (7, 9, 27))
+    diffs = {
+        10: [],
+        5: [],
+        3: [],
+        2: [],
+        1: [],
+        0: [],
+        -1: [],
+        -2: [],
+        -3: [],
+        -5: [],
+        -10: [],
+        -100: [],
+    }
+
+    for i in raw_data['data']['diff']:
+        if i['f20'] != '-' and i['f100'] != '-' and i['f3'] != '-':
+            for _d in diffs:
+                if i['f3'] >= _d:
+                    diffs[_d].append(i)
+                    break
+
+    img = Image.new('RGBA', (1700, 2260), (7, 9, 27))
 
     bar1 = Image.open(TEXT_PATH / 'bar1.png')
     bar2 = Image.open(TEXT_PATH / 'bar2.png')
     bar3 = Image.open(TEXT_PATH / 'bar3.png')
+    bar4 = Image.open(TEXT_PATH / 'bar4.png')
 
     zyzs = [
         '上证指数',
@@ -52,6 +80,7 @@ async def draw_info_img():
         '国债指数',
     ]
 
+    # 主要指数
     n = 0
     sz_diff = 0
 
@@ -96,10 +125,48 @@ async def draw_info_img():
             )
             img.paste(
                 zs_img,
-                (25 + 200 * (n % 4), 420 + 140 * (n // 4)),
+                (25 + 200 * (n % 4), 440 + 140 * (n // 4)),
                 zs_img,
             )
             n += 1
+
+    # 分布统计
+    div = Image.open(TEXT_PATH / 'div.png')
+    div_draw = ImageDraw.Draw(div)
+    max_num = 0
+    max_h = 366
+    for ij in diffs:
+        ij_num = len(diffs[ij])
+        if ij_num > max_num:
+            max_num = ij_num
+
+    for dindex, ij in enumerate(diffs.__reversed__()):
+        if ij < 0:
+            color = (23, 199, 30)
+        else:
+            color = (187, 26, 26)
+        ij_num = len(diffs[ij])
+        if ij_num == 0:
+            continue
+        offset = dindex * 66
+        lenth = int(max_h * ij_num / max_num)
+        div_draw.rectangle(
+            (45 + offset, 413 - lenth, 81 + offset, 413),
+            color,
+        )
+        div_draw.text(
+            (66 + offset, 413 - lenth - 25),
+            f"{ij_num}",
+            (255, 255, 255),
+            ss_font(24),
+            'mm',
+        )
+    img.paste(div, (850, 420), div)
+
+    # 流入流出
+    web_em_img = await get_image_from_em(size=(500, 274))
+    web_em_img = web_em_img.convert('RGBA')
+    img.paste(web_em_img, (882, 32), web_em_img)
 
     for i in DIFF_MAP:
         if sz_diff >= i:
@@ -111,8 +178,11 @@ async def draw_info_img():
     title = Image.open(TEXT_PATH / f'title{title_num}.png')
 
     img.paste(bar1, (0, 331), bar1)
-    img.paste(bar2, (0, 843), bar2)
-    img.paste(bar3, (0, 1730), bar3)
+    img.paste(bar4, (850, 331), bar4)
+
+    img.paste(bar2, (0, 875), bar2)
+    img.paste(bar3, (850, 875), bar3)
+
     img.paste(title, (0, -30), title)
 
     sorted_hy = sorted(
@@ -126,14 +196,14 @@ async def draw_info_img():
         reverse=True,
     )
 
-    await draw_bar(sorted_hy[:13], img, 10, 947)
-    await draw_bar(sorted_hy[-1:-14:-1], img, 415, 947)
+    await draw_bar(sorted_hy[:20], img, 10, 980)
+    await draw_bar(sorted_hy[-1:-21:-1], img, 415, 980)
 
-    await draw_bar(sorted_gn[:6], img, 10, 1830)
-    await draw_bar(sorted_gn[-1:-7:-1], img, 415, 1830)
+    await draw_bar(sorted_gn[:20], img, 860, 980)
+    await draw_bar(sorted_gn[-1:-21:-1], img, 1265, 980)
 
     footer = get_footer()
-    img.paste(footer, (0, 2210), footer)
+    img.paste(footer, (425, 2210), footer)
 
     res = await convert_img(img)
     return res

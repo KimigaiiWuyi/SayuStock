@@ -11,9 +11,10 @@ from gsuid_core.logger import logger
 from playwright.async_api import async_playwright
 from gsuid_core.utils.image.convert import convert_img
 
+from ..utils.utils import get_file
 from ..utils.load_data import mdata
+from ..utils.resource_path import GN_BK_PATH
 from ..stock_config.stock_config import STOCK_CONFIG
-from ..utils.resource_path import DATA_PATH, GN_BK_PATH
 from ..utils.constant import (
     SP_STOCK,
     bk_dict,
@@ -39,18 +40,6 @@ async def load_bk_data():
     if GN_BK_PATH.exists():
         GK_DATA = await load_data_from_file(GN_BK_PATH)
     return GK_DATA
-
-
-def get_file(
-    market: str,
-    suffix: str,
-    sector: Optional[str] = None,
-    sp: Optional[str] = None,
-):
-    """生成以当前时间命名的文件名。"""
-    current_time = datetime.now()
-    a = f'{market}_{sector}_{sp}_data'
-    return DATA_PATH / f"{a}_{current_time.strftime('%Y%m%d_%H%M')}.{suffix}"
 
 
 async def get_data(market: str = '沪深A') -> Union[Dict, str]:
