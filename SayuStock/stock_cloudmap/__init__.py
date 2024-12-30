@@ -4,7 +4,8 @@ from gsuid_core.models import Event
 from gsuid_core.aps import scheduler
 from gsuid_core.logger import logger
 
-from .get_cloudmap import DATA_PATH, render_image
+from .get_cloudmap import render_image
+from ..utils.resource_path import DATA_PATH
 
 sv_stock_cloudmap = SV("大盘云图")
 

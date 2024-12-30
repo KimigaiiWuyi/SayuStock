@@ -16,8 +16,9 @@ from ..utils.load_data import (
     mdata,
     get_full_security_code,
 )
+from ..utils.utils import get_file
+from ..utils.resource_path import GN_BK_PATH
 from ..stock_config.stock_config import STOCK_CONFIG
-from ..utils.resource_path import DATA_PATH, GN_BK_PATH
 from ..utils.constant import (
     SP_STOCK,
     bk_dict,
