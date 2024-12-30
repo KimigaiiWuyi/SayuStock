@@ -11,6 +11,7 @@ import plotly.express as px
 from gsuid_core.logger import logger
 from playwright.async_api import async_playwright
 from gsuid_core.utils.image.convert import convert_img
+from plotly.graph_objs import Figure
 
 from ..utils.load_data import (
     mdata,
@@ -20,7 +21,9 @@ from ..utils.utils import get_file
 from ..utils.resource_path import GN_BK_PATH
 from ..stock_config.stock_config import STOCK_CONFIG
 from ..utils.constant import (
+    SINGLE_STOCK_FIELDS,
     SP_STOCK,
+    STOCK_SECTOR,
     bk_dict,
     market_dict,
     request_header,
@@ -84,13 +87,14 @@ async def get_data(market: str = '沪深A', sector: Optional[str] = None,) -> Un
         fields = 'f58,f57,f107,f43,f59,f169,f170,f152'
         url = 'https://push2.eastmoney.com/api/qt/stock/get'
         params.append(('secid', SP_STOCK[market]))
-    elif sector == 'stock':
-        fields = "f58,f734,f107,f57,f43,f59,f169,f170,f152,f177,f111,f46,f60,f44,f45,f47,f260,f48,f261,f279,f277,f278,f288,f19,f17,f531,f15,f13,f11,f20,f18,f16,f14,f12,f39,f37,f35,f33,f31,f40,f38,f36,f34,f32,f211,f212,f213,f214,f215,f210,f209,f208,f207,f206,f161,f49,f171,f50,f86,f84,f85,f168,f108,f116,f167,f164,f162,f163,f92,f71,f117,f292,f51,f52,f191,f192,f262,f294,f295,f269,f270,f256,f257,f285,f286"
+    elif sector == STOCK_SECTOR:
+        fields = ",".join(SINGLE_STOCK_FIELDS)
         url = 'https://push2.eastmoney.com/api/qt/stock/get'
         try:
             secid = get_full_security_code(market)
         except:
             return ErroText['notStock']
+        file = get_file(secid, 'json', sector)
         params.append(('secid', secid))
     else:
         url = 'http://push2.eastmoney.com/api/qt/clist/get'
@@ -127,6 +131,10 @@ async def get_data(market: str = '沪深A', sector: Optional[str] = None,) -> Un
         ) as response:
             resp = await response.json()
 
+    # 处理获取个股数据错误
+    if sector == STOCK_SECTOR and resp['data'] is None:
+        return ErroText['notStock']
+
     async with aiofiles.open(file, 'w', encoding='UTF-8') as f:
         await f.write(json.dumps(resp, ensure_ascii=False, indent=4))
 
@@ -139,8 +147,92 @@ async def get_data(market: str = '沪深A', sector: Optional[str] = None,) -> Un
 
         if not GK_DATA:
             await load_bk_data()
+
     return resp
 
+def int_to_percentage(value: int) -> str:
+    percentage = value / 100
+    sign = '+' if percentage >= 0 else ''
+    return f"{sign}{percentage:.2f}%"
+
+async def to_single_fig(
+    raw_data: Dict,
+    sp: Optional[str] = None,
+):
+    raw = raw_data['data']
+    gained = raw['f170']
+    result = {
+        'MARKET_CAP': raw['f116'], #总市值
+        'NEW_PRICE': raw['f43'], #最新价
+        'STOCK_NAME': raw['f58'], #名称
+        'GAINED': gained, #涨幅
+        'CUSTOM_INFO': int_to_percentage(gained)
+    }
+
+    if not gained:
+        return ErroText['notData']
+
+    async with aiofiles.open('dd.json', 'w', encoding='UTF-8') as f:
+        await f.write(json.dumps(result, ensure_ascii=False, indent=4))
+
+    df = pd.DataFrame([result])
+
+    # 生成 Treemap
+    fig = px.treemap(
+        df,
+        path=["STOCK_NAME"],
+        values="MARKET_CAP",  # 定义块的大小
+        color="GAINED",  # 根据数值上色
+        color_continuous_scale=[
+            [0, 'rgba(0, 255, 0, 1)'],  # 绿色，透明度1
+            [0.49, 'rgba(0, 255, 0, 0.05)'],
+            [0.51, 'rgba(255, 0, 0, 0.05)'],
+            [1, 'rgba(255, 0, 0, 1)'],  # 红色，透明度1
+        ],  # 渐变颜色
+        range_color=[-10, 10],  # 设置数值范围
+        custom_data=["NEW_PRICE", "CUSTOM_INFO"],
+        branchvalues="total",
+    )
+
+    # 控制显示内容
+    fig.update_traces(
+        marker=dict(
+            colorscale=[
+                [0, 'rgba(10, 204, 49, 1)'],  # 绿色，透明度1
+                [0.49, 'rgba(10, 204, 49, 0.05)'],
+                [0.51, 'rgba(238, 55, 58, 0.05)'],
+                [1, 'rgba(238, 55, 58, 1)'],  # 红色，透明度1
+            ],
+            cmin=-10,  # 设置最小值
+            cmax=10,  # 设置最大值
+            cornerradius=5,
+        ),
+        marker_pad=dict(
+            l=5,
+            r=5,
+            b=5,
+            t=60,
+        ),
+        textfont=dict(
+            color="white",
+        ),
+        textfont_family='MiSans',
+        textfont_weight=350,
+        texttemplate="%{label}<br>%{customdata[0]}",
+        # textinfo="label+text",
+        textfont_size=50,  # 设置字体大小
+        textposition="middle center",
+    )
+
+    fig.update_layout(
+        # uniformtext=dict(minsize=30, mode='hide'),
+        margin=dict(t=0, b=0, l=0, r=0),
+        paper_bgcolor="black",
+        plot_bgcolor="black",
+        font=dict(color="white"),
+        coloraxis_showscale=False,
+    )
+    return fig
 
 async def to_fig(
     raw_data: Dict,
@@ -321,7 +413,7 @@ async def render_html(
         market = '沪深A'
 
     # 如果是个股错误
-    if sector == "stock" and not market:
+    if sector == STOCK_SECTOR and not market:
         return ErroText['notMarket']
 
     if not market:
@@ -343,13 +435,16 @@ async def render_html(
                 f"[SayuStock] html文件在{minutes}分钟内，直接返回文件数据。"
             )
             return file
-
-    fig = await to_fig(
-        raw_data,
-        sector,
-        sp,
-        2 if market != sector else 1,
-    )
+    
+    if sector == STOCK_SECTOR:
+        fig = await to_single_fig(raw_data)
+    else:
+        fig = await to_fig(
+            raw_data,
+            sector,
+            sp,
+            2 if market != sector else 1,
+        )
     if isinstance(fig, str):
         return fig
 
