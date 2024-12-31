@@ -35,6 +35,15 @@ SP_STOCK = {
 }
 
 STOCK_SECTOR = 'single-stock'
+SINGLE_LINE_FIELDS1 = [
+    "f1", "f2", "f3", "f4", "f5", "f6", "f7",
+    "f8", "f9", "f10", "f11", "f12", "f13"
+]
+
+SINGLE_LINE_FIELDS2 = [
+    "f51", "f52", "f53", "f54",
+    "f55", "f56", "f57", "f58"
+]
 
 SINGLE_STOCK_FIELDS = [
     # 基本信息

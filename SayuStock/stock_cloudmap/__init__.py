@@ -1,4 +1,3 @@
-from SayuStock.utils.constant import STOCK_SECTOR
 from gsuid_core.sv import SV
 from gsuid_core.bot import Bot
 from gsuid_core.models import Event
@@ -44,5 +43,5 @@ async def send_gn_img(bot: Bot, ev: Event):
 @sv_stock_cloudmap.on_command(("个股数据", "个股"))
 async def send_stock_img(bot: Bot, ev: Event):
     logger.info("开始执行[个股数据]")
-    im = await render_image(ev.text.strip(),  STOCK_SECTOR)
+    im = await render_image(ev.text.strip(),  'single-stock')
     await bot.send(im)

@@ -1,3 +1,4 @@
+from dataclasses import fields
 import json
 from pathlib import Path
 from datetime import datetime, timedelta
@@ -18,9 +19,14 @@ from ..utils.load_data import (
     get_full_security_code,
 )
 from ..utils.utils import get_file
-from ..utils.resource_path import GN_BK_PATH
+from ..utils.resource_path import (
+    GN_BK_PATH,
+    DATA_PATH,
+)
 from ..stock_config.stock_config import STOCK_CONFIG
 from ..utils.constant import (
+    SINGLE_LINE_FIELDS1,
+    SINGLE_LINE_FIELDS2,
     SINGLE_STOCK_FIELDS,
     SP_STOCK,
     STOCK_SECTOR,
@@ -65,6 +71,46 @@ def get_file(
     a = f'{market}_{sector}_{sp}_data'
     return DATA_PATH / f"{a}_{current_time.strftime('%Y%m%d_%H%M')}.{suffix}"
 
+# 获取个股折线数据
+async def get_single_fig_data(secid: str):
+    logger.info(f'get_single_fig_data {secid}')
+    params = []
+    url = "https://push2.eastmoney.com/api/qt/stock/trends2/get"
+    fields1 = ",".join(SINGLE_LINE_FIELDS1)
+    fields2 = ",".join(SINGLE_LINE_FIELDS2)
+    params.append(('fields1', fields1))
+    params.append(('fields2', fields2))
+    params.append(('secid', secid))
+    async with aiohttp.ClientSession() as session:
+        async with session.get(
+            url,
+            headers=request_header,
+            params=params,
+        ) as response:
+            resp = await response.json()
+    # 处理获取个股数据错误
+    if resp['data'] is None:
+        return ErroText['notStock']
+    stock_line_data: list[str] = resp['data']['trends']
+    stock_data: list[
+        Dict[str, Union[str, float, int]]
+    ] = []
+    for item in stock_line_data:
+        # 原始数据格式"2024-12-31 14:05,15.63,15.62,15.63,15.61,3300,5154770.00,15.672"
+        parts = item.split(',')
+        # 原始时间格式为'2024-12-31 14:05'
+        datetime = parts[0].split(' ') if len(parts[0]) > 0 else ['','']
+        stock_data.append({
+            'datetime': datetime[1],
+            'price': float(parts[1]),
+            'open': float(parts[2]),
+            'high': float(parts[3]),
+            'low': float(parts[4]),
+            'amount': int(parts[5]),
+            'money': float(parts[6]),
+            'avg_price': float(parts[7])
+        })
+    return stock_data
 
 async def get_data(market: str = '沪深A', sector: Optional[str] = None,) -> Union[Dict, str]:
     market = market.upper()
@@ -123,6 +169,7 @@ async def get_data(market: str = '沪深A', sector: Optional[str] = None,) -> Un
             )
             return await load_data_from_file(file)
 
+    logger.info(f"[SayuStock] 开始获取数据...")
     async with aiohttp.ClientSession() as session:
         async with session.get(
             url,
@@ -131,10 +178,13 @@ async def get_data(market: str = '沪深A', sector: Optional[str] = None,) -> Un
         ) as response:
             resp = await response.json()
 
+    logger.info(f"[SayuStock] 数据获取完成...")
     # 处理获取个股数据错误
     if sector == STOCK_SECTOR and resp['data'] is None:
         return ErroText['notStock']
 
+    # 写入文件
+    logger.info(f"[SayuStock] 开始写入文件...")
     async with aiofiles.open(file, 'w', encoding='UTF-8') as f:
         await f.write(json.dumps(resp, ensure_ascii=False, indent=4))
 
@@ -148,25 +198,38 @@ async def get_data(market: str = '沪深A', sector: Optional[str] = None,) -> Un
         if not GK_DATA:
             await load_bk_data()
 
+    # 处理个股折线数据
+    secid = next((value for key, value in params if key == 'secid'), None)
+    if sector == STOCK_SECTOR and secid:
+        trends = await get_single_fig_data(secid)
+        if isinstance(trends, str):
+            return resp
+        resp['trends'] = trends
     return resp
 
 def int_to_percentage(value: int) -> str:
-    percentage = value / 100
-    sign = '+' if percentage >= 0 else ''
-    return f"{sign}{percentage:.2f}%"
+    sign = '+' if value >= 0 else ''
+    return f"{sign}{value:.2f}%"
 
+# 获取个股图形
 async def to_single_fig(
     raw_data: Dict,
     sp: Optional[str] = None,
 ):
+    logger.info(f'[SayuStock] 开始获取图形...')
     raw = raw_data['data']
     gained = raw['f170']
+    price_histroy = raw_data['trends']
+    stock_name = raw['f58']
+    new_price = raw['f43']
+    custom_info = int_to_percentage(gained)
     result = {
         'MARKET_CAP': raw['f116'], #总市值
-        'NEW_PRICE': raw['f43'], #最新价
-        'STOCK_NAME': raw['f58'], #名称
+        'NEW_PRICE': new_price, #最新价
+        'STOCK_NAME': stock_name, #名称
         'GAINED': gained, #涨幅
-        'CUSTOM_INFO': int_to_percentage(gained)
+        'CUSTOM_INFO': custom_info,
+        'PRICE_HISTORY': price_histroy,
     }
 
     if not gained:
@@ -175,63 +238,89 @@ async def to_single_fig(
     async with aiofiles.open('dd.json', 'w', encoding='UTF-8') as f:
         await f.write(json.dumps(result, ensure_ascii=False, indent=4))
 
-    df = pd.DataFrame([result])
+    max_price = max(item['price'] for item in price_histroy)
+    min_price = min(item['price'] for item in price_histroy)
 
-    # 生成 Treemap
-    fig = px.treemap(
-        df,
-        path=["STOCK_NAME"],
-        values="MARKET_CAP",  # 定义块的大小
-        color="GAINED",  # 根据数值上色
-        color_continuous_scale=[
-            [0, 'rgba(0, 255, 0, 1)'],  # 绿色，透明度1
-            [0.49, 'rgba(0, 255, 0, 0.05)'],
-            [0.51, 'rgba(255, 0, 0, 0.05)'],
-            [1, 'rgba(255, 0, 0, 1)'],  # 红色，透明度1
-        ],  # 渐变颜色
-        range_color=[-10, 10],  # 设置数值范围
-        custom_data=["NEW_PRICE", "CUSTOM_INFO"],
-        branchvalues="total",
+    fig = px.line(
+        price_histroy,
+        x="datetime",
+        y="price",
+        title=f"{stock_name}  最新价：{new_price}  跌涨幅：{custom_info}",
+        # text='price',  # 数据点显示值
+        line_shape='linear',  # 共有6种插值方式：'linear'、'spline'、'hv'、'vh'、'hvh'和'vhv。
     )
-
-    # 控制显示内容
-    fig.update_traces(
-        marker=dict(
-            colorscale=[
-                [0, 'rgba(10, 204, 49, 1)'],  # 绿色，透明度1
-                [0.49, 'rgba(10, 204, 49, 0.05)'],
-                [0.51, 'rgba(238, 55, 58, 0.05)'],
-                [1, 'rgba(238, 55, 58, 1)'],  # 红色，透明度1
-            ],
-            cmin=-10,  # 设置最小值
-            cmax=10,  # 设置最大值
-            cornerradius=5,
-        ),
-        marker_pad=dict(
-            l=5,
-            r=5,
-            b=5,
-            t=60,
-        ),
-        textfont=dict(
-            color="white",
-        ),
-        textfont_family='MiSans',
-        textfont_weight=350,
-        texttemplate="%{label}<br>%{customdata[0]}",
-        # textinfo="label+text",
-        textfont_size=50,  # 设置字体大小
-        textposition="middle center",
-    )
-
+    # fig.update_traces(
+    #     texttemplate='%{text:.2f}',  # 数据点显示值的格式
+    #     textposition='top center',  # 数据点显示的位置：'top left', 'top center', 'top right', 'middle left','middle center', 'middle right', 'bottom left', 'bottom center', 'bottom right'
+    # )
     fig.update_layout(
-        # uniformtext=dict(minsize=30, mode='hide'),
-        margin=dict(t=0, b=0, l=0, r=0),
-        paper_bgcolor="black",
-        plot_bgcolor="black",
-        font=dict(color="white"),
-        coloraxis_showscale=False,
+        yaxis=dict(
+            range=[min_price, max_price],  # 设置 y 轴范围
+        ),
+        xaxis=dict(
+            showgrid=False,
+            dtick=15,
+        ),
     )
+    # fig.show()
+
+    # df = pd.DataFrame([result])
+
+    # # 生成 Treemap
+    # fig = px.treemap(
+    #     df,
+    #     path=["STOCK_NAME"],
+    #     values="MARKET_CAP",  # 定义块的大小
+    #     color="GAINED",  # 根据数值上色
+    #     color_continuous_scale=[
+    #         [0, 'rgba(0, 255, 0, 1)'],  # 绿色，透明度1
+    #         [0.49, 'rgba(0, 255, 0, 0.05)'],
+    #         [0.51, 'rgba(255, 0, 0, 0.05)'],
+    #         [1, 'rgba(255, 0, 0, 1)'],  # 红色，透明度1
+    #     ],  # 渐变颜色
+    #     range_color=[-10, 10],  # 设置数值范围
+    #     custom_data=["NEW_PRICE", "CUSTOM_INFO"],
+    #     branchvalues="total",
+    # )
+
+    # # 控制显示内容
+    # fig.update_traces(
+    #     marker=dict(
+    #         colorscale=[
+    #             [0, 'rgba(10, 204, 49, 1)'],  # 绿色，透明度1
+    #             [0.49, 'rgba(10, 204, 49, 0.05)'],
+    #             [0.51, 'rgba(238, 55, 58, 0.05)'],
+    #             [1, 'rgba(238, 55, 58, 1)'],  # 红色，透明度1
+    #         ],
+    #         cmin=-10,  # 设置最小值
+    #         cmax=10,  # 设置最大值
+    #         cornerradius=5,
+    #     ),
+    #     marker_pad=dict(
+    #         l=5,
+    #         r=5,
+    #         b=5,
+    #         t=60,
+    #     ),
+    #     textfont=dict(
+    #         color="white",
+    #     ),
+    #     textfont_family='MiSans',
+    #     textfont_weight=350,
+    #     texttemplate="%{label}<br><br>最新价：%{customdata[0]}<br><br>跌涨幅：%{customdata[1]}",
+    #     # textinfo="label+text",
+    #     textfont_size=50,  # 设置字体大小
+    #     textposition="middle center",
+    # )
+
+    # fig.update_layout(
+    #     # uniformtext=dict(minsize=30, mode='hide'),
+    #     margin=dict(t=0, b=0, l=0, r=0),
+    #     paper_bgcolor="black",
+    #     plot_bgcolor="black",
+    #     font=dict(color="white"),
+    #     coloraxis_showscale=False,
+    # )
     return fig
 
 async def to_fig(
@@ -419,6 +508,7 @@ async def render_html(
     if not market:
         market = '沪深A'
 
+    logger.info(f"[SayuStock] 开始获取数据...")
     raw_data = await get_data(market, sector)
     if raw_data is None:
         return '数据处理失败, 请检查后台...'
