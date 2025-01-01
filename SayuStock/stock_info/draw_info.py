@@ -141,7 +141,7 @@ async def draw_info_img():
 
             zs_draw.text(
                 (100, 99),
-                f'{zs_diff['f14']}',
+                f'{zs_diff["f14"]}',
                 (255, 255, 255),
                 ss_font(24),
                 'mm',
@@ -149,7 +149,7 @@ async def draw_info_img():
 
             zs_draw.text(
                 (100, 38),
-                f'{zs_diff['f2']}',
+                f'{zs_diff["f2"]}',
                 zsc2,
                 ss_font(30),
                 'mm',
@@ -157,7 +157,7 @@ async def draw_info_img():
 
             zs_draw.text(
                 (100, 70),
-                f'{'+' if diff >= 0 else ''}{diff}%',
+                f'{"+" if diff >= 0 else ""}{diff}%',
                 zsc2,
                 ss_font(30),
                 'mm',
@@ -300,7 +300,7 @@ async def draw_bar(sd: List[dict], img: Image.Image, start: int, y: int):
         hy_draw.rounded_rectangle((23, 2, 403, 57), 0, hyc2)
         hy_draw.text(
             (53, 30),
-            f'{hy['f14']}',
+            f'{hy["f14"]}',
             (255, 255, 255),
             ss_font(30),
             'lm',
@@ -308,7 +308,7 @@ async def draw_bar(sd: List[dict], img: Image.Image, start: int, y: int):
 
         hy_draw.text(
             (384, 30),
-            f'{'+' if hy_diff >= 0 else ''}{hy_diff}%',
+            f'{"+" if hy_diff >= 0 else ""}{hy_diff}%',
             (255, 255, 255),
             ss_font(30),
             'rm',
