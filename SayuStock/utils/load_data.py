@@ -1,8 +1,6 @@
 import json
-import time
-from decimal import Decimal
-from typing import Callable
 from pathlib import Path
+from decimal import Decimal
 
 output_data = Path(__file__).parent / 'output.json'
 
@@ -11,6 +9,7 @@ with output_data.open('r', encoding='utf-8') as f:
 
 SZMarket = "SA"
 SHMarket = "HA"
+
 
 def get_market(code: str) -> str:
     """
@@ -31,24 +30,6 @@ def get_market(code: str) -> str:
         return SZMarket
     raise ValueError("暂未支持的证券代码")
 
-def retry(max_times: int, fn: Callable[[], None]) -> None:
-    """
-    重试指定次数的函数。
-
-    Args:
-        max_times (int): 最大重试次数
-        fn (function): 需要重试的函数
-
-    Raises:
-        Exception: 如果在最大重试次数后依旧失败
-    """
-    for count in range(max_times):
-        try:
-            fn()
-            return
-        except Exception as e:
-            time.sleep(0.02 * count)
-    raise Exception(f"重试 {max_times} 后，执行依旧失败, 最后一次失败的原因：{str(e)}")
 
 def get_full_security_code(code: str) -> str:
     """
@@ -71,6 +52,7 @@ def get_full_security_code(code: str) -> str:
         return "0." + code
     raise ValueError("暂未支持的证券代码")
 
+
 def get_price_magnification(code: str) -> float:
     """
     获取价格倍率。
@@ -85,6 +67,7 @@ def get_price_magnification(code: str) -> float:
         return 1000.0
     return 100.0
 
+
 def is_etf(code: str) -> bool:
     """
     判断是否为ETF。
@@ -96,6 +79,7 @@ def is_etf(code: str) -> bool:
         bool: 如果是ETF返回 True，否则返回 False
     """
     return code.startswith("5") or code.startswith("1")
+
 
 def get_code_market(code: str) -> str:
     """
@@ -115,6 +99,7 @@ def get_code_market(code: str) -> str:
     if code.startswith("1") or code.startswith("0") or code.startswith("3"):
         return "0"
     raise ValueError("unsupport security code")
+
 
 def get_nearest_hundredfold_int(num: float) -> int:
     """

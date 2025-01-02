@@ -38,46 +38,117 @@ SP_STOCK = {
 
 STOCK_SECTOR = 'single-stock'
 SINGLE_LINE_FIELDS1 = [
-    "f1", "f2", "f3", "f4", "f5", "f6", "f7",
-    "f8", "f9", "f10", "f11", "f12", "f13"
+    "f1",
+    "f2",
+    "f3",
+    "f4",
+    "f5",
+    "f6",
+    "f7",
+    "f8",
+    "f9",
+    "f10",
+    "f11",
+    "f12",
+    "f13",
 ]
 
-SINGLE_LINE_FIELDS2 = [
-    "f51", "f52", "f53", "f54",
-    "f55", "f56", "f57", "f58"
-]
+SINGLE_LINE_FIELDS2 = ["f51", "f52", "f53", "f54", "f55", "f56", "f57", "f58"]
 
 SINGLE_STOCK_FIELDS = [
     # 基本信息
-    'f58', 'f734', 'f107', 'f57', 'f43', 'f59',
-    
+    'f58',
+    'f734',
+    'f107',
+    'f57',
+    'f43',
+    'f59',
     # 价格相关
-    'f169', 'f170', 'f152', 'f177', 'f111', 'f46', 'f60',
-    
+    'f169',
+    'f170',
+    'f152',
+    'f177',
+    'f111',
+    'f46',
+    'f60',
     # 涨跌幅
-    'f44', 'f45', 'f47', 'f260', 'f48', 'f261',
-    
+    'f44',
+    'f45',
+    'f47',
+    'f260',
+    'f48',
+    'f261',
     # 成交量和成交额
-    'f279', 'f277', 'f278', 'f288',
-    
+    'f279',
+    'f277',
+    'f278',
+    'f288',
     # 开盘价、最高价、最低价、收盘价
-    'f19', 'f17', 'f531', 'f15', 'f13', 'f11',
-    'f20', 'f18', 'f16', 'f14', 'f12',
-    
+    'f19',
+    'f17',
+    'f531',
+    'f15',
+    'f13',
+    'f11',
+    'f20',
+    'f18',
+    'f16',
+    'f14',
+    'f12',
     # 买卖盘口
-    'f39', 'f37', 'f35', 'f33', 'f31',
-    'f40', 'f38', 'f36', 'f34', 'f32',
-    
+    'f39',
+    'f37',
+    'f35',
+    'f33',
+    'f31',
+    'f40',
+    'f38',
+    'f36',
+    'f34',
+    'f32',
     # 技术指标
-    'f211', 'f212', 'f213', 'f214', 'f215',
-    'f210', 'f209', 'f208', 'f207', 'f206',
-    
+    'f211',
+    'f212',
+    'f213',
+    'f214',
+    'f215',
+    'f210',
+    'f209',
+    'f208',
+    'f207',
+    'f206',
     # 其他指标
-    'f161', 'f49', 'f171', 'f50', 'f86', 'f84', 'f85',
-    'f168', 'f108', 'f116', 'f167', 'f164', 'f162', 'f163',
-    'f92', 'f71', 'f117', 'f292', 'f51', 'f52',
-    'f191', 'f192', 'f262', 'f294', 'f295',
-    'f269', 'f270', 'f256', 'f257', 'f285', 'f286'
+    'f161',
+    'f49',
+    'f171',
+    'f50',
+    'f86',
+    'f84',
+    'f85',
+    'f168',
+    'f108',
+    'f116',
+    'f167',
+    'f164',
+    'f162',
+    'f163',
+    'f92',
+    'f71',
+    'f117',
+    'f292',
+    'f51',
+    'f52',
+    'f191',
+    'f192',
+    'f262',
+    'f294',
+    'f295',
+    'f269',
+    'f270',
+    'f256',
+    'f257',
+    'f285',
+    'f286',
 ]
 
 market_dict = {
@@ -152,6 +223,7 @@ bk_dict = {
     'LOF': 'b:MK0404,b:MK0405,b:MK0406,b:MK0407',
 }
 
+
 def create_time_array():
     AMStart = datetime.datetime.strptime('9:15', '%H:%M')
     AMEnd = datetime.datetime.strptime('11:30', '%H:%M')
@@ -159,13 +231,14 @@ def create_time_array():
     PMEnd = datetime.datetime.strptime('15:00', '%H:%M')
     delta = datetime.timedelta(minutes=1)
     time_array = []
-    
+
     while AMStart <= AMEnd:
         time_array.append(AMStart.strftime('%H:%M'))
         AMStart += delta
     while PMStart <= PMEnd:
-       time_array.append(PMStart.strftime('%H:%M'))
-       PMStart += delta
+        time_array.append(PMStart.strftime('%H:%M'))
+        PMStart += delta
     return time_array
+
 
 TIME_ARRAY: list[str] = create_time_array()

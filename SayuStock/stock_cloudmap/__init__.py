@@ -40,8 +40,9 @@ async def send_gn_img(bot: Bot, ev: Event):
     im = await render_image(ev.text.strip(), ev.text.strip())
     await bot.send(im)
 
-@sv_stock_cloudmap.on_command(("个股数据", "个股"))
+
+@sv_stock_cloudmap.on_command(("个股"))
 async def send_stock_img(bot: Bot, ev: Event):
     logger.info("开始执行[个股数据]")
-    im = await render_image(ev.text.strip(),  'single-stock')
+    im = await render_image(ev.text.strip(), 'single-stock')
     await bot.send(im)

@@ -1,12 +1,11 @@
-from msgspec import to_builtins
-from gsuid_core.models import MessageReceive
-from gsuid_core.segment import (
-    MessageSegment,
-)
-from gsuid_core.logger import logger
-import httpx
 import time
 import base64
+
+import httpx
+from msgspec import to_builtins
+from gsuid_core.logger import logger
+from gsuid_core.models import MessageReceive
+from gsuid_core.segment import MessageSegment
 
 
 async def http_test(test_msg: str):
@@ -33,14 +32,16 @@ async def http_test(test_msg: str):
                 logger.info(image_info['type'])
                 image_data = image_info['data']
                 if image_data.startswith('base64://'):
-                    image_data = image_data[len('base64://'):]
+                    image_data = image_data[len('base64://') :]  # noqa: E203
                 image_dataBytes = base64.b64decode(image_data)
                 with open(f"{test_msg}_{timestamp}.jpg", "wb") as f:
                     f.write(image_dataBytes)
         print(response.status_code)
 
+
 if __name__ == "__main__":
     import asyncio
+
     asyncio.run(http_test('个股 601919'))
     asyncio.run(http_test('个股 002624'))
     asyncio.run(http_test('个股 512000'))

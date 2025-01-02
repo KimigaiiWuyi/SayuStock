@@ -1,4 +1,3 @@
-from dataclasses import fields
 import json
 from pathlib import Path
 from datetime import datetime, timedelta
@@ -13,23 +12,17 @@ from gsuid_core.logger import logger
 from playwright.async_api import async_playwright
 from gsuid_core.utils.image.convert import convert_img
 
-from ..utils.load_data import (
-    mdata,
-    get_full_security_code,
-)
 from ..utils.utils import get_file
-from ..utils.resource_path import (
-    GN_BK_PATH,
-    DATA_PATH,
-)
+from ..utils.resource_path import GN_BK_PATH
 from ..stock_config.stock_config import STOCK_CONFIG
+from ..utils.load_data import mdata, get_full_security_code
 from ..utils.constant import (
+    SP_STOCK,
+    TIME_ARRAY,
+    STOCK_SECTOR,
     SINGLE_LINE_FIELDS1,
     SINGLE_LINE_FIELDS2,
     SINGLE_STOCK_FIELDS,
-    SP_STOCK,
-    STOCK_SECTOR,
-    TIME_ARRAY,
     bk_dict,
     market_dict,
     request_header,
@@ -45,8 +38,9 @@ GK_DATA = {}
 ErroText = {
     'typemap': '❌未找到对应板块, 请重新输入\n📄例如: \n大盘云图沪深A\n大盘云图创业板 \n等等...',
     'notData': '❌不存在该板块或市场, 暂无数据...',
-    'notStock': '❌不存在该股票，暂无数据...'
+    'notStock': '❌不存在该股票，暂无数据...',
 }
+
 
 async def load_data_from_file(file: Path):
     async with aiofiles.open(file, 'r', encoding='UTF-8') as f:
@@ -59,17 +53,6 @@ async def load_bk_data():
         GK_DATA = await load_data_from_file(GN_BK_PATH)
     return GK_DATA
 
-
-def get_file(
-    market: str,
-    suffix: str,
-    sector: Optional[str] = None,
-    sp: Optional[str] = None,
-):
-    """生成以当前时间命名的文件名。"""
-    current_time = datetime.now()
-    a = f'{market}_{sector}_{sp}_data'
-    return DATA_PATH / f"{a}_{current_time.strftime('%Y%m%d_%H%M')}.{suffix}"
 
 # 获取个股折线数据
 async def get_single_fig_data(secid: str):
@@ -92,27 +75,32 @@ async def get_single_fig_data(secid: str):
     if resp['data'] is None:
         return ErroText['notStock']
     stock_line_data: list[str] = resp['data']['trends']
-    stock_data: list[
-        Dict[str, Union[str, float, int]]
-    ] = []
+    stock_data: list[Dict[str, Union[str, float, int]]] = []
     for item in stock_line_data:
-        # 原始数据格式"2024-12-31 14:05,15.63,15.62,15.63,15.61,3300,5154770.00,15.672"
+        # 原始数据格式
+        # "2024-12-31 14:05,15.63,15.62,15.63,15.61,3300,5154770.00,15.672"
         parts = item.split(',')
         # 原始时间格式为'2024-12-31 14:05'
-        datetime = parts[0].split(' ') if len(parts[0]) > 0 else ['','']
-        stock_data.append({
-            'datetime': datetime[1],
-            'price': float(parts[1]),
-            'open': float(parts[2]),
-            'high': float(parts[3]),
-            'low': float(parts[4]),
-            'amount': int(parts[5]),
-            'money': float(parts[6]),
-            'avg_price': float(parts[7])
-        })
+        datetime = parts[0].split(' ') if len(parts[0]) > 0 else ['', '']
+        stock_data.append(
+            {
+                'datetime': datetime[1],
+                'price': float(parts[1]),
+                'open': float(parts[2]),
+                'high': float(parts[3]),
+                'low': float(parts[4]),
+                'amount': int(parts[5]),
+                'money': float(parts[6]),
+                'avg_price': float(parts[7]),
+            }
+        )
     return stock_data
 
-async def get_data(market: str = '沪深A', sector: Optional[str] = None,) -> Union[Dict, str]:
+
+async def get_data(
+    market: str = '沪深A',
+    sector: Optional[str] = None,
+) -> Union[Dict, str]:
     market = market.upper()
     if not market:
         market = '沪深A'
@@ -138,7 +126,7 @@ async def get_data(market: str = '沪深A', sector: Optional[str] = None,) -> Un
         url = 'https://push2.eastmoney.com/api/qt/stock/get'
         try:
             secid = get_full_security_code(market)
-        except:
+        except:  # noqa:E722
             return ErroText['notStock']
         file = get_file(secid, 'json', sector)
         params.append(('secid', secid))
@@ -169,7 +157,7 @@ async def get_data(market: str = '沪深A', sector: Optional[str] = None,) -> Un
             )
             return await load_data_from_file(file)
 
-    logger.info(f"[SayuStock] 开始获取数据...")
+    logger.info("[SayuStock] 开始请求数据...")
     async with aiohttp.ClientSession() as session:
         async with session.get(
             url,
@@ -178,13 +166,13 @@ async def get_data(market: str = '沪深A', sector: Optional[str] = None,) -> Un
         ) as response:
             resp = await response.json()
 
-    logger.info(f"[SayuStock] 数据获取完成...")
+    logger.info("[SayuStock] 数据获取完成...")
     # 处理获取个股数据错误
     if sector == STOCK_SECTOR and resp['data'] is None:
         return ErroText['notStock']
 
     # 写入文件
-    logger.info(f"[SayuStock] 开始写入文件...")
+    logger.info("[SayuStock] 开始写入文件...")
     async with aiofiles.open(file, 'w', encoding='UTF-8') as f:
         await f.write(json.dumps(resp, ensure_ascii=False, indent=4))
 
@@ -207,16 +195,18 @@ async def get_data(market: str = '沪深A', sector: Optional[str] = None,) -> Un
         resp['trends'] = trends
     return resp
 
+
 def int_to_percentage(value: int) -> str:
     sign = '+' if value >= 0 else ''
     return f"{sign}{value:.2f}%"
+
 
 # 获取个股图形
 async def to_single_fig(
     raw_data: Dict,
     sp: Optional[str] = None,
 ):
-    logger.info(f'[SayuStock] 开始获取图形...')
+    logger.info('[SayuStock] 开始获取图形...')
     raw = raw_data['data']
     gained = raw['f170']
     price_histroy = raw_data['trends']
@@ -224,10 +214,10 @@ async def to_single_fig(
     new_price = raw['f43']
     custom_info = int_to_percentage(gained)
     result = {
-        'MARKET_CAP': raw['f116'], #总市值
-        'NEW_PRICE': new_price, #最新价
-        'STOCK_NAME': stock_name, #名称
-        'GAINED': gained, #涨幅
+        'MARKET_CAP': raw['f116'],  # 总市值
+        'NEW_PRICE': new_price,  # 最新价
+        'STOCK_NAME': stock_name,  # 名称
+        'GAINED': gained,  # 涨幅
         'CUSTOM_INFO': custom_info,
         'PRICE_HISTORY': price_histroy,
     }
@@ -240,30 +230,41 @@ async def to_single_fig(
     existing_times = set(item['datetime'] for item in price_histroy)
     for time in TIME_ARRAY:
         if time in existing_times:
-            full_data.append(next(item for item in price_histroy if item['datetime'] == time))
+            full_data.append(
+                next(
+                    item for item in price_histroy if item['datetime'] == time
+                )
+            )
         else:
-            full_data.append({
-                'datetime': time,
-                'price': None,
-                'open': None,
-                'high': None,
-                'low': None,
-                'amount': None,
-                'money': None,
-                'avg_price': None
-            })
+            full_data.append(
+                {
+                    'datetime': time,
+                    'price': None,
+                    'open': None,
+                    'high': None,
+                    'low': None,
+                    'amount': None,
+                    'money': None,
+                    'avg_price': None,
+                }
+            )
     price_histroy = full_data
 
-    price_history_pd = pd.DataFrame({
-        'datetime': [item['datetime'] for item in full_data],
-        'price': [item['price'] for item in full_data],
-    })
+    price_history_pd = pd.DataFrame(
+        {
+            'datetime': [item['datetime'] for item in full_data],
+            'price': [item['price'] for item in full_data],
+        }
+    )
 
     # 设置最大波动率
     open_price = price_history_pd['price'].iloc[0]
     max_price = price_history_pd['price'].max()
     min_price = price_history_pd['price'].min()
-    max_fluctuation = max((max_price - open_price) / open_price, (open_price - min_price) / open_price)
+    max_fluctuation = max(
+        (max_price - open_price) / open_price,
+        (open_price - min_price) / open_price,
+    )
     max_price = open_price * (1 + max_fluctuation + 0.01)
     min_price = open_price * (1 - max_fluctuation - 0.01)
 
@@ -275,12 +276,10 @@ async def to_single_fig(
         x="datetime",
         y="price",
         # text='price',  # 数据点显示值
-        line_shape='linear',  # 共有6种插值方式：'linear'、'spline'、'hv'、'vh'、'hvh'和'vhv。
+        line_shape='linear',  # 共有6种插值方式：
+        # 'linear'、'spline'、'hv'、'vh'、'hvh'和'vhv'
     )
-    # fig.update_traces(
-    #     texttemplate='%{text:.2f}',  # 数据点显示值的格式
-    #     textposition='top center',  # 数据点显示的位置：'top left', 'top center', 'top right', 'middle left','middle center', 'middle right', 'bottom left', 'bottom center', 'bottom right'
-    # )
+
     fig = go.Figure(fig)
     fig.update_traces(line=dict(width=5, color='white'))  # 使用白色线条
 
@@ -326,12 +325,18 @@ async def to_single_fig(
     # 计算以open_price为基准每1%为单位到max_price和min_price
     tick_values = []
     tick_texts = []
-    for i in range(int(-(max_fluctuation + 0.01) * 100), int((max_fluctuation + 0.01) * 100) + 1):
+    for i in range(
+        int(-(max_fluctuation + 0.01) * 100),
+        int((max_fluctuation + 0.01) * 100) + 1,
+    ):
         if i % 1 == 0:
             price = open_price * (1 + i / 100)
             if min_price <= price <= max_price:
                 tick_values.append(price)
                 tick_texts.append(f'{i}%')
+
+    title_str1 = f"{stock_name}  最新价：{new_price}"
+    title_str = f"{title_str1} 开盘价：{open_price} 跌涨幅：{custom_info}"
 
     # fig.update_layout(
     #     yaxis=dict(
@@ -346,9 +351,10 @@ async def to_single_fig(
     #         showgrid=False,
     #         dtick=15,
     #     ),
-    #     title=f"{stock_name}  最新价：{new_price} 开盘价：{open_price} 跌涨幅：{custom_info}",
+    #     title=title_str,
     # )
     # 修改y轴，x轴，title文字字号
+
     fig.update_layout(
         yaxis=dict(
             title='价格',
@@ -357,21 +363,20 @@ async def to_single_fig(
             tickvals=tick_values,
             ticktext=tick_texts,
             title_font=dict(size=36),  # 修改y轴标题字号
-            tickfont=dict(size=36)  # 修改y轴刻度字号
+            tickfont=dict(size=36),  # 修改y轴刻度字号
         ),
         xaxis=dict(
             title='时间',
             showgrid=False,
             dtick=15,
             title_font=dict(size=36),  # 修改x轴标题字号
-            tickfont=dict(size=36)  # 修改x轴刻度字号
+            tickfont=dict(size=36),  # 修改x轴刻度字号
         ),
         title=dict(
-            text=f"{stock_name}  最新价：{new_price} 开盘价：{open_price} 跌涨幅：{custom_info}",
-            font=dict(size=36)  # 修改标题字号
+            text=title_str,
+            font=dict(size=45),  # 修改标题字号
         ),
     )
-
 
     # 修改背景颜色
     fig.update_layout(
@@ -381,6 +386,7 @@ async def to_single_fig(
         coloraxis_showscale=False,
     )
     return fig
+
 
 async def to_fig(
     raw_data: Dict,
@@ -567,7 +573,7 @@ async def render_html(
     if not market:
         market = '沪深A'
 
-    logger.info(f"[SayuStock] 开始获取数据...")
+    logger.info("[SayuStock] 开始获取数据...")
     raw_data = await get_data(market, sector)
     if raw_data is None:
         return '数据处理失败, 请检查后台...'
@@ -584,7 +590,7 @@ async def render_html(
                 f"[SayuStock] html文件在{minutes}分钟内，直接返回文件数据。"
             )
             return file
-    
+
     if sector == STOCK_SECTOR:
         fig = await to_single_fig(raw_data)
     else:
