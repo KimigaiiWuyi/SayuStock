@@ -1,7 +1,8 @@
 from typing import List
 from pathlib import Path
+from datetime import datetime
 
-from PIL import Image, ImageDraw
+from PIL import Image, ImageOps, ImageDraw
 from gsuid_core.utils.image.convert import convert_img
 from gsuid_core.utils.fonts.fonts import core_font as ss_font
 
@@ -17,6 +18,39 @@ DIFF_MAP = {
     -0.5: '4',
     -1.3: '5',
 }
+
+
+def remove_color_range(img: Image.Image, lower_bound, upper_bound):
+    datas = img.getdata()
+
+    new_data = []
+    for item in datas:
+        # 检查像素是否在颜色范围内
+        if (
+            lower_bound[0] <= item[0] <= upper_bound[0]
+            and lower_bound[1] <= item[1] <= upper_bound[1]
+            and lower_bound[2] <= item[2] <= upper_bound[2]
+        ):
+            new_data.append((255, 255, 255, 0))
+        else:
+            new_data.append(item)
+
+    img.putdata(new_data)
+    return img
+
+
+def invert_colors(img: Image.Image):
+    r, g, b, a = img.split()
+
+    rgb = Image.merge('RGB', (r, g, b))
+    inverted_rgb = ImageOps.invert(rgb)
+
+    inverted_img = Image.composite(
+        Image.merge('RGBA', (*inverted_rgb.split(), a)),
+        img,
+        a,
+    )
+    return inverted_img
 
 
 async def draw_info_img():
@@ -59,6 +93,7 @@ async def draw_info_img():
                     break
 
     img = Image.new('RGBA', (1700, 2260), (7, 9, 27))
+    img_draw = ImageDraw.Draw(img)
 
     bar1 = Image.open(TEXT_PATH / 'bar1.png')
     bar2 = Image.open(TEXT_PATH / 'bar2.png')
@@ -70,13 +105,13 @@ async def draw_info_img():
         '深证成指',
         '创业板指',
         '中证A500',
-        '北证50',
-        '中证全指',
-        '上证50',
         '沪深300',
         '中证500',
         '中证1000',
         '中证2000',
+        '北证50',
+        '中证全指',
+        '上证50',
         '国债指数',
     ]
 
@@ -84,10 +119,14 @@ async def draw_info_img():
     n = 0
     sz_diff = 0
 
-    for zs_diff in data_zs['data']['diff']:
-        if zs_diff['f14'] == '上证指数':
-            sz_diff = zs_diff['f3']
-        if zs_diff['f14'] in zyzs:
+    for zs_name in zyzs:
+        for zs_diff in data_zs['data']['diff']:
+            if zs_name != zs_diff['f14']:
+                continue
+
+            if zs_diff['f14'] == '上证指数':
+                sz_diff = zs_diff['f3']
+
             diff = zs_diff['f3']
             zs_img = Image.new('RGBA', (200, 140))
             zs_draw = ImageDraw.Draw(zs_img)
@@ -102,7 +141,7 @@ async def draw_info_img():
 
             zs_draw.text(
                 (100, 99),
-                f"{zs_diff['f14']}",
+                f'{zs_diff["f14"]}',
                 (255, 255, 255),
                 ss_font(24),
                 'mm',
@@ -110,7 +149,7 @@ async def draw_info_img():
 
             zs_draw.text(
                 (100, 38),
-                f"{zs_diff['f2']}",
+                f'{zs_diff["f2"]}',
                 zsc2,
                 ss_font(30),
                 'mm',
@@ -118,7 +157,7 @@ async def draw_info_img():
 
             zs_draw.text(
                 (100, 70),
-                f"{'+' if diff >= 0 else ''}{diff}%",
+                f'{"+" if diff >= 0 else ""}{diff}%',
                 zsc2,
                 ss_font(30),
                 'mm',
@@ -129,6 +168,8 @@ async def draw_info_img():
                 zs_img,
             )
             n += 1
+
+    img_draw.rectangle((16, 434, 834, 584), None, (246, 180, 0), 5)
 
     # 分布统计
     div = Image.open(TEXT_PATH / 'div.png')
@@ -156,7 +197,7 @@ async def draw_info_img():
         )
         div_draw.text(
             (66 + offset, 413 - lenth - 25),
-            f"{ij_num}",
+            f'{ij_num}',
             (255, 255, 255),
             ss_font(24),
             'mm',
@@ -166,7 +207,43 @@ async def draw_info_img():
     # 流入流出
     web_em_img = await get_image_from_em(size=(500, 274))
     web_em_img = web_em_img.convert('RGBA')
+    web_em_img = remove_color_range(
+        web_em_img,
+        (200, 200, 200),
+        (255, 255, 255),
+    )
+    web_em_img = invert_colors(web_em_img)
     img.paste(web_em_img, (882, 32), web_em_img)
+
+    time_color = (186, 26, 27, 100) if sz_diff >= 0 else (18, 199, 30, 100)
+    img_draw.rectangle((1395, 92, 1655, 259), time_color)
+
+    now = datetime.now()
+    weekday = now.strftime('星期' + '一二三四五六日'[now.weekday()])
+    time = now.strftime('%H:%M')
+    date = now.strftime('%Y.%m.%d')
+
+    img_draw.text(
+        (1524, 175),
+        f'{time}',
+        (255, 255, 255),
+        ss_font(58),
+        'mm',
+    )
+    img_draw.text(
+        (1524, 125),
+        f'{weekday}',
+        (255, 255, 255),
+        ss_font(36),
+        'mm',
+    )
+    img_draw.text(
+        (1524, 227),
+        f'{date}',
+        (255, 255, 255),
+        ss_font(36),
+        'mm',
+    )
 
     for i in DIFF_MAP:
         if sz_diff >= i:
@@ -187,12 +264,12 @@ async def draw_info_img():
 
     sorted_hy = sorted(
         data_hy['data']['diff'],
-        key=lambda x: x["f3"],
+        key=lambda x: x['f3'],
         reverse=True,
     )
     sorted_gn = sorted(
         data_gn['data']['diff'],
-        key=lambda x: x["f3"],
+        key=lambda x: x['f3'],
         reverse=True,
     )
 
@@ -223,7 +300,7 @@ async def draw_bar(sd: List[dict], img: Image.Image, start: int, y: int):
         hy_draw.rounded_rectangle((23, 2, 403, 57), 0, hyc2)
         hy_draw.text(
             (53, 30),
-            f"{hy['f14']}",
+            f'{hy["f14"]}',
             (255, 255, 255),
             ss_font(30),
             'lm',
@@ -231,7 +308,7 @@ async def draw_bar(sd: List[dict], img: Image.Image, start: int, y: int):
 
         hy_draw.text(
             (384, 30),
-            f"{'+' if hy_diff >= 0 else ''}{hy_diff}%",
+            f'{"+" if hy_diff >= 0 else ""}{hy_diff}%',
             (255, 255, 255),
             ss_font(30),
             'rm',
