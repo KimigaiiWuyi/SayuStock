@@ -9,10 +9,10 @@ import aiohttp
 import aiofiles
 import pandas as pd
 import plotly.express as px
+import plotly.graph_objects as go
 from gsuid_core.logger import logger
 from playwright.async_api import async_playwright
 from gsuid_core.utils.image.convert import convert_img
-from plotly.graph_objs import Figure
 
 from ..utils.load_data import (
     mdata,
@@ -30,6 +30,7 @@ from ..utils.constant import (
     SINGLE_STOCK_FIELDS,
     SP_STOCK,
     STOCK_SECTOR,
+    TIME_ARRAY,
     bk_dict,
     market_dict,
     request_header,
@@ -235,17 +236,45 @@ async def to_single_fig(
     if not gained:
         return ErroText['notData']
 
+    # 遍历TIME_RANGE如果存在没有数据的时间则插入空数据
+    full_data = []
+    existing_times = set(item['datetime'] for item in price_histroy)
+    for time in TIME_ARRAY:
+        if time in existing_times:
+            full_data.append(next(item for item in price_histroy if item['datetime'] == time))
+        else:
+            full_data.append({
+                'datetime': time,
+                'price': None,
+                'open': None,
+                'high': None,
+                'low': None,
+                'amount': None,
+                'money': None,
+                'avg_price': None
+            })
+    price_histroy = full_data
+
+    price_history_pd = pd.DataFrame({
+        'datetime': [item['datetime'] for item in full_data],
+        'price': [item['price'] for item in full_data],
+    })
+
+    # 设置最大波动率
+    open_price = price_history_pd['price'].iloc[0]
+    max_price = price_history_pd['price'].max()
+    min_price = price_history_pd['price'].min()
+    max_fluctuation = max((max_price - open_price) / open_price, (open_price - min_price) / open_price)
+    max_price = open_price * (1 + max_fluctuation + 0.01)
+    min_price = open_price * (1 - max_fluctuation - 0.01)
+
     async with aiofiles.open('dd.json', 'w', encoding='UTF-8') as f:
         await f.write(json.dumps(result, ensure_ascii=False, indent=4))
-
-    max_price = max(item['price'] for item in price_histroy)
-    min_price = min(item['price'] for item in price_histroy)
 
     fig = px.line(
         price_histroy,
         x="datetime",
         y="price",
-        title=f"{stock_name}  最新价：{new_price}  跌涨幅：{custom_info}",
         # text='price',  # 数据点显示值
         line_shape='linear',  # 共有6种插值方式：'linear'、'spline'、'hv'、'vh'、'hvh'和'vhv。
     )
@@ -253,74 +282,105 @@ async def to_single_fig(
     #     texttemplate='%{text:.2f}',  # 数据点显示值的格式
     #     textposition='top center',  # 数据点显示的位置：'top left', 'top center', 'top right', 'middle left','middle center', 'middle right', 'bottom left', 'bottom center', 'bottom right'
     # )
-    fig.update_layout(
-        yaxis=dict(
-            range=[min_price, max_price],  # 设置 y 轴范围
-        ),
-        xaxis=dict(
-            showgrid=False,
-            dtick=15,
+    fig = go.Figure(fig)
+    fig.update_traces(line=dict(width=5, color='white'))  # 使用白色线条
+
+    # 添加背景颜色和虚
+    fig.add_shape(
+        type="rect",
+        x0=price_history_pd['datetime'].min(),
+        x1=price_history_pd['datetime'].max(),
+        y0=open_price,
+        y1=max_price,
+        fillcolor="red",
+        opacity=0.2,
+        layer="below",
+        line_width=0,
+    )
+
+    fig.add_shape(
+        type="rect",
+        x0=price_history_pd['datetime'].min(),
+        x1=price_history_pd['datetime'].max(),
+        y0=min_price,
+        y1=open_price,
+        fillcolor="green",
+        opacity=0.2,
+        layer="below",
+        line_width=0,
+    )
+
+    # 添加0轴线
+    fig.add_shape(
+        type="line",
+        x0=price_history_pd['datetime'].min(),
+        x1=price_history_pd['datetime'].max(),
+        y0=open_price,
+        y1=open_price,
+        line=dict(
+            color="yellow",
+            width=3,
+            dash="dashdot",
         ),
     )
-    # fig.show()
 
-    # df = pd.DataFrame([result])
-
-    # # 生成 Treemap
-    # fig = px.treemap(
-    #     df,
-    #     path=["STOCK_NAME"],
-    #     values="MARKET_CAP",  # 定义块的大小
-    #     color="GAINED",  # 根据数值上色
-    #     color_continuous_scale=[
-    #         [0, 'rgba(0, 255, 0, 1)'],  # 绿色，透明度1
-    #         [0.49, 'rgba(0, 255, 0, 0.05)'],
-    #         [0.51, 'rgba(255, 0, 0, 0.05)'],
-    #         [1, 'rgba(255, 0, 0, 1)'],  # 红色，透明度1
-    #     ],  # 渐变颜色
-    #     range_color=[-10, 10],  # 设置数值范围
-    #     custom_data=["NEW_PRICE", "CUSTOM_INFO"],
-    #     branchvalues="total",
-    # )
-
-    # # 控制显示内容
-    # fig.update_traces(
-    #     marker=dict(
-    #         colorscale=[
-    #             [0, 'rgba(10, 204, 49, 1)'],  # 绿色，透明度1
-    #             [0.49, 'rgba(10, 204, 49, 0.05)'],
-    #             [0.51, 'rgba(238, 55, 58, 0.05)'],
-    #             [1, 'rgba(238, 55, 58, 1)'],  # 红色，透明度1
-    #         ],
-    #         cmin=-10,  # 设置最小值
-    #         cmax=10,  # 设置最大值
-    #         cornerradius=5,
-    #     ),
-    #     marker_pad=dict(
-    #         l=5,
-    #         r=5,
-    #         b=5,
-    #         t=60,
-    #     ),
-    #     textfont=dict(
-    #         color="white",
-    #     ),
-    #     textfont_family='MiSans',
-    #     textfont_weight=350,
-    #     texttemplate="%{label}<br><br>最新价：%{customdata[0]}<br><br>跌涨幅：%{customdata[1]}",
-    #     # textinfo="label+text",
-    #     textfont_size=50,  # 设置字体大小
-    #     textposition="middle center",
-    # )
+    # 计算以open_price为基准每1%为单位到max_price和min_price
+    tick_values = []
+    tick_texts = []
+    for i in range(int(-(max_fluctuation + 0.01) * 100), int((max_fluctuation + 0.01) * 100) + 1):
+        if i % 1 == 0:
+            price = open_price * (1 + i / 100)
+            if min_price <= price <= max_price:
+                tick_values.append(price)
+                tick_texts.append(f'{i}%')
 
     # fig.update_layout(
-    #     # uniformtext=dict(minsize=30, mode='hide'),
-    #     margin=dict(t=0, b=0, l=0, r=0),
-    #     paper_bgcolor="black",
-    #     plot_bgcolor="black",
-    #     font=dict(color="white"),
-    #     coloraxis_showscale=False,
+    #     yaxis=dict(
+    #         title='价格',
+    #         range=[min_price, max_price],
+    #         showgrid=True,
+    #         tickvals=tick_values,
+    #         ticktext=tick_texts
+    #     ),
+    #     xaxis=dict(
+    #         title='时间',
+    #         showgrid=False,
+    #         dtick=15,
+    #     ),
+    #     title=f"{stock_name}  最新价：{new_price} 开盘价：{open_price} 跌涨幅：{custom_info}",
     # )
+    # 修改y轴，x轴，title文字字号
+    fig.update_layout(
+        yaxis=dict(
+            title='价格',
+            range=[min_price, max_price],
+            showgrid=True,
+            tickvals=tick_values,
+            ticktext=tick_texts,
+            title_font=dict(size=36),  # 修改y轴标题字号
+            tickfont=dict(size=36)  # 修改y轴刻度字号
+        ),
+        xaxis=dict(
+            title='时间',
+            showgrid=False,
+            dtick=15,
+            title_font=dict(size=36),  # 修改x轴标题字号
+            tickfont=dict(size=36)  # 修改x轴刻度字号
+        ),
+        title=dict(
+            text=f"{stock_name}  最新价：{new_price} 开盘价：{open_price} 跌涨幅：{custom_info}",
+            font=dict(size=36)  # 修改标题字号
+        ),
+    )
+
+
+    # 修改背景颜色
+    fig.update_layout(
+        paper_bgcolor="black",
+        plot_bgcolor="black",
+        font=dict(color="white"),
+        coloraxis_showscale=False,
+    )
     return fig
 
 async def to_fig(

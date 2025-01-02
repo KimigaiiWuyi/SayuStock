@@ -1,3 +1,5 @@
+import datetime
+
 AL = 'zh-CN,zh;q=0.8,zh-TW;q=0.7,zh-HK;q=0.5,en-US;q=0.3,en;q=0.2'
 UA = 'Mozilla/5.0 (Windows NT 6.3; Trident/7.0; Touch; rv:11.0) like Gecko'
 
@@ -149,3 +151,21 @@ bk_dict = {
     'ETF': 'b:MK0021,b:MK0022,b:MK0023,b:MK0024',
     'LOF': 'b:MK0404,b:MK0405,b:MK0406,b:MK0407',
 }
+
+def create_time_array():
+    AMStart = datetime.datetime.strptime('9:15', '%H:%M')
+    AMEnd = datetime.datetime.strptime('11:30', '%H:%M')
+    PMStart = datetime.datetime.strptime('13:01', '%H:%M')
+    PMEnd = datetime.datetime.strptime('15:00', '%H:%M')
+    delta = datetime.timedelta(minutes=1)
+    time_array = []
+    
+    while AMStart <= AMEnd:
+        time_array.append(AMStart.strftime('%H:%M'))
+        AMStart += delta
+    while PMStart <= PMEnd:
+       time_array.append(PMStart.strftime('%H:%M'))
+       PMStart += delta
+    return time_array
+
+TIME_ARRAY: list[str] = create_time_array()

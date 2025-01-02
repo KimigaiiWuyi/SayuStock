@@ -9,11 +9,11 @@ import time
 import base64
 
 
-async def http_test():
+async def http_test(test_msg: str):
     msg = to_builtins(
         MessageReceive(
             content=[
-                MessageSegment.text('个股 601919'),
+                MessageSegment.text(test_msg),
                 # MessageSegment.text('大盘云图'),
             ]
         )
@@ -35,10 +35,12 @@ async def http_test():
                 if image_data.startswith('base64://'):
                     image_data = image_data[len('base64://'):]
                 image_dataBytes = base64.b64decode(image_data)
-                with open(f"{timestamp}.jpg", "wb") as f:
+                with open(f"{test_msg}_{timestamp}.jpg", "wb") as f:
                     f.write(image_dataBytes)
         print(response.status_code)
 
 if __name__ == "__main__":
     import asyncio
-    asyncio.run(http_test())
+    asyncio.run(http_test('个股 601919'))
+    asyncio.run(http_test('个股 002624'))
+    asyncio.run(http_test('个股 512000'))
