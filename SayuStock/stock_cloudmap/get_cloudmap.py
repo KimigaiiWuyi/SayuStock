@@ -3,7 +3,6 @@ import json
 from pathlib import Path
 from datetime import datetime, timedelta
 from typing import Dict, Union, Optional
-from uu import Error
 
 import aiohttp
 import aiofiles
