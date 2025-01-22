@@ -18,7 +18,7 @@ extra_standard_library = ["typing_extensions"]
 distribution = false
 [tool.poetry]
 name = "SayuStock"
-version = "0.0.1"
+version = "0.2"
 description = "基于GsCore, 支持OneBot(QQ)、OneBotV12、QQ频道、微信、KOOK（开黑啦）、Telegram（电报）、FeiShu（飞书）、DoDo、Discord的全功能HoshinoBot/NoneBot2/Koishi/yunzai/ZeroBot股票/A股机器人插件（大盘云图等）"
 authors = ["KimigaiiWuyi <444835641@qq.com>"]
 license = "GPL-3.0-or-later"
@@ -40,7 +40,7 @@ deprecateTypingAliases = false
 
 [project]
 name = "SayuStock"
-version = "0.1.0"
+version = "0.2"
 description = "基于GsCore, 支持OneBot(QQ)、OneBotV12、QQ频道、微信、KOOK（开黑啦）、Telegram（电报）、FeiShu（飞书）、DoDo、Discord的全功能HoshinoBot/NoneBot2/Koishi/yunzai/ZeroBot股票/A股机器人插件（大盘云图等）"
 authors = [
   { name = "KimigaiiWuyi", email = "444835641@qq.com" },
@@ -48,6 +48,7 @@ authors = [
 dependencies = [
   "playwright>=1.49.0",
   "plotly>=5.24.1",
+  "pandas>=2.2.3",
 ]
 requires-python = "==3.12.*"
 readme = "README.md"

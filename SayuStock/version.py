@@ -1,1 +1,1 @@
-MajsoulUID_version = "1.0"
+SayuStock_version = "0.2"
