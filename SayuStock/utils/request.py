@@ -8,12 +8,28 @@ from aiohttp.client import ClientSession
 from PIL import Image, UnidentifiedImageError
 from aiohttp.client_exceptions import ClientConnectorError
 
-from .utils import get_file
+from .utils import get_file, calculate_difference
 from ..stock_config.stock_config import STOCK_CONFIG
 
 minutes: int = STOCK_CONFIG.get_config('mapcloud_refresh_minutes').data
 
 WEBPIC = 'https://webquotepic.eastmoney.com/GetPic.aspx'
+
+
+async def get_hours_from_em() -> float:
+    URL = 'https://push2his.eastmoney.com/api/qt/stock/trends2/get?fields1=f1,f2,f3,f4,f5,f6,f7,f8,f9,f10,f11,f12,f13&fields2=f51,f52,f53,f54,f55,f56,f57,f58&ndays=2'  # noqa: E501
+    y = 0
+    for mk in ['1.000001', '0.399001']:
+        url = URL + '&secid=' + mk
+        async with ClientSession() as sess:
+            try:
+                async with sess.get(url) as res:
+                    if res.status == 200:
+                        data = await res.json()
+                        y += calculate_difference(data['data']['trends'])
+            except ClientConnectorError:
+                logger.warning(f"[SayuStock]获取{mk}数据失败")
+    return y
 
 
 async def get_image_from_em(

@@ -7,8 +7,9 @@ from gsuid_core.utils.image.convert import convert_img
 from gsuid_core.utils.fonts.fonts import core_font as ss_font
 
 from ..utils.image import get_footer
-from ..utils.request import get_image_from_em
 from ..stock_cloudmap.get_cloudmap import get_data
+from ..utils.utils import save_history, number_to_chinese
+from ..utils.request import get_hours_from_em, get_image_from_em
 
 TEXT_PATH = Path(__file__).parent / 'texture2d'
 DIFF_MAP = {
@@ -53,7 +54,16 @@ def invert_colors(img: Image.Image):
     return inverted_img
 
 
-async def draw_info_img():
+async def draw_info_img(is_save: bool = False):
+    data_zs = await get_data('主要指数')
+    data_hy = await get_data('行业板块')
+    data_gn = await get_data('概念板块')
+    raw_data = await get_data()
+
+    if isinstance(data_zs, str):
+        return data_zs
+    if isinstance(data_hy, str):
+        return data_hy
     data_zs = await get_data('主要指数')
     data_hy = await get_data('行业板块')
     data_gn = await get_data('概念板块')
@@ -84,8 +94,10 @@ async def draw_info_img():
         -10: [],
         -100: [],
     }
-
+    all_f6: float = 0
     for i in raw_data['data']['diff']:
+        if i['f6'] != '-':
+            all_f6 += i['f6']
         if i['f20'] != '-' and i['f100'] != '-' and i['f3'] != '-':
             for _d in diffs:
                 if i['f3'] >= _d:
@@ -216,7 +228,7 @@ async def draw_info_img():
     img.paste(web_em_img, (882, 32), web_em_img)
 
     time_color = (186, 26, 27, 100) if sz_diff >= 0 else (18, 199, 30, 100)
-    img_draw.rectangle((1395, 92, 1655, 259), time_color)
+    img_draw.rectangle((1395, 62, 1655, 229), time_color)
 
     now = datetime.now()
     weekday = now.strftime('星期' + '一二三四五六日'[now.weekday()])
@@ -224,24 +236,52 @@ async def draw_info_img():
     date = now.strftime('%Y.%m.%d')
 
     img_draw.text(
-        (1524, 175),
+        (1524, 145),
         f'{time}',
         (255, 255, 255),
         ss_font(58),
         'mm',
     )
     img_draw.text(
-        (1524, 125),
+        (1524, 95),
         f'{weekday}',
         (255, 255, 255),
         ss_font(36),
         'mm',
     )
     img_draw.text(
-        (1524, 227),
+        (1524, 197),
         f'{date}',
         (255, 255, 255),
         ss_font(36),
+        'mm',
+    )
+
+    if is_save:
+        save_history(all_f6)
+
+    f6diff = await get_hours_from_em()
+    all_f6_str = number_to_chinese(all_f6)
+
+    if f6diff > 0:
+        f6diff_str = f'放量: {number_to_chinese(abs(f6diff))}'
+        fcolor = (186, 26, 27, 100)
+    else:
+        f6diff_str = f'缩量: {number_to_chinese(abs(f6diff))}'
+        fcolor = (18, 199, 30, 100)
+
+    img_draw.text(
+        (1529, 263),
+        f'成交额: {all_f6_str}',
+        time_color,
+        ss_font(34),
+        'mm',
+    )
+    img_draw.text(
+        (1529, 305),
+        f6diff_str,
+        fcolor,
+        ss_font(34),
         'mm',
     )
 

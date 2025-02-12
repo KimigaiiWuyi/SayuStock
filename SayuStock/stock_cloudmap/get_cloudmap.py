@@ -49,8 +49,11 @@ async def load_data_from_file(file: Path):
 
 async def load_bk_data():
     global GK_DATA
+    _GK_DATA = {}
     if GN_BK_PATH.exists():
-        GK_DATA = await load_data_from_file(GN_BK_PATH)
+        _GK_DATA = await load_data_from_file(GN_BK_PATH)
+    for i in _GK_DATA:
+        GK_DATA[i.upper()] = _GK_DATA[i]
     return GK_DATA
 
 
@@ -141,7 +144,12 @@ async def get_data(
             if market in GK_DATA:
                 fs = GK_DATA[market]
             else:
-                return ErroText['typemap']
+                for i in GK_DATA:
+                    if market in i:
+                        fs = GK_DATA[i]
+                        break
+                else:
+                    return ErroText['typemap']
 
         fields = ",".join(trade_detail_dict.keys())
         params.append(('fs', fs))
@@ -159,11 +167,14 @@ async def get_data(
 
     logger.info("[SayuStock] 开始请求数据...")
     async with aiohttp.ClientSession() as session:
+        logger.debug(f'[SayuStock] 请求参数: URL: {url}')
+        logger.debug(f'[SayuStock] 请求参数: params: {params}')
         async with session.get(
             url,
             headers=request_header,
             params=params,
         ) as response:
+            logger.debug(await response.text())
             resp = await response.json()
 
     logger.info("[SayuStock] 数据获取完成...")
