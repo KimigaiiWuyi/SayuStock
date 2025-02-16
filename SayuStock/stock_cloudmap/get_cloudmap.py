@@ -1,7 +1,7 @@
 import json
 from pathlib import Path
 from datetime import datetime, timedelta
-from typing import Dict, Union, Optional
+from typing import Dict, List, Union, Optional
 
 import aiohttp
 import aiofiles
@@ -100,6 +100,21 @@ async def get_single_fig_data(secid: str):
     return stock_data
 
 
+async def req(url: str, params: List[tuple]):
+    async with aiohttp.ClientSession() as session:
+        logger.debug(f'[SayuStock] 请求参数: URL: {url}')
+        logger.debug(f'[SayuStock] 请求参数: params: {params}')
+        async with session.get(
+            url,
+            headers=request_header,
+            params=params,
+        ) as response:
+            text = await response.text()
+            logger.debug(text)
+            resp = json.loads(text)
+            return resp
+
+
 async def get_data(
     market: str = '沪深A',
     sector: Optional[str] = None,
@@ -110,14 +125,15 @@ async def get_data(
 
     file = get_file(market, 'json')
 
+    is_loop = False
     params = [
-        ('pn', '1'),
-        ('pz', '1000000'),
+        ('pz', '200'),
         ('po', '1'),
         ('np', '1'),
         ('fltt', '2'),
         ('invt', '2'),
         ('fid', 'f3'),
+        ('pn', '1'),
     ]
 
     if market in SP_STOCK:
@@ -153,9 +169,11 @@ async def get_data(
 
         fields = ",".join(trade_detail_dict.keys())
         params.append(('fs', fs))
-    params.append(('fields', fields))
+        is_loop = True
 
+    params.append(('fields', fields))
     # 检查当前目录下是否有符合条件的文件
+
     if file.exists():
         # 检查文件的修改时间是否在一分钟以内
         file_mod_time = datetime.fromtimestamp(file.stat().st_mtime)
@@ -166,18 +184,22 @@ async def get_data(
             return await load_data_from_file(file)
 
     logger.info("[SayuStock] 开始请求数据...")
-    async with aiohttp.ClientSession() as session:
-        logger.debug(f'[SayuStock] 请求参数: URL: {url}')
-        logger.debug(f'[SayuStock] 请求参数: params: {params}')
-        async with session.get(
-            url,
-            headers=request_header,
-            params=params,
-        ) as response:
-            logger.debug(await response.text())
-            resp = await response.json()
+    resp = await req(url, params)
+
+    if is_loop and resp['data'] and len(resp['data']['diff']) >= 200:
+        for pn in range(2, 1000):
+            params.remove(('pn', str(pn - 1)))
+            params.append(('pn', str(pn)))
+            resp2 = await req(url, params)
+            if resp2['data']:
+                resp['data']['diff'].extend(resp2['data']['diff'])
+            else:
+                break
+            if len(resp2['data']['diff']) < 200:
+                break
 
     logger.info("[SayuStock] 数据获取完成...")
+
     # 处理获取个股数据错误
     if sector == STOCK_SECTOR and resp['data'] is None:
         return ErroText['notStock']

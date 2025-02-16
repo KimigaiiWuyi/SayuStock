@@ -2,6 +2,8 @@ import json
 from typing import List, Optional
 from datetime import datetime, timedelta
 
+from gsuid_core.logger import logger
+
 from .resource_path import DATA_PATH, HISTORY_PATH
 
 
@@ -40,11 +42,20 @@ def calculate_difference(data: List[str]):
             date_dict[date_day.day] = []
         date_dict[date_day.day].append(float(item_part[6]))
 
+    for _ in range(4):
+        if today.day not in date_dict:
+            today = today - timedelta(days=1)
+        else:
+            break
+    else:
+        return 0
+
+    logger.info(f"[SayuStock]今天交易日: {today}")
     all_today_data = sum(date_dict[today.day])
     all_today_len = len(date_dict[today.day])
     del date_dict[today.day]
-    all_yestoday_data = sum(list(date_dict.values())[0][:all_today_len])
 
+    all_yestoday_data = sum(list(date_dict.values())[0][:all_today_len])
     return all_today_data - all_yestoday_data
 
 
