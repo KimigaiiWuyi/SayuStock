@@ -1,5 +1,6 @@
 import json
 from pathlib import Path
+from turtle import width
 from datetime import datetime, timedelta
 from typing import Dict, List, Union, Optional
 
@@ -246,6 +247,9 @@ async def to_single_fig(
     stock_name = raw['f58']
     new_price = raw['f43']
     custom_info = int_to_percentage(gained)
+    turnover_rate = raw['f168']
+
+    '''
     result = {
         'MARKET_CAP': raw['f116'],  # 总市值
         'NEW_PRICE': new_price,  # 最新价
@@ -253,7 +257,9 @@ async def to_single_fig(
         'GAINED': gained,  # 涨幅
         'CUSTOM_INFO': custom_info,
         'PRICE_HISTORY': price_histroy,
+        'TURNOVER_RATE': turnover_rate,
     }
+    '''
 
     if not gained:
         return ErroText['notData']
@@ -300,9 +306,6 @@ async def to_single_fig(
     )
     max_price = open_price * (1 + max_fluctuation + 0.01)
     min_price = open_price * (1 - max_fluctuation - 0.01)
-
-    async with aiofiles.open('dd.json', 'w', encoding='UTF-8') as f:
-        await f.write(json.dumps(result, ensure_ascii=False, indent=4))
 
     fig = px.line(
         price_histroy,
@@ -369,7 +372,7 @@ async def to_single_fig(
                 tick_texts.append(f'{i}%')
 
     title_str1 = f"{stock_name}  最新价：{new_price}"
-    title_str = f"{title_str1} 开盘价：{open_price} 跌涨幅：{custom_info}"
+    title_str = f"【{title_str1}】 开盘价：{open_price} 跌涨幅：{custom_info} 换手率 {turnover_rate}%"  # noqa:E501
 
     # fig.update_layout(
     #     yaxis=dict(
@@ -407,8 +410,15 @@ async def to_single_fig(
         ),
         title=dict(
             text=title_str,
-            font=dict(size=45),  # 修改标题字号
+            font=dict(size=50),  # 修改标题字号
+            y=0.985,
+            x=0.5,
+            xanchor='center',
+            yanchor='top',
         ),
+        # width=4800,
+        # height=4800,
+        margin=dict(t=100, l=50, r=50, b=50),
     )
 
     # 修改背景颜色
@@ -507,9 +517,6 @@ async def to_fig(
         "Diff": diff,
         "CustomInfo": custom_info,
     }
-
-    async with aiofiles.open('dd.json', 'w', encoding='UTF-8') as f:
-        await f.write(json.dumps(data, ensure_ascii=False, indent=4))
 
     df = pd.DataFrame(data)
 

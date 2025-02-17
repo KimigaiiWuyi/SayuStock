@@ -8,6 +8,7 @@ from aiohttp.client import ClientSession
 from PIL import Image, UnidentifiedImageError
 from aiohttp.client_exceptions import ClientConnectorError
 
+from .constant import code_id_dict
 from .utils import get_file, calculate_difference
 from ..stock_config.stock_config import STOCK_CONFIG
 
@@ -30,6 +31,31 @@ async def get_hours_from_em() -> float:
             except ClientConnectorError:
                 logger.warning(f"[SayuStock]获取{mk}数据失败")
     return y
+
+
+async def get_code_id(code: str):
+    """
+    生成东方财富股票专用的行情ID
+    code:可以是代码或简称或英文
+    """
+    if code in code_id_dict.keys():
+        return code_id_dict[code]
+    url = 'https://searchapi.eastmoney.com/api/suggest/get'
+    params = (
+        ('input', f'{code}'),
+        ('type', '14'),
+        ('token', 'D43BF722C8E33BDC906FB84D85E326E8'),
+    )
+    async with ClientSession() as sess:
+        async with sess.get(url, params=params) as res:
+            if res.status == 200:
+                data = await res.json()
+                code_dict = data['QuotationCodeTable']['Data']
+                if code_dict:
+                    return code_dict[0]['QuoteID']
+                else:
+                    return '输入代码有误'
+    return '输入代码有误'
 
 
 async def get_image_from_em(
