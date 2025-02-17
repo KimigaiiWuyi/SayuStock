@@ -1,6 +1,5 @@
 import json
 from pathlib import Path
-from turtle import width
 from datetime import datetime, timedelta
 from typing import Dict, List, Union, Optional
 
@@ -14,6 +13,7 @@ from playwright.async_api import async_playwright
 from gsuid_core.utils.image.convert import convert_img
 
 from ..utils.utils import get_file
+from ..utils.request import get_code_id
 from ..utils.resource_path import GN_BK_PATH
 from ..stock_config.stock_config import STOCK_CONFIG
 from ..utils.load_data import mdata, get_full_security_code
@@ -60,7 +60,6 @@ async def load_bk_data():
 
 # 获取个股折线数据
 async def get_single_fig_data(secid: str):
-    logger.info(f'get_single_fig_data {secid}')
     params = []
     url = "https://push2.eastmoney.com/api/qt/stock/trends2/get"
     fields1 = ",".join(SINGLE_LINE_FIELDS1)
@@ -144,10 +143,12 @@ async def get_data(
     elif sector == STOCK_SECTOR:
         fields = ",".join(SINGLE_STOCK_FIELDS)
         url = 'https://push2.eastmoney.com/api/qt/stock/get'
-        try:
-            secid = get_full_security_code(market)
-        except:  # noqa:E722
+        logger.info(f'[SayuStock] get_single_fig_data code: {market}')
+        secid = await get_code_id(market)
+        if secid is None:
             return ErroText['notStock']
+        logger.info(f'[SayuStock] get_single_fig_data secid: {secid}')
+        secid = get_full_security_code(secid)
         file = get_file(secid, 'json', sector)
         params.append(('secid', secid))
     else:

@@ -1,3 +1,4 @@
+import json
 from io import BytesIO
 from typing import Tuple, Optional
 from datetime import datetime, timedelta
@@ -33,7 +34,7 @@ async def get_hours_from_em() -> float:
     return y
 
 
-async def get_code_id(code: str):
+async def get_code_id(code: str) -> Optional[str]:
     """
     生成东方财富股票专用的行情ID
     code:可以是代码或简称或英文
@@ -49,13 +50,16 @@ async def get_code_id(code: str):
     async with ClientSession() as sess:
         async with sess.get(url, params=params) as res:
             if res.status == 200:
-                data = await res.json()
+                logger.debug(f"[SayuStock]开始获取{code}的ID")
+                text = await res.text()
+                logger.debug(text)
+                data = json.loads(text)
                 code_dict = data['QuotationCodeTable']['Data']
                 if code_dict:
                     return code_dict[0]['QuoteID']
                 else:
-                    return '输入代码有误'
-    return '输入代码有误'
+                    return None
+    return None
 
 
 async def get_image_from_em(
