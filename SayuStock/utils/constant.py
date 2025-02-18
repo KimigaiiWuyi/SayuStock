@@ -280,7 +280,7 @@ def create_time_array():
     AMStart = datetime.datetime.strptime('9:15', '%H:%M')
     AMEnd = datetime.datetime.strptime('11:30', '%H:%M')
     PMStart = datetime.datetime.strptime('13:01', '%H:%M')
-    PMEnd = datetime.datetime.strptime('15:00', '%H:%M')
+    PMEnd = datetime.datetime.strptime('16:00', '%H:%M')
     delta = datetime.timedelta(minutes=1)
     time_array = []
 
