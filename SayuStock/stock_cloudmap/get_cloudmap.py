@@ -148,7 +148,7 @@ async def get_data(
         if secid is None:
             return ErroText['notStock']
         logger.info(f'[SayuStock] get_single_fig_data secid: {secid}')
-        secid = get_full_security_code(secid)
+        secid = get_full_security_code(secid[0])
         file = get_file(secid, 'json', sector)
         params.append(('secid', secid))
     else:

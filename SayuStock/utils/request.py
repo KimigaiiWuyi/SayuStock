@@ -34,13 +34,13 @@ async def get_hours_from_em() -> float:
     return y
 
 
-async def get_code_id(code: str) -> Optional[str]:
+async def get_code_id(code: str) -> Optional[Tuple[str, str]]:
     """
     生成东方财富股票专用的行情ID
     code:可以是代码或简称或英文
     """
     if code in code_id_dict.keys():
-        return code_id_dict[code]
+        return code_id_dict[code], code
     url = 'https://searchapi.eastmoney.com/api/suggest/get'
     params = (
         ('input', f'{code}'),
@@ -56,7 +56,7 @@ async def get_code_id(code: str) -> Optional[str]:
                 data = json.loads(text)
                 code_dict = data['QuotationCodeTable']['Data']
                 if code_dict:
-                    return code_dict[0]['QuoteID']
+                    return code_dict[0]['QuoteID'], code_dict[0]['Name']
                 else:
                     return None
     return None
