@@ -45,6 +45,10 @@
 <a><img src="https://s2.loli.net/2025/01/22/RBhEXUVaWmwPe5z.png"></a>
 </p></details>
 
+<details><summary>我的自选</summary><p>
+<a><img src="https://s2.loli.net/2025/02/23/k1AOeTfxtPZHluo.jpg"></a>
+</p></details>
+
 ## 丨感谢&参考
 
 - [qstock](https://github.com/tkfy920/qstock) - 参考部分代码

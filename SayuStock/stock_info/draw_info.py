@@ -60,15 +60,6 @@ async def draw_info_img(is_save: bool = False):
     data_gn = await get_data('概念板块')
     raw_data = await get_data()
 
-    if isinstance(data_zs, str):
-        return data_zs
-    if isinstance(data_hy, str):
-        return data_hy
-    data_zs = await get_data('主要指数')
-    data_hy = await get_data('行业板块')
-    data_gn = await get_data('概念板块')
-    raw_data = await get_data()
-
     # data_a500 = await get_data('A500')
 
     if isinstance(data_zs, str):

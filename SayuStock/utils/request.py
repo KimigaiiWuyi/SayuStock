@@ -39,6 +39,8 @@ async def get_code_id(code: str) -> Optional[Tuple[str, str]]:
     生成东方财富股票专用的行情ID
     code:可以是代码或简称或英文
     """
+    if '.' in code:
+        return code, ''
     if code in code_id_dict.keys():
         return code_id_dict[code], code
     url = 'https://searchapi.eastmoney.com/api/suggest/get'
