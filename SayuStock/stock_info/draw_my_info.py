@@ -112,8 +112,13 @@ async def draw_my_stock_img(ev: Event):
         else:
             e_money = number_to_chinese(mark_data['f48'])
         hs = mark_data['f168']
-        p = mark_data['f170']
+        if isinstance(mark_data['f170'], str):
+            p = 0
+        else:
+            p = mark_data['f170']
+
         all_p += p
+
         b_title = f'{mark_data["f58"]} ({u})'
         s_title = f'换: {hs}% 额: {e_money}'
         if p >= 0:
