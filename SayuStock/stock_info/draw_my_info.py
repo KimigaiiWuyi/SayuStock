@@ -107,7 +107,10 @@ async def draw_my_stock_img(ev: Event):
         if isinstance(data, str):
             return data
         mark_data: dict = data['data']
-        e_money = number_to_chinese(mark_data['f48'])
+        if isinstance(mark_data['f48'], str):
+            e_money = mark_data['f48']
+        else:
+            e_money = number_to_chinese(mark_data['f48'])
         hs = mark_data['f168']
         p = mark_data['f170']
         all_p += p
