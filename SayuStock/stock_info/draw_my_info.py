@@ -22,7 +22,8 @@ DIFF_MAP = {
 
 
 async def draw_my_stock_img(ev: Event):
-    uid = await SsBind.get_uid_list_by_game(ev.user_id, ev.bot_id)
+    user_id = ev.at if ev.at else ev.user_id
+    uid = await SsBind.get_uid_list_by_game(user_id, ev.bot_id)
     if not uid:
         return '您还未添加自选呢~请输入 添加自选 查看帮助!'
 
@@ -172,4 +173,5 @@ async def draw_my_stock_img(ev: Event):
     img.paste(footer, (25, img.size[1] - 55), footer)
 
     res = await convert_img(img)
+    return res
     return res
