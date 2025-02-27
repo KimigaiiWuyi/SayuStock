@@ -80,7 +80,7 @@ async def delete_uid(bot: Bot, ev: Event):
         add_dict[f'{code_id[1]}({code_id[0]})'] = code_id[0]
 
     resp = await bot.receive_resp(
-        f'是否确认将下列股票删除自选?\n{'\n'.join(add_dict.keys())}\n请输入是或否。',
+        f"是否确认将下列股票删除自选?\n{'\n'.join(add_dict.keys())}\n请输入是或否。",
     )
     if resp is not None:
         if resp.text == '否':
