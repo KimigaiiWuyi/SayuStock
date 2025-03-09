@@ -63,7 +63,9 @@ async def send_subscribe_info():
                     dt_local = datetime.fromtimestamp(
                         new['created_at'] / 1000
                     ).strftime("%Y-%m-%d %H:%M:%S")
-                    await subscribe.send(f"[{dt_local}]\n{new['text']}")
+                    await subscribe.send(
+                        f"【{dt_local}】雪球7x24消息\n{new['text']}"
+                    )
                     await asyncio.sleep(2 + random.random() * 3)
 
             # 更新max_id
@@ -81,7 +83,7 @@ async def send_subscribe_info():
                 'user_type',
             ]:
                 if i not in opt:
-                    upd[i] = subscribe.__getattribute__(i)
+                    opt[i] = subscribe.__getattribute__(i)
 
             upd['extra_message'] = str(news[0])
             await Subscribe.update_data_by_data(
