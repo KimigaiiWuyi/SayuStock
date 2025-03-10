@@ -1,4 +1,5 @@
 import json
+import asyncio
 from pathlib import Path
 from datetime import datetime, timedelta
 from typing import Dict, List, Union, Optional
@@ -115,6 +116,23 @@ async def req(url: str, params: List[tuple]):
             return resp
 
 
+async def _get_data(
+    resp: Dict,
+    url: str,
+    params: List[tuple],
+    stop_event: asyncio.Event,
+):
+    if stop_event.is_set():
+        return None
+    resp2 = await req(url, params)
+    if resp2['data']:
+        resp['data']['diff'].extend(resp2['data']['diff'])
+        if len(resp2['data']['diff']) < 100:
+            stop_event.set()
+    else:
+        stop_event.set()
+
+
 async def get_data(
     market: str = '沪深A',
     sector: Optional[str] = None,
@@ -141,6 +159,7 @@ async def get_data(
         url = 'https://push2.eastmoney.com/api/qt/stock/get'
         params.append(('secid', SP_STOCK[market]))
     elif sector == STOCK_SECTOR:
+        # 个股
         fields = ",".join(SINGLE_STOCK_FIELDS)
         url = 'https://push2.eastmoney.com/api/qt/stock/get'
         logger.info(f'[SayuStock] get_single_fig_data code: {market}')
@@ -152,10 +171,12 @@ async def get_data(
         file = get_file(secid, 'json', sector)
         params.append(('secid', secid))
     else:
+        # 大盘云图
         url = 'http://push2.eastmoney.com/api/qt/clist/get'
         if market in market_dict:
             fs = market_dict[market]
         else:
+            # 概念云图
             if not GK_DATA:
                 await load_bk_data()
 
@@ -188,17 +209,24 @@ async def get_data(
     logger.info("[SayuStock] 开始请求数据...")
     resp = await req(url, params)
 
-    if is_loop and resp['data'] and len(resp['data']['diff']) >= 200:
-        for pn in range(2, 1000):
-            params.remove(('pn', str(pn - 1)))
-            params.append(('pn', str(pn)))
-            resp2 = await req(url, params)
-            if resp2['data']:
-                resp['data']['diff'].extend(resp2['data']['diff'])
-            else:
-                break
-            if len(resp2['data']['diff']) < 200:
-                break
+    if is_loop and resp['data'] and len(resp['data']['diff']) >= 100:
+        stop_event = asyncio.Event()
+        pn = 2
+        TASK = []
+        params.remove(('pn', '1'))
+        params.remove(('pz', '200'))
+        params.append(('pz', str(len(resp['data']['diff']))))
+
+        while not stop_event.is_set():
+            for _ in range(10):
+                _params = params.copy()
+                _params.append(('pn', str(pn)))
+                TASK.append(_get_data(resp, url, _params, stop_event))
+                pn += 1
+            await asyncio.gather(*TASK)
+            TASK.clear()
+
+        await asyncio.gather(*TASK)
 
     logger.info("[SayuStock] 数据获取完成...")
 
@@ -671,4 +699,5 @@ async def render_image(
         await page.wait_for_selector(".plot-container")
         png_bytes = await page.screenshot(type='png')
         await browser.close()
+        return await convert_img(png_bytes)
         return await convert_img(png_bytes)
