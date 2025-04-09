@@ -559,10 +559,12 @@ async def to_fig(
         color="Diff",  # 根据数值上色
         color_continuous_scale=[
             [0, 'rgba(0, 255, 0, 1)'],  # 绿色，透明度1
-            [0.49, 'rgba(0, 255, 0, 0.05)'],
-            [0.51, 'rgba(255, 0, 0, 0.05)'],
+            [0.5, 'rgba(61, 61, 59, 1)'],
+            # [0.4, 'rgba(0, 255, 0, 1)'],
+            # [0.6, 'rgba(255, 0, 0, 1)'],
             [1, 'rgba(255, 0, 0, 1)'],  # 红色，透明度1
         ],  # 渐变颜色
+        color_continuous_midpoint=0,
         range_color=[-10, 10],  # 设置数值范围
         custom_data=["CustomInfo"],
         branchvalues="total",
@@ -571,15 +573,8 @@ async def to_fig(
     # 控制显示内容
     fig.update_traces(
         marker=dict(
-            colorscale=[
-                [0, 'rgba(10, 204, 49, 1)'],  # 绿色，透明度1
-                [0.49, 'rgba(10, 204, 49, 0.05)'],
-                [0.51, 'rgba(238, 55, 58, 0.05)'],
-                [1, 'rgba(238, 55, 58, 1)'],  # 红色，透明度1
-            ],
             cmin=-10,  # 设置最小值
             cmax=10,  # 设置最大值
-            cornerradius=5,
         ),
         marker_pad=dict(
             l=5,
@@ -699,5 +694,4 @@ async def render_image(
         await page.wait_for_selector(".plot-container")
         png_bytes = await page.screenshot(type='png')
         await browser.close()
-        return await convert_img(png_bytes)
         return await convert_img(png_bytes)

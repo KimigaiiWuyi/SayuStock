@@ -34,7 +34,13 @@ async def bind_uid(bot: Bot, ev: Event):
 
     u = uid.split(' ')
     add_dict = {}
+    if not u:
+        return await bot.send(HINT1)
+
     for _u in u:
+        _u = _u.strip()
+        if not _u:
+            continue
         code_id = await get_code_id(_u)
         if not code_id:
             return await bot.send(f'❎[SayuStock] 股票[{_u}]不存在!')
