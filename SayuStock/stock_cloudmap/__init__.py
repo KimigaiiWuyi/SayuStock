@@ -44,5 +44,15 @@ async def send_gn_img(bot: Bot, ev: Event):
 @sv_stock_cloudmap.on_command(("个股"))
 async def send_stock_img(bot: Bot, ev: Event):
     logger.info("开始执行[个股数据]")
-    im = await render_image(ev.text.strip(), 'single-stock')
+    content = ev.text.strip()
+    if '日k' in content or 'k线' in content:
+        im = await render_image(
+            content.lower().replace('日k', '').replace('k线', ''),
+            'single-stock-kline',
+        )
+    else:
+        im = await render_image(
+            content.replace('分时', ''),
+            'single-stock',
+        )
     await bot.send(im)

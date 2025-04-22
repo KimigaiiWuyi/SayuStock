@@ -170,6 +170,28 @@ async def get_data(
         secid = get_full_security_code(secid[0])
         file = get_file(secid, 'json', sector)
         params.append(('secid', secid))
+    elif sector == 'single-stock-kline':
+        url = 'https://push2his.eastmoney.com/api/qt/stock/kline/get'
+        secid = await get_code_id(market)
+        if secid is None:
+            return ErroText['notStock']
+        logger.info(f'[SayuStock] get_single_fig_data secid: {secid}')
+        secid = get_full_security_code(secid[0])
+        file = get_file(secid, 'json', sector)
+        now = datetime.now()
+        params = [
+            ('fields1', 'f1,f2,f3,f4,f5,f6,f7,f8,f9,f10,f11,f12,f13'),
+            ('fields2', 'f51,f52,f53,f54,f55,f56,f57,f58,f59,f60,f61'),
+            ('beg', (now - timedelta(days=230)).strftime("%Y%m%d")),
+            ('end', now.strftime("%Y%m%d")),
+            ('rtntype', '6'),
+            ('klt', '101'),
+            ('fqt', '1'),
+            (
+                'secid',
+                secid,
+            ),
+        ]
     else:
         # 大盘云图
         url = 'http://push2.eastmoney.com/api/qt/clist/get'
@@ -194,9 +216,10 @@ async def get_data(
         params.append(('fs', fs))
         is_loop = True
 
-    params.append(('fields', fields))
-    # 检查当前目录下是否有符合条件的文件
+    if sector != 'single-stock-kline':
+        params.append(('fields', fields))
 
+    # 检查当前目录下是否有符合条件的文件
     if file.exists():
         # 检查文件的修改时间是否在一分钟以内
         file_mod_time = datetime.fromtimestamp(file.stat().st_mtime)
@@ -262,6 +285,77 @@ async def get_data(
 def int_to_percentage(value: int) -> str:
     sign = '+' if value >= 0 else ''
     return f"{sign}{value:.2f}%"
+
+
+async def to_single_fig_kline(
+    raw_data: Dict,
+    sp: Optional[str] = None,
+):
+    headers = [
+        '日期',
+        '开盘',
+        '收盘',
+        '最高',
+        '最低',
+        '成交量',
+        '成交额',
+        '振幅',
+        '涨跌幅',
+        '涨跌额',
+        '换手率',
+    ]
+
+    kline_dict = {header: [] for header in headers}
+
+    # 填充字典
+    for line in raw_data['data']['klines']:
+        values = line.split(',')
+        for header, value in zip(headers, values):
+            kline_dict[header].append(value)
+
+    df = pd.DataFrame(kline_dict)
+
+    fig = go.Figure(
+        data=[
+            go.Candlestick(
+                x=df['日期'],
+                open=df['开盘'],
+                high=df['最高'],
+                low=df['最低'],
+                close=df['收盘'],
+                increasing_line_color='red',
+                decreasing_line_color='green',
+            )
+        ]
+    )
+
+    fig.update_layout(xaxis_rangeslider_visible=False)
+
+    fig.update_layout(
+        title=dict(
+            text=raw_data['data']['name'],
+            font=dict(size=60),
+            x=0.5,
+            xanchor='center',
+        ),
+        xaxis=dict(
+            title_font=dict(size=36),  # X轴标题字体大小
+            tickfont=dict(size=30),  # X轴刻度标签字体大小
+        ),
+        yaxis=dict(
+            title_font=dict(size=36),  # Y轴标题字体大小
+            tickfont=dict(size=30),  # Y轴刻度标签字体大小
+        ),
+    )
+
+    fig.update_layout(
+        paper_bgcolor="black",
+        plot_bgcolor="black",
+        font=dict(color="white"),
+        coloraxis_showscale=False,
+    )
+    # fig.update_layout(width=10000)
+    return fig
 
 
 # 获取个股图形
@@ -657,6 +751,8 @@ async def render_html(
 
     if sector == STOCK_SECTOR:
         fig = await to_single_fig(raw_data)
+    elif sector == 'single-stock-kline':
+        fig = await to_single_fig_kline(raw_data)
     else:
         fig = await to_fig(
             raw_data,
@@ -682,11 +778,20 @@ async def render_image(
 
     async with async_playwright() as p:
         browser = await p.chromium.launch(headless=True)
-        context = await browser.new_context(
-            viewport={
+        if sector == 'single-stock-kline':
+            viewport = {
+                "width": 6000,
+                "height": 3000,
+            }
+            scale = 1
+        else:
+            viewport = {
                 "width": view_port,
                 "height": view_port,
-            },
+            }
+
+        context = await browser.new_context(
+            viewport=viewport,  # type: ignore
             device_scale_factor=scale,
         )
         page = await context.new_page()
