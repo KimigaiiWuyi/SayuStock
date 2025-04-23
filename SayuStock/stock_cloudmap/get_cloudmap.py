@@ -347,13 +347,14 @@ async def to_single_fig_kline(
             tickfont=dict(size=30),  # Y轴刻度标签字体大小
         ),
     )
-
+    '''
     fig.update_layout(
         paper_bgcolor="black",
         plot_bgcolor="black",
         font=dict(color="white"),
         coloraxis_showscale=False,
     )
+    '''
     # fig.update_layout(width=10000)
     return fig
 
