@@ -783,16 +783,17 @@ async def render_image(
                 "width": 6000,
                 "height": 3000,
             }
-            scale = 1
+            _scale = 1
         else:
             viewport = {
                 "width": view_port,
                 "height": view_port,
             }
+            _scale = scale
 
         context = await browser.new_context(
             viewport=viewport,  # type: ignore
-            device_scale_factor=scale,
+            device_scale_factor=_scale,
         )
         page = await context.new_page()
         await page.goto(html_path.absolute().as_uri())
