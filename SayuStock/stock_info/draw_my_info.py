@@ -120,8 +120,10 @@ async def draw_my_stock_img(ev: Event):
 
         all_p += p
 
+        now_price = mark_data['f43']
+
         b_title = f'{mark_data["f58"]} ({u})'
-        s_title = f'换: {hs}% 额: {e_money}'
+        s_title = f'换: {hs}% 额: {e_money} 价: {now_price}'
         if p >= 0:
             bar = Image.open(TEXT_PATH / 'myup.png')
             p_color = (213, 102, 102)
