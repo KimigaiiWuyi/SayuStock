@@ -282,7 +282,9 @@ async def get_data(
     return resp
 
 
-def int_to_percentage(value: int) -> str:
+def int_to_percentage(value: Union[int, str]) -> str:
+    if isinstance(value, str):
+        return '-%'
     sign = '+' if value >= 0 else ''
     return f"{sign}{value:.2f}%"
 
