@@ -170,7 +170,7 @@ async def get_data(
         secid = get_full_security_code(secid[0])
         file = get_file(secid, 'json', sector)
         params.append(('secid', secid))
-    elif sector == 'single-stock-kline':
+    elif sector and sector.startswith('single-stock-kline'):
         url = 'https://push2his.eastmoney.com/api/qt/stock/kline/get'
         secid = await get_code_id(market)
         if secid is None:
@@ -179,13 +179,26 @@ async def get_data(
         secid = get_full_security_code(secid[0])
         file = get_file(secid, 'json', sector)
         now = datetime.now()
+        kline_code = sector.split('-')[-1]
+        if kline_code == '101':
+            out_day = 230
+        elif kline_code == '102':
+            out_day = 365
+        elif kline_code == '103':
+            out_day = 520
+        elif kline_code == '104':
+            out_day = 580
+        elif kline_code == '105':
+            out_day = 660
+        else:
+            out_day = 1000
         params = [
             ('fields1', 'f1,f2,f3,f4,f5,f6,f7,f8,f9,f10,f11,f12,f13'),
             ('fields2', 'f51,f52,f53,f54,f55,f56,f57,f58,f59,f60,f61'),
-            ('beg', (now - timedelta(days=230)).strftime("%Y%m%d")),
+            ('beg', (now - timedelta(days=out_day)).strftime("%Y%m%d")),
             ('end', now.strftime("%Y%m%d")),
             ('rtntype', '6'),
-            ('klt', '101'),
+            ('klt', kline_code),
             ('fqt', '1'),
             (
                 'secid',
@@ -216,7 +229,9 @@ async def get_data(
         params.append(('fs', fs))
         is_loop = True
 
-    if sector != 'single-stock-kline':
+    if (
+        sector and not sector.startswith('single-stock-kline')
+    ) or sector is None:
         params.append(('fields', fields))
 
     # 检查当前目录下是否有符合条件的文件
@@ -754,7 +769,7 @@ async def render_html(
 
     if sector == STOCK_SECTOR:
         fig = await to_single_fig(raw_data)
-    elif sector == 'single-stock-kline':
+    elif sector and sector.startswith('single-stock-kline'):
         fig = await to_single_fig_kline(raw_data)
     else:
         fig = await to_fig(
@@ -781,7 +796,7 @@ async def render_image(
 
     async with async_playwright() as p:
         browser = await p.chromium.launch(headless=True)
-        if sector == 'single-stock-kline':
+        if sector and sector.startswith('single-stock-kline'):
             viewport = {
                 "width": 6000,
                 "height": 3000,

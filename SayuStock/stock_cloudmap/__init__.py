@@ -9,6 +9,15 @@ from ..utils.resource_path import DATA_PATH
 
 sv_stock_cloudmap = SV("大盘云图")
 
+MS_MAP = {
+    '日k': '101',
+    '周k': '102',
+    '月k': '103',
+    '季k': '104',
+    '半年k': '105',
+    '年k': '106',
+}
+
 
 # 每日零点二十删除全部缓存数据
 @scheduler.scheduled_job('cron', hour=0, minute=20)
@@ -44,12 +53,16 @@ async def send_gn_img(bot: Bot, ev: Event):
 @sv_stock_cloudmap.on_command(("个股"))
 async def send_stock_img(bot: Bot, ev: Event):
     logger.info("开始执行[个股数据]")
-    content = ev.text.strip()
-    if '日k' in content or 'k线' in content:
-        im = await render_image(
-            content.lower().replace('日k', '').replace('k线', ''),
-            'single-stock-kline',
-        )
+    content = ev.text.strip().lower()
+    for g in MS_MAP:
+        if content.startswith(g):
+            content = content.replace(g, '')
+            kline_code = MS_MAP[g]
+            im = await render_image(
+                content,
+                f'single-stock-kline-{kline_code}',
+            )
+            break
     else:
         im = await render_image(
             content.replace('分时', ''),
