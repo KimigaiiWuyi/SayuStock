@@ -276,11 +276,28 @@ code_id_dict = {
 }
 
 
-def create_time_array():
-    AMStart = datetime.datetime.strptime('9:15', '%H:%M')
-    AMEnd = datetime.datetime.strptime('11:30', '%H:%M')
-    PMStart = datetime.datetime.strptime('13:01', '%H:%M')
-    PMEnd = datetime.datetime.strptime('16:00', '%H:%M')
+def create_time_array(start_time: str = '09:15'):
+    if start_time == '09:15':
+        AMStart = datetime.datetime.strptime('9:15', '%H:%M')
+        AMEnd = datetime.datetime.strptime('11:30', '%H:%M')
+        PMStart = datetime.datetime.strptime('13:01', '%H:%M')
+        PMEnd = datetime.datetime.strptime('16:00', '%H:%M')
+    elif start_time == '21:30':
+        AMStart = datetime.datetime.strptime('21:30', '%H:%M')
+        AMEnd = datetime.datetime.strptime('23:30', '%H:%M')
+        PMStart = datetime.datetime.strptime('23:31', '%H:%M')
+        PMEnd = datetime.datetime.strptime('04:00', '%H:%M')
+    elif start_time == '22:30':
+        AMStart = datetime.datetime.strptime('22:30', '%H:%M')
+        AMEnd = datetime.datetime.strptime('23:30', '%H:%M')
+        PMStart = datetime.datetime.strptime('23:31', '%H:%M')
+        PMEnd = datetime.datetime.strptime('05:00', '%H:%M')
+    else:
+        AMStart = datetime.datetime.strptime('9:15', '%H:%M')
+        AMEnd = datetime.datetime.strptime('11:30', '%H:%M')
+        PMStart = datetime.datetime.strptime('13:01', '%H:%M')
+        PMEnd = datetime.datetime.strptime('16:00', '%H:%M')
+
     delta = datetime.timedelta(minutes=1)
     time_array = []
 
@@ -291,6 +308,3 @@ def create_time_array():
         time_array.append(PMStart.strftime('%H:%M'))
         PMStart += delta
     return time_array
-
-
-TIME_ARRAY: list[str] = create_time_array()

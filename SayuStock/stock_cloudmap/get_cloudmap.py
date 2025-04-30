@@ -20,7 +20,6 @@ from ..stock_config.stock_config import STOCK_CONFIG
 from ..utils.load_data import mdata, get_full_security_code
 from ..utils.constant import (
     SP_STOCK,
-    TIME_ARRAY,
     STOCK_SECTOR,
     SINGLE_LINE_FIELDS1,
     SINGLE_LINE_FIELDS2,
@@ -28,6 +27,7 @@ from ..utils.constant import (
     bk_dict,
     market_dict,
     request_header,
+    create_time_array,
     trade_detail_dict,
 )
 
@@ -408,7 +408,8 @@ async def to_single_fig(
     # 遍历TIME_RANGE如果存在没有数据的时间则插入空数据
     full_data = []
     existing_times = set(item['datetime'] for item in price_histroy)
-    for time in TIME_ARRAY:
+    ARRAY = create_time_array(price_histroy[0]['datetime'])
+    for time in ARRAY:
         if time in existing_times:
             full_data.append(
                 next(
@@ -438,7 +439,7 @@ async def to_single_fig(
     )
 
     # 设置最大波动率
-    open_price = price_history_pd['price'].iloc[0]
+    open_price = raw['f60']
     max_price = price_history_pd['price'].max()
     min_price = price_history_pd['price'].min()
     max_fluctuation = max(
