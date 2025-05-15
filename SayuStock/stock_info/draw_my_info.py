@@ -41,18 +41,39 @@ async def draw_my_stock_img(ev: Event):
 
     img = Image.new(
         'RGBA',
-        (900, 541 + len(uid) * 110 + 60),
+        (
+            900 if len(uid) < 18 else 1800,
+            (
+                541 + len(uid) * 110 + 60
+                if len(uid) < 18
+                else 541 + (((len(uid) - 1) // 2) + 1) * 110 + 60
+            ),
+        ),
         (7, 9, 27),
     )
-    zyzs = [
-        '上证指数',
-        '深证成指',
-        '中证A500',
-        '中证2000',
-    ]
+    zyzs = (
+        [
+            '上证指数',
+            '深证成指',
+            '中证A500',
+            '中证2000',
+        ]
+        if len(uid) < 18
+        else [
+            '上证指数',
+            '深证成指',
+            '创业板指',
+            '上证50',
+            '沪深300',
+            '中证A500',
+            '中证2000',
+            '国债指数',
+        ]
+    )
 
     # 主要指数
     n = 0
+    x0 = 50 if len(uid) < 18 else 100
     for zs_name in zyzs:
         for zs_diff in data_zs['data']['diff']:
             if zs_name != zs_diff['f14']:
@@ -94,7 +115,7 @@ async def draw_my_stock_img(ev: Event):
             )
             img.paste(
                 zs_img,
-                (50 + 200 * (n % 4), 308 + 140 * (n // 4)),
+                (x0 + 200 * n, 308 + 140 * 0),
                 zs_img,
             )
             n += 1
@@ -102,7 +123,7 @@ async def draw_my_stock_img(ev: Event):
     all_p = 0
     TASK = []
 
-    async def sg(img: Image.Image, index: int, u: str):
+    async def sg(img: Image.Image, index: int, u: str, alluid: int):
         nonlocal all_p
         data = await get_data(u, 'single-stock')
         if isinstance(data, str):
@@ -152,10 +173,17 @@ async def draw_my_stock_img(ev: Event):
             ss_font(28),
             'mm',
         )
-        img.paste(bar, (0, 541 + index * 110), bar)
+        if alluid >= 18 and index >= ((alluid - 1) // 2) + 1:
+            x = 900
+            y = 541 + (index - (((alluid - 1) // 2) + 1)) * 110
+        else:
+            x = 0
+            y = 541 + index * 110
+
+        img.paste(bar, (x, y), bar)
 
     for index, u in enumerate(uid):
-        TASK.append(sg(img, index, u))
+        TASK.append(sg(img, index, u, len(uid)))
     await asyncio.gather(*TASK)
 
     avg_p = all_p / len(uid)
@@ -166,14 +194,25 @@ async def draw_my_stock_img(ev: Event):
     else:
         title_num = 6
     title = Image.open(TEXT_PATH / f'title{title_num}.png')
-    img.paste(title, (25, -31), title)
+    img.paste(
+        title,
+        (25 + 450 if len(uid) >= 18 else 25, -31),
+        title,
+    )
 
     bar5 = Image.open(TEXT_PATH / 'bar5.png')
-    img.paste(bar5, (25, 443), bar5)
+    img.paste(
+        bar5,
+        (25 + 450 if len(uid) >= 18 else 25, 443),
+        bar5,
+    )
 
     footer = get_footer()
-    img.paste(footer, (25, img.size[1] - 55), footer)
+    img.paste(
+        footer,
+        (25 + 450 if len(uid) >= 18 else 25, img.size[1] - 55),
+        footer,
+    )
 
     res = await convert_img(img)
-    return res
     return res
