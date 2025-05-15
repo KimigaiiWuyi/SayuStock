@@ -180,7 +180,10 @@ async def get_data(
         file = get_file(secid, 'json', sector)
         now = datetime.now()
         kline_code = sector.split('-')[-1]
-        if kline_code == '101':
+        if kline_code == '100':
+            kline_code = 101
+            out_day = 50
+        elif kline_code == '101':
             out_day = 230
         elif kline_code == '102':
             out_day = 365
@@ -338,6 +341,7 @@ async def to_single_fig_kline(
     # 计算5日和10日移动平均线
     df['5日均线'] = df['收盘'].rolling(window=5).mean()
     df['10日均线'] = df['收盘'].rolling(window=10).mean()
+    df['换手率'] = df['换手率'].astype(float) / 100
 
     fig = go.Figure(
         data=[
@@ -353,7 +357,7 @@ async def to_single_fig_kline(
             ),
             go.Line(
                 x=df['日期'],
-                y=df['换手率'].astype(float),
+                y=df['换手率'],
                 mode='lines',
                 line=dict(color='purple', width=4),
                 yaxis='y2',
@@ -380,6 +384,26 @@ async def to_single_fig_kline(
 
     fig.update_layout(xaxis_rangeslider_visible=False)
 
+    df['is_max'] = (
+        df['换手率'] == df['换手率'].rolling(window=3, center=True).max()
+    )
+    max_turnovers = df[df['is_max'] & (df['换手率'] > 0)]
+
+    # 添加所有最高点标记
+    for _, row in max_turnovers.iterrows():
+        fig.add_trace(
+            go.Scatter(
+                x=[row['日期']],
+                y=[row['换手率']],
+                mode='markers+text',
+                text=[f'{row["换手率"] * 100:.2f}%'],
+                textposition='top center',
+                marker=dict(size=10, color='red'),
+                showlegend=False,
+                yaxis='y2',
+            )
+        )
+
     fig.update_layout(
         title=dict(
             text=raw_data['data']['name'],
@@ -388,29 +412,30 @@ async def to_single_fig_kline(
             xanchor='center',
         ),
         xaxis=dict(
-            title_font=dict(size=36),  # X轴标题字体大小
-            tickfont=dict(size=36),  # X轴刻度标签字体大小
+            title_font=dict(size=40),  # X轴标题字体大小
+            tickfont=dict(size=40),  # X轴刻度标签字体大小
         ),
         yaxis=dict(
-            title_font=dict(size=36),  # Y轴标题字体大小
-            tickfont=dict(size=36),  # Y轴刻度标签字体大小
+            title_font=dict(size=40),  # Y轴标题字体大小
+            tickfont=dict(size=40),  # Y轴刻度标签字体大小
             title='价格',
         ),
         yaxis2=dict(
-            title_font=dict(size=36),  # Y轴标题字体大小
-            tickfont=dict(size=36),  # Y轴刻度标签字体大小
+            title_font=dict(size=40),  # Y轴标题字体大小
+            tickfont=dict(size=40),  # Y轴刻度标签字体大小
             title='换手率',
             overlaying='y',
             side='right',
+            tickformat=".0%",
         ),
         legend=dict(
             title=dict(
                 font=dict(
-                    size=36,
+                    size=40,
                 )
             )
         ),  # 设置图例标题的大小
-        font=dict(size=36),  # 设置整个图表的字体大小
+        font=dict(size=40),  # 设置整个图表的字体大小
     )
     '''
     fig.update_layout(

@@ -10,6 +10,7 @@ from ..utils.resource_path import DATA_PATH
 sv_stock_cloudmap = SV("大盘云图")
 
 MS_MAP = {
+    'k线': '100',
     '日k': '101',
     '周k': '102',
     '月k': '103',
