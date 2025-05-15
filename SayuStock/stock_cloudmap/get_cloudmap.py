@@ -247,6 +247,7 @@ async def get_data(
     logger.info("[SayuStock] 开始请求数据...")
     resp = await req(url, params)
 
+    # 这里是在反复请求处理云图数据
     if is_loop and resp['data'] and len(resp['data']['diff']) >= 100:
         stop_event = asyncio.Event()
         pn = 2
@@ -331,6 +332,12 @@ async def to_single_fig_kline(
             kline_dict[header].append(value)
 
     df = pd.DataFrame(kline_dict)
+    # 将收盘价转换为float类型
+    df['收盘'] = df['收盘'].astype(float)
+
+    # 计算5日和10日移动平均线
+    df['5日均线'] = df['收盘'].rolling(window=5).mean()
+    df['10日均线'] = df['收盘'].rolling(window=10).mean()
 
     fig = go.Figure(
         data=[
@@ -342,7 +349,32 @@ async def to_single_fig_kline(
                 close=df['收盘'],
                 increasing_line_color='red',
                 decreasing_line_color='green',
-            )
+                name='K线',
+            ),
+            go.Line(
+                x=df['日期'],
+                y=df['换手率'].astype(float),
+                mode='lines',
+                line=dict(color='purple', width=4),
+                yaxis='y2',
+                name='换手率',
+            ),
+            # 添加5日均线
+            go.Line(
+                x=df['日期'],
+                y=df['5日均线'],
+                mode='lines',
+                line=dict(color='orange', width=3),
+                name='5日均线',
+            ),
+            # 添加10日均线
+            go.Line(
+                x=df['日期'],
+                y=df['10日均线'],
+                mode='lines',
+                line=dict(color='blue', width=3),
+                name='10日均线',
+            ),
         ]
     )
 
@@ -357,12 +389,28 @@ async def to_single_fig_kline(
         ),
         xaxis=dict(
             title_font=dict(size=36),  # X轴标题字体大小
-            tickfont=dict(size=30),  # X轴刻度标签字体大小
+            tickfont=dict(size=36),  # X轴刻度标签字体大小
         ),
         yaxis=dict(
             title_font=dict(size=36),  # Y轴标题字体大小
-            tickfont=dict(size=30),  # Y轴刻度标签字体大小
+            tickfont=dict(size=36),  # Y轴刻度标签字体大小
+            title='价格',
         ),
+        yaxis2=dict(
+            title_font=dict(size=36),  # Y轴标题字体大小
+            tickfont=dict(size=36),  # Y轴刻度标签字体大小
+            title='换手率',
+            overlaying='y',
+            side='right',
+        ),
+        legend=dict(
+            title=dict(
+                font=dict(
+                    size=36,
+                )
+            )
+        ),  # 设置图例标题的大小
+        font=dict(size=36),  # 设置整个图表的字体大小
     )
     '''
     fig.update_layout(

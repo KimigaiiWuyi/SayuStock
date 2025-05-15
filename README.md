@@ -33,7 +33,7 @@
 <a><img src="https://s2.loli.net/2025/01/22/GCip3KMlLjASnsV.jpg"></a>
 </p></details>
 
-<details><summary>大盘云图</summary><p>
+<details><summary>大盘云图 (大盘云图 港股/美股)</summary><p>
 <a><img src="https://s2.loli.net/2024/11/26/qvMG1ers7pITSUZ.jpg"></a>
 </p></details>
 
@@ -41,14 +41,25 @@
 <a><img src="https://s2.loli.net/2025/01/22/vsUthKeZk3TEfxR.png"></a>
 </p></details>
 
+<details><summary>概念云图 白酒</summary><p>
+<a><img src="https://s2.loli.net/2025/01/22/vsUthKeZk3TEfxR.png"></a>
+</p></details>
+
 <details><summary>个股 601919</summary><p>
 <a><img src="https://s2.loli.net/2025/01/22/RBhEXUVaWmwPe5z.png"></a>
 </p></details>
 
-<details><summary>我的自选</summary><p>
+<details><summary>我的自选 (添加自选)</summary><p>
 <a><img src="https://s2.loli.net/2025/02/23/k1AOeTfxtPZHluo.jpg"></a>
 </p></details>
 
+<details><summary>个股 日k 东方财富（周k、月k、年k）</summary><p>
+<a><img src="https://s2.loli.net/2025/05/16/Mlz5qEyKBe16SdR.png"></a>
+</p></details>
+
+<details><summary>（取消）订阅雪球新闻    (仅限管理员)</summary><p>
+<a><img src="https://s2.loli.net/2025/05/16/HcW6g9QCU5A43xP.png"></a>
+</p></details>
 ## 丨感谢&参考
 
 - [qstock](https://github.com/tkfy920/qstock) - 参考部分代码
