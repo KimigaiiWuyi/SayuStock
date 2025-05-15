@@ -23,7 +23,9 @@ HINT2 = '''[SayuStock]
 '''
 
 
-@sv_user_info.on_command(('添加自选'), block=True)
+@sv_user_info.on_command(
+    ('添加自选', '添加个股', '添加股票', '添加持仓'), block=True
+)
 async def bind_uid(bot: Bot, ev: Event):
     qid = ev.user_id
     uid = ev.text.strip()
