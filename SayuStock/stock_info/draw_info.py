@@ -86,13 +86,13 @@ async def draw_info_img(is_save: bool = False):
     data_aud: Dict = data_au['data']
     data_tlmd: Dict = data_tlm['data']
 
-    data_aud['f14'] = data_aud['f57']
+    data_aud['f14'] = data_aud['f58']
     data_aud['f3'] = data_aud['f170']
     data_aud['f6'] = data_aud['f48']
     data_aud['f2'] = data_aud['f43']
     data_aud['f100'] = '-'
 
-    data_tlmd['f14'] = data_tlmd['f57']
+    data_tlmd['f14'] = data_tlmd['f58']
     data_tlmd['f3'] = data_tlmd['f170']
     data_tlmd['f6'] = data_tlmd['f48']
     data_tlmd['f2'] = data_tlmd['f43']
@@ -146,8 +146,8 @@ async def draw_info_img(is_save: bool = False):
         '北证50',
         # '上证50',
         # '国债指数',
-        'AU9999',
-        'TLM',
+        '黄金9999',
+        '三十债主连',
     ]
 
     # 主要指数
