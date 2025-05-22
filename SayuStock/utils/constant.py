@@ -118,6 +118,8 @@ SINGLE_STOCK_FIELDS = [
     'f207',
     'f206',
     # 其他指标
+]
+'''
     'f161',
     'f49',
     'f171',
@@ -149,7 +151,7 @@ SINGLE_STOCK_FIELDS = [
     'f257',
     'f285',
     'f286',
-]
+'''
 
 market_dict = {
     '主要指数': 'b:MK0010',

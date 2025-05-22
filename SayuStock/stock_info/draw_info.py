@@ -1,6 +1,6 @@
-from typing import List
 from pathlib import Path
 from datetime import datetime
+from typing import Dict, List
 
 from PIL import Image, ImageOps, ImageDraw
 from gsuid_core.utils.image.convert import convert_img
@@ -58,6 +58,14 @@ async def draw_info_img(is_save: bool = False):
     data_zs = await get_data('主要指数')
     data_hy = await get_data('行业板块')
     data_gn = await get_data('概念板块')
+    data_au = await get_data(
+        '118.AU9999',
+        'single-stock',
+    )
+    data_tlm = await get_data(
+        '220.TLM',
+        'single-stock',
+    )
     raw_data = await get_data()
 
     # data_a500 = await get_data('A500')
@@ -70,6 +78,28 @@ async def draw_info_img(is_save: bool = False):
         return data_gn
     if isinstance(raw_data, str):
         return raw_data
+    if isinstance(data_au, str):
+        return data_au
+    if isinstance(data_tlm, str):
+        return data_tlm
+
+    data_aud: Dict = data_au['data']
+    data_tlmd: Dict = data_tlm['data']
+
+    data_aud['f14'] = data_aud['f57']
+    data_aud['f3'] = data_aud['f170']
+    data_aud['f6'] = data_aud['f48']
+    data_aud['f2'] = data_aud['f43']
+    data_aud['f100'] = '-'
+
+    data_tlmd['f14'] = data_tlmd['f57']
+    data_tlmd['f3'] = data_tlmd['f170']
+    data_tlmd['f6'] = data_tlmd['f48']
+    data_tlmd['f2'] = data_tlmd['f43']
+    data_tlmd['f100'] = '-'
+
+    data_zs['data']['diff'].append(data_aud)
+    data_zs['data']['diff'].append(data_tlmd)
 
     diffs = {
         10: [],
@@ -105,17 +135,19 @@ async def draw_info_img(is_save: bool = False):
 
     zyzs = [
         '上证指数',
-        '深证成指',
+        '中证全指',
         '创业板指',
-        '中证A500',
+        '科创综指',
         '沪深300',
         '中证500',
         '中证1000',
         '中证2000',
+        '中证A500',
         '北证50',
-        '中证全指',
-        '上证50',
-        '国债指数',
+        # '上证50',
+        # '国债指数',
+        'AU9999',
+        'TLM',
     ]
 
     # 主要指数
