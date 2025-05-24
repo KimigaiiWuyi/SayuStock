@@ -54,6 +54,57 @@ def invert_colors(img: Image.Image):
     return inverted_img
 
 
+async def draw_block(zs_diff: Dict, _type: str = 'diff'):
+    if _type == 'single':
+        zs_diff['f14'] = zs_diff['f58']
+        zs_diff['f3'] = zs_diff['f170']
+        zs_diff['f6'] = zs_diff['f48']
+        zs_diff['f2'] = zs_diff['f43']
+        zs_diff['f100'] = '-'
+
+    diff = zs_diff['f3']
+    zs_img = Image.new('RGBA', (200, 140))
+    zs_draw = ImageDraw.Draw(zs_img)
+    if diff >= 0:
+        zsc = (140, 18, 22, 55)
+        zsc2 = (206, 34, 30)
+    else:
+        zsc = (59, 140, 18, 55)
+        zsc2 = (36, 206, 30)
+
+    zs_draw.rounded_rectangle((15, 13, 185, 127), 0, zsc)
+
+    if len(zs_diff["f14"]) >= 10:
+        t_font = ss_font(18)
+    else:
+        t_font = ss_font(24)
+
+    zs_draw.text(
+        (100, 99),
+        f'{zs_diff["f14"]}',
+        (255, 255, 255),
+        t_font,
+        'mm',
+    )
+
+    zs_draw.text(
+        (100, 38),
+        f'{zs_diff["f2"]}',
+        zsc2,
+        ss_font(30),
+        'mm',
+    )
+
+    zs_draw.text(
+        (100, 70),
+        f'{"+" if diff >= 0 else ""}{diff}%',
+        zsc2,
+        ss_font(30),
+        'mm',
+    )
+    return zs_img
+
+
 async def draw_info_img(is_save: bool = False):
     data_zs = await get_data('主要指数')
     data_hy = await get_data('行业板块')
@@ -162,41 +213,8 @@ async def draw_info_img(is_save: bool = False):
             if zs_diff['f14'] == '上证指数':
                 sz_diff = zs_diff['f3']
 
-            diff = zs_diff['f3']
-            zs_img = Image.new('RGBA', (200, 140))
-            zs_draw = ImageDraw.Draw(zs_img)
-            if diff >= 0:
-                zsc = (140, 18, 22, 55)
-                zsc2 = (206, 34, 30)
-            else:
-                zsc = (59, 140, 18, 55)
-                zsc2 = (36, 206, 30)
+            zs_img = await draw_block(zs_diff)
 
-            zs_draw.rounded_rectangle((15, 13, 185, 127), 0, zsc)
-
-            zs_draw.text(
-                (100, 99),
-                f'{zs_diff["f14"]}',
-                (255, 255, 255),
-                ss_font(24),
-                'mm',
-            )
-
-            zs_draw.text(
-                (100, 38),
-                f'{zs_diff["f2"]}',
-                zsc2,
-                ss_font(30),
-                'mm',
-            )
-
-            zs_draw.text(
-                (100, 70),
-                f'{"+" if diff >= 0 else ""}{diff}%',
-                zsc2,
-                ss_font(30),
-                'mm',
-            )
             img.paste(
                 zs_img,
                 (25 + 200 * (n % 4), 440 + 140 * (n // 4)),

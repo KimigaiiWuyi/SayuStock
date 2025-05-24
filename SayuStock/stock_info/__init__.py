@@ -5,6 +5,7 @@ from gsuid_core.aps import scheduler
 from gsuid_core.logger import logger
 
 from .draw_info import draw_info_img
+from .draw_future import draw_future_img
 from .draw_my_info import draw_my_stock_img
 
 sv_stock_info = SV('大盘概览')
@@ -22,6 +23,12 @@ async def send_stock_info(bot: Bot, ev: Event):
 async def send_my_stock(bot: Bot, ev: Event):
     logger.info('[SayuStock] 开始执行[我的自选]')
     await bot.send(await draw_my_stock_img(ev))
+
+
+@sv_my_stock.on_fullmatch(('全天候', '全天候板块'))
+async def send_future_stock(bot: Bot, ev: Event):
+    logger.info('[SayuStock] 开始执行[全天候板块]')
+    await bot.send(await draw_future_img())
 
 
 # 每日晚上十一点保存当天数据

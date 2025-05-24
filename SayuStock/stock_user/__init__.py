@@ -70,7 +70,15 @@ async def bind_uid(bot: Bot, ev: Event):
     )
 
 
-@sv_user_info.on_command(('删除自选'), block=True)
+@sv_user_info.on_command(
+    (
+        '删除自选',
+        '删除个股',
+        '删除股票',
+        '删除持仓',
+    ),
+    block=True,
+)
 async def delete_uid(bot: Bot, ev: Event):
     qid = ev.user_id
     uid = ev.text.strip()

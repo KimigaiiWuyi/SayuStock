@@ -1,1 +1,1 @@
-SayuStock_version = "0.2"
+SayuStock_version = "0.3"

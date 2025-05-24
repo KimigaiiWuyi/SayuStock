@@ -155,6 +155,7 @@ SINGLE_STOCK_FIELDS = [
 
 market_dict = {
     '主要指数': 'b:MK0010',
+    '外汇': 'm:119,m:120,m:133',
     'stock': 'm:0 t:6,m:0 t:80,m:1 t:2,m:1 t:23',
     '沪深A': 'm:0 t:6,m:0 t:80,m:1 t:2,m:1 t:23',
     '沪深300': 'b:BK0500+f:!50',
@@ -277,6 +278,61 @@ code_id_dict = {
     '俄罗斯指数': '100.RTS',
 }
 
+# 国际市场
+i_code = {
+    '上证指数': 'i:1.000001',
+    '恒生指数': 'i:100.HSI',
+    '日经225': 'i:100.N225',
+    '德国DAX30': 'i:100.GDAXI',
+    '纳斯达克': 'i:100.NDX',
+    '道琼斯': 'i:100.DJIA',
+    '标普500': 'i:100.SPX',
+    '欧洲斯托克50': 'i:100.SX5E',
+    '韩国KOSPI': 'i:100.KS11',
+    '英国富时100': 'i:100.FTSE',
+    '法国CAC40': 'i:100.FCHI',
+    '韩国KOSPI200': 'i:100.KOSPI200',
+}
+
+
+market_dict['国际市场'] = ','.join(i_code.values())
+
+# 大宗商品
+commodity = {
+    'COMEX黄金': '101.GC00Y',
+    'COMEX白银': '101.SI00Y',
+    'COMEX铜': '101.HG00Y',
+    'NYMEX原油': '102.CL00Y',
+    '综合铝03': '109.LALT',
+    '综合铜03': '109.LCPT',
+    '综合铅03': '109.LLDT',
+    '综合锌03': '109.LZNT',
+}
+
+# 债券市场
+bond = {
+    '三十债主连': '220.TLM',
+    '十债主连': '220.TM',
+    '五债主连': '220.TFM',
+    '二债主连': '220.TSM',
+    '美国30年期国债收益率': '171.US30Y',
+    '美国10年期国债收益率': '171.US10Y',
+    '美国5年期国债收益率': '171.US5Y',
+    '美国2年期国债收益率': '171.US2Y',
+}
+
+# b:MK0300 外汇
+whsc = {
+    '美元兑离岸人民币': '133.USDCNH',
+    '美元兑港币': '119.USDHKD',
+    '美元兑日元': '119.USDJPY',
+    '美元指数': '100.UDI',
+    # '欧元兑美元': '119.EURUSD',
+    # '英镑兑美元': '119.GBPUSD',
+    # '澳元兑美元': '119.AUDUSD',
+    # '美元兑泰铢': '119.USDTHB',
+}
+
 
 def create_time_array(start_time: str = '09:15'):
     if start_time == '09:15':
@@ -309,4 +365,5 @@ def create_time_array(start_time: str = '09:15'):
     while PMStart <= PMEnd:
         time_array.append(PMStart.strftime('%H:%M'))
         PMStart += delta
+    return time_array
     return time_array
