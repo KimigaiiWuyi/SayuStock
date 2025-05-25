@@ -62,7 +62,7 @@ async def draw_block(zs_diff: Dict, _type: str = 'diff'):
         zs_diff['f2'] = zs_diff['f43']
         zs_diff['f100'] = '-'
 
-    diff = zs_diff['f3']
+    diff = round(zs_diff['f3'], 2)
     zs_img = Image.new('RGBA', (200, 140))
     zs_draw = ImageDraw.Draw(zs_img)
     if diff >= 0:

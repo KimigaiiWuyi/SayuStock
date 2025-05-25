@@ -1,10 +1,11 @@
 import asyncio
 from pathlib import Path
-from typing import Dict, List
+from typing import Dict, List, Callable, Optional
 
 from PIL import Image
 from gsuid_core.utils.image.convert import convert_img
 
+from .get_jp_data import get_jpy
 from .draw_info import draw_block
 from ..utils.image import get_footer
 from ..stock_cloudmap.get_cloudmap import get_data
@@ -21,12 +22,25 @@ async def __get_data(result: Dict, stock: str):
     return result
 
 
-async def _get_data(_d: Dict):
+async def _get_data(_d: Dict, other_call: Optional[Callable] = None):
     TASK = []
     result = {}
+    if other_call:
+        TASK.append(other_call(result))
+
     for i in _d:
-        TASK.append(__get_data(result, _d[i]))
+        if _d[i]:
+            TASK.append(__get_data(result, _d[i]))
+
     await asyncio.gather(*TASK)
+    return result
+
+
+async def append_jpy(result: Dict):
+    data = await get_jpy()
+    if data is None:
+        return result
+    result.update(data)
     return result
 
 
@@ -37,7 +51,8 @@ async def draw_future_img():
         return data1
 
     data2 = await _get_data(commodity)
-    data3 = await _get_data(bond)
+    data3 = await _get_data(bond, append_jpy)
+    print(data3)
     data4 = await _get_data(whsc)
 
     img = Image.open(TEXT_PATH / 'bg1.jpg').convert('RGBA')
