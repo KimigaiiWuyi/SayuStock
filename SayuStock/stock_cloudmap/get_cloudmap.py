@@ -13,8 +13,10 @@ from gsuid_core.logger import logger
 from playwright.async_api import async_playwright
 from gsuid_core.utils.image.convert import convert_img
 
+from .utils import fill_kline
 from ..utils.utils import get_file
 from ..utils.request import get_code_id
+from .get_compare import to_compare_fig
 from ..utils.resource_path import GN_BK_PATH
 from ..stock_config.stock_config import STOCK_CONFIG
 from ..utils.load_data import mdata, get_full_security_code
@@ -154,6 +156,9 @@ async def get_data(
         ('pn', '1'),
     ]
 
+    if market == 'A500':
+        market = 'A500ETF'
+
     if market in SP_STOCK:
         fields = 'f58,f57,f107,f43,f59,f169,f170,f152'
         url = 'https://push2.eastmoney.com/api/qt/stock/get'
@@ -192,9 +197,12 @@ async def get_data(
         elif kline_code == '104':
             out_day = 580
         elif kline_code == '105':
-            out_day = 660
+            out_day = 1300
+        elif kline_code == '111':
+            kline_code = 101
+            out_day = 720
         else:
-            out_day = 1000
+            out_day = 1600
         params = [
             ('fields1', 'f1,f2,f3,f4,f5,f6,f7,f8,f9,f10,f11,f12,f13'),
             ('fields2', 'f51,f52,f53,f54,f55,f56,f57,f58,f59,f60,f61'),
@@ -312,36 +320,7 @@ async def to_single_fig_kline(
     raw_data: Dict,
     sp: Optional[str] = None,
 ):
-    headers = [
-        '日期',
-        '开盘',
-        '收盘',
-        '最高',
-        '最低',
-        '成交量',
-        '成交额',
-        '振幅',
-        '涨跌幅',
-        '涨跌额',
-        '换手率',
-    ]
-
-    kline_dict = {header: [] for header in headers}
-
-    # 填充字典
-    for line in raw_data['data']['klines']:
-        values = line.split(',')
-        for header, value in zip(headers, values):
-            kline_dict[header].append(value)
-
-    df = pd.DataFrame(kline_dict)
-    # 将收盘价转换为float类型
-    df['收盘'] = df['收盘'].astype(float)
-
-    # 计算5日和10日移动平均线
-    df['5日均线'] = df['收盘'].rolling(window=5).mean()
-    df['10日均线'] = df['收盘'].rolling(window=10).mean()
-    df['换手率'] = df['换手率'].astype(float) / 100
+    df = fill_kline(raw_data)
 
     fig = go.Figure(
         data=[
@@ -355,7 +334,7 @@ async def to_single_fig_kline(
                 decreasing_line_color='green',
                 name='K线',
             ),
-            go.Line(
+            go.Scatter(
                 x=df['日期'],
                 y=df['换手率'],
                 mode='lines',
@@ -364,7 +343,7 @@ async def to_single_fig_kline(
                 name='换手率',
             ),
             # 添加5日均线
-            go.Line(
+            go.Scatter(
                 x=df['日期'],
                 y=df['5日均线'],
                 mode='lines',
@@ -372,7 +351,7 @@ async def to_single_fig_kline(
                 name='5日均线',
             ),
             # 添加10日均线
-            go.Line(
+            go.Scatter(
                 x=df['日期'],
                 y=df['10日均线'],
                 mode='lines',
@@ -437,14 +416,8 @@ async def to_single_fig_kline(
         ),  # 设置图例标题的大小
         font=dict(size=40),  # 设置整个图表的字体大小
     )
-    '''
-    fig.update_layout(
-        paper_bgcolor="black",
-        plot_bgcolor="black",
-        font=dict(color="white"),
-        coloraxis_showscale=False,
-    )
-    '''
+
+    fig.update_xaxes(tickformat='%Y.%m')
     # fig.update_layout(width=10000)
     return fig
 
@@ -824,11 +797,23 @@ async def render_html(
         market = '沪深A'
 
     logger.info("[SayuStock] 开始获取数据...")
-    raw_data = await get_data(market, sector)
-    if raw_data is None:
-        return '数据处理失败, 请检查后台...'
-    elif isinstance(raw_data, str):
-        return raw_data
+    if sector == 'compare-stock':
+        markets = market.split(' ')
+        raw_datas: List[Dict] = []
+        for m in markets:
+            if m == 'A500':
+                m = 'A500ETF'
+            raw_data = await get_data(m, 'single-stock-kline-111')
+            if isinstance(raw_data, str):
+                return raw_data
+            raw_datas.append(raw_data)
+        _sp_str = 'compare-stock'
+    else:
+        raw_data = await get_data(market, sector)
+        if raw_data is None:
+            return '数据处理失败, 请检查后台...'
+        elif isinstance(raw_data, str):
+            return raw_data
 
     file = get_file(market, 'html', sector, _sp_str)
     # 检查当前目录下是否有符合条件的文件
@@ -843,6 +828,8 @@ async def render_html(
 
     if sector == STOCK_SECTOR:
         fig = await to_single_fig(raw_data)
+    elif sector == 'compare-stock':
+        fig = await to_compare_fig(raw_datas)
     elif sector and sector.startswith('single-stock-kline'):
         fig = await to_single_fig_kline(raw_data)
     else:
@@ -870,9 +857,13 @@ async def render_image(
 
     async with async_playwright() as p:
         browser = await p.chromium.launch(headless=True)
-        if sector and sector.startswith('single-stock-kline'):
+        if (
+            sector
+            and sector.startswith('single-stock-kline')
+            or sector == 'compare-stock'
+        ):
             viewport = {
-                "width": 6000,
+                "width": 4600,
                 "height": 3000,
             }
             _scale = 1

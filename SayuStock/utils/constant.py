@@ -33,7 +33,7 @@ trade_detail_dict = {
 }
 
 SP_STOCK = {
-    'A500': '1.000510',
+    # 'A500': '1.000510',
 }
 
 STOCK_SECTOR = 'single-stock'

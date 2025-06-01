@@ -119,8 +119,6 @@ async def draw_info_img(is_save: bool = False):
     )
     raw_data = await get_data()
 
-    # data_a500 = await get_data('A500')
-
     if isinstance(data_zs, str):
         return data_zs
     if isinstance(data_hy, str):

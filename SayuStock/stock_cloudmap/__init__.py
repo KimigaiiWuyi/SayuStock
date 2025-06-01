@@ -8,6 +8,7 @@ from .get_cloudmap import render_image
 from ..utils.resource_path import DATA_PATH
 
 sv_stock_cloudmap = SV("大盘云图")
+sv_stock_compare = SV("对比个股", priority=3)
 
 MS_MAP = {
     'k线': '100',
@@ -69,4 +70,19 @@ async def send_stock_img(bot: Bot, ev: Event):
             content.replace('分时', ''),
             'single-stock',
         )
+    await bot.send(im)
+
+
+@sv_stock_compare.on_command(("对比个股", "个股对比"), block=True)
+async def send_compare_img(bot: Bot, ev: Event):
+    logger.info("开始执行[对比个股]")
+    txt = (
+        ev.text.strip()
+        .replace('个股', '')
+        .replace('，', ',')
+        .replace(',', ' ')
+        .replace('  ', ' ')
+        .strip()
+    )
+    im = await render_image(txt, 'compare-stock')
     await bot.send(im)
