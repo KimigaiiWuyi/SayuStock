@@ -11,6 +11,8 @@ async def to_compare_fig(raw_datas: List[Dict]):
     colors = qualitative.Plotly * (len(raw_datas) // 10 + 1)
     for i, raw_data in enumerate(raw_datas):
         df = fill_kline(raw_data)
+        if df is None:
+            continue
         data.append(
             go.Scatter(
                 x=df['日期'],

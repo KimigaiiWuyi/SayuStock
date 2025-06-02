@@ -314,10 +314,14 @@ commodity = {
 
 # 债券市场
 bond = {
-    '三十债主连': '220.TLM',
-    '十债主连': '220.TM',
+    # '三十债主连': '220.TLM',
+    # '十债主连': '220.TM',
     # '五债主连': '220.TFM',
-    '二债主连': '220.TSM',
+    # '二债主连': '220.TSM',
+    '中国30年期国债': '171.CN30Y',
+    '中国10年期国债': '171.CN10Y',
+    # '中国5年期国债': '171.CN5Y',
+    '中国2年期国债': '171.CN2Y',
     '美国30年期国债收益率': '171.US30Y',
     '美国10年期国债收益率': '171.US10Y',
     # '美国5年期国债收益率': '171.US5Y',
@@ -370,5 +374,4 @@ def create_time_array(start_time: str = '09:15'):
     while PMStart <= PMEnd:
         time_array.append(PMStart.strftime('%H:%M'))
         PMStart += delta
-    return time_array
     return time_array

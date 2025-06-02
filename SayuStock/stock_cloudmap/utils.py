@@ -21,6 +21,9 @@ def fill_kline(raw_data: Dict):
     kline_dict = {header: [] for header in headers}
 
     # 填充字典
+    if not raw_data['data']['klines']:
+        return None
+
     for line in raw_data['data']['klines']:
         values = line.split(',')
         for header, value in zip(headers, values):

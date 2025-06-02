@@ -1,3 +1,6 @@
+import re
+import datetime
+
 from gsuid_core.sv import SV
 from gsuid_core.bot import Bot
 from gsuid_core.models import Event
@@ -84,5 +87,37 @@ async def send_compare_img(bot: Bot, ev: Event):
         .replace('  ', ' ')
         .strip()
     )
-    im = await render_image(txt, 'compare-stock')
+
+    p = r'(\d{4}[./]?\d{1,2}[./]?\d{1,2})(?:[~-](\d{4}[./]?\d{1,2}[./]?\d{1,2}))?'  # noqa: E501
+    match = re.search(p, txt)
+    start_time = end_time = None
+
+    if match:
+        try:
+            start_str, end_str = match.groups()
+            # 转换为datetime对象
+            start_time = datetime.datetime.strptime(
+                re.sub(r'[./]', '-', start_str), "%Y-%m-%d"
+            )
+            end_time = (
+                datetime.datetime.strptime(
+                    re.sub(r'[./]', '-', end_str), "%Y-%m-%d"
+                )
+                if end_str
+                else datetime.datetime.now()
+            )
+            # 移除原始文本中的日期部分
+            txt = re.sub(p, '', txt).strip()
+        except ValueError:
+            await bot.send(
+                "日期格式错误，请使用正确的日期格式如 2024.12.05 或 2024/12/5"
+            )
+            return
+
+    im = await render_image(
+        txt,
+        'compare-stock',
+        start_time,
+        end_time,
+    )
     await bot.send(im)

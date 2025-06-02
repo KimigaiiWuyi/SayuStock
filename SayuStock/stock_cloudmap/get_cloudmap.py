@@ -138,6 +138,8 @@ async def _get_data(
 async def get_data(
     market: str = '沪深A',
     sector: Optional[str] = None,
+    start_time: Optional[datetime] = None,
+    end_time: Optional[datetime] = None,
 ) -> Union[Dict, str]:
     market = market.upper()
     if not market:
@@ -182,7 +184,6 @@ async def get_data(
             return ErroText['notStock']
         logger.info(f'[SayuStock] get_single_fig_data secid: {secid}')
         secid = get_full_security_code(secid[0])
-        file = get_file(secid, 'json', sector)
         now = datetime.now()
         kline_code = sector.split('-')[-1]
         if kline_code == '100':
@@ -200,14 +201,25 @@ async def get_data(
             out_day = 1300
         elif kline_code == '111':
             kline_code = 101
+            if start_time:
+                if end_time is None:
+                    end_time = now
             out_day = 720
         else:
             out_day = 1600
+
+        st_f = start_time.strftime('%Y%m%d') if start_time else ''
+        et_f = end_time.strftime('%Y%m%d') if end_time else ''
+        file = get_file(
+            secid,
+            'json',
+            sector,
+            f"{st_f}-{et_f}",
+        )
+
         params = [
             ('fields1', 'f1,f2,f3,f4,f5,f6,f7,f8,f9,f10,f11,f12,f13'),
             ('fields2', 'f51,f52,f53,f54,f55,f56,f57,f58,f59,f60,f61'),
-            ('beg', (now - timedelta(days=out_day)).strftime("%Y%m%d")),
-            ('end', now.strftime("%Y%m%d")),
             ('rtntype', '6'),
             ('klt', kline_code),
             ('fqt', '1'),
@@ -216,6 +228,15 @@ async def get_data(
                 secid,
             ),
         ]
+
+        if start_time and end_time:
+            params.append(('beg', start_time.strftime('%Y%m%d')))
+            params.append(('end', end_time.strftime('%Y%m%d')))
+        else:
+            params.append(
+                ('beg', (now - timedelta(days=out_day)).strftime("%Y%m%d"))
+            )
+            params.append(('end', now.strftime("%Y%m%d")))
     else:
         # 大盘云图
         url = 'http://push2.eastmoney.com/api/qt/clist/get'
@@ -321,6 +342,8 @@ async def to_single_fig_kline(
     sp: Optional[str] = None,
 ):
     df = fill_kline(raw_data)
+    if df is None:
+        return ErroText['notData']
 
     fig = go.Figure(
         data=[
@@ -766,6 +789,8 @@ async def to_fig(
 async def render_html(
     market: str = '沪深A',
     sector: Optional[str] = None,
+    start_time: Optional[datetime] = None,
+    end_time: Optional[datetime] = None,
 ) -> Union[str, Path]:
     _sp_str = None
     sp = None
@@ -803,7 +828,12 @@ async def render_html(
         for m in markets:
             if m == 'A500':
                 m = 'A500ETF'
-            raw_data = await get_data(m, 'single-stock-kline-111')
+            raw_data = await get_data(
+                m,
+                'single-stock-kline-111',
+                start_time,
+                end_time,
+            )
             if isinstance(raw_data, str):
                 return raw_data
             raw_datas.append(raw_data)
@@ -850,8 +880,16 @@ async def render_html(
 async def render_image(
     market: str = '沪深A',
     sector: Optional[str] = None,
+    start_time: Optional[datetime] = None,
+    end_time: Optional[datetime] = None,
 ):
-    html_path = await render_html(market, sector)
+    html_path = await render_html(
+        market,
+        sector,
+        start_time,
+        end_time,
+    )
+
     if isinstance(html_path, str):
         return html_path
 
