@@ -13,15 +13,38 @@ async def to_compare_fig(raw_datas: List[Dict]):
         df = fill_kline(raw_data)
         if df is None:
             continue
+
+        trace_name = f'{raw_data.get("data", {}).get("name", f"Trace {i}")}'
+        legend_group_name = f'legend_group_{trace_name}_{i}'
+
         data.append(
             go.Scatter(
                 x=df['日期'],
                 y=df['归一化'],
                 mode='lines',
                 line=dict(color=colors[i], width=4),
-                yaxis='y2',
-                name=f'{raw_data["data"]["name"]}',
-            ),
+                # yaxis='y2',
+                name=trace_name,
+                legendgroup=legend_group_name,
+                showlegend=False,
+            )
+        )
+
+        data.append(
+            go.Scatter(
+                x=[None],
+                y=[None],
+                mode='markers',
+                marker=dict(
+                    color=colors[i],
+                    symbol='square',
+                    size=200,
+                ),
+                # yaxis='y2',
+                name=trace_name,
+                legendgroup=legend_group_name,
+                showlegend=True,
+            )
         )
 
     fig = go.Figure(data=data)
@@ -40,18 +63,21 @@ async def to_compare_fig(raw_datas: List[Dict]):
         yaxis=dict(
             title_font=dict(size=40),  # Y轴标题字体大小
             tickfont=dict(size=40),  # Y轴刻度标签字体大小
-            title='归一化收盘价',
+            title='',
         ),
         legend=dict(
+            itemsizing='trace',
             title=dict(
                 font=dict(
-                    size=60,
+                    size=80,
                 )
-            )
+            ),
+            font=dict(size=60),
         ),  # 设置图例标题的大小
         font=dict(size=60),  # 设置整个图表的字体大小
     )
 
     fig.update_xaxes(tickformat='%Y.%m')
+    fig.update_yaxes(tickformat='.0%')
 
     return fig

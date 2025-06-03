@@ -8,7 +8,7 @@ from gsuid_core.aps import scheduler
 from gsuid_core.logger import logger
 
 from .get_cloudmap import render_image
-from ..utils.resource_path import DATA_PATH
+from ..utils.resource_path import DATA_PATH, GN_BK_PATH
 
 sv_stock_cloudmap = SV("大盘云图")
 sv_stock_compare = SV("对比个股", priority=3)
@@ -31,6 +31,9 @@ async def delete_all_data():
     for i in DATA_PATH.iterdir():
         if i.is_file():
             i.unlink()
+    if GN_BK_PATH.exists():
+        GN_BK_PATH.unlink()
+
     logger.success("[SayuStock] [删除全部缓存数据] 执行完成！")
 
 
@@ -88,31 +91,50 @@ async def send_compare_img(bot: Bot, ev: Event):
         .strip()
     )
 
-    p = r'(\d{4}[./]\d{1,2}[./]\d{1,2})(?:[~-](\d{4}[./]\d{1,2}[./]\d{1,2}))?'  # noqa: E501
-    match = re.search(p, txt)
-    start_time = end_time = None
+    if '最近一年' in txt or '近一年' in txt or '过去一年' in txt:
+        txt = (
+            txt.replace('最近一年', '')
+            .replace('近一年', '')
+            .replace('过去一年', '')
+            .strip()
+        )
+        start_time = datetime.datetime.now() - datetime.timedelta(days=365)
+        end_time = datetime.datetime.now()
+    elif '最近一月' in txt or '近一月' in txt or '过去一月' in txt:
+        txt = (
+            txt.replace('最近一月', '')
+            .replace('近一月', '')
+            .replace('过去一月', '')
+            .strip()
+        )
+        start_time = datetime.datetime.now() - datetime.timedelta(days=30)
+        end_time = datetime.datetime.now()
+    else:
+        p = r'(\d{4}[./]\d{1,2}[./]\d{1,2})(?:[~-](\d{4}[./]\d{1,2}[./]\d{1,2}))?'  # noqa: E501
+        match = re.search(p, txt)
+        start_time = end_time = None
 
-    if match:
-        try:
-            start_str, end_str = match.groups()
-            # 转换为datetime对象
-            start_time = datetime.datetime.strptime(
-                re.sub(r'[./]', '-', start_str), "%Y-%m-%d"
-            )
-            end_time = (
-                datetime.datetime.strptime(
-                    re.sub(r'[./]', '-', end_str), "%Y-%m-%d"
+        if match:
+            try:
+                start_str, end_str = match.groups()
+                # 转换为datetime对象
+                start_time = datetime.datetime.strptime(
+                    re.sub(r'[./]', '-', start_str), "%Y-%m-%d"
                 )
-                if end_str
-                else datetime.datetime.now()
-            )
-            # 移除原始文本中的日期部分
-            txt = re.sub(p, '', txt).strip()
-        except ValueError:
-            await bot.send(
-                "日期格式错误，请使用正确的日期格式如 2024.12.05 或 2024/12/5"
-            )
-            return
+                end_time = (
+                    datetime.datetime.strptime(
+                        re.sub(r'[./]', '-', end_str), "%Y-%m-%d"
+                    )
+                    if end_str
+                    else datetime.datetime.now()
+                )
+                # 移除原始文本中的日期部分
+                txt = re.sub(p, '', txt).strip()
+            except ValueError:
+                await bot.send(
+                    "日期格式错误，请使用正确的日期格式如 2024.12.05 或 2024/12/5"
+                )
+                return
 
     im = await render_image(
         txt,
