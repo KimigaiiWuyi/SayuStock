@@ -837,7 +837,10 @@ async def render_html(
             if isinstance(raw_data, str):
                 return raw_data
             raw_datas.append(raw_data)
-        _sp_str = 'compare-stock'
+
+        st_f = start_time.strftime('%Y%m%d') if start_time else ''
+        et_f = end_time.strftime('%Y%m%d') if end_time else ''
+        _sp_str = f'compare-stock-{st_f}-{et_f}'
     else:
         raw_data = await get_data(market, sector)
         if raw_data is None:

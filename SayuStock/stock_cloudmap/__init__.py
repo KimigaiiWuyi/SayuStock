@@ -88,7 +88,7 @@ async def send_compare_img(bot: Bot, ev: Event):
         .strip()
     )
 
-    p = r'(\d{4}[./]?\d{1,2}[./]?\d{1,2})(?:[~-](\d{4}[./]?\d{1,2}[./]?\d{1,2}))?'  # noqa: E501
+    p = r'(\d{4}[./]\d{1,2}[./]\d{1,2})(?:[~-](\d{4}[./]\d{1,2}[./]\d{1,2}))?'  # noqa: E501
     match = re.search(p, txt)
     start_time = end_time = None
 
