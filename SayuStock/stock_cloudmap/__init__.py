@@ -109,6 +109,10 @@ async def send_compare_img(bot: Bot, ev: Event):
         )
         start_time = datetime.datetime.now() - datetime.timedelta(days=30)
         end_time = datetime.datetime.now()
+    elif '年初至今' in txt or '今年' in txt:
+        txt = txt.replace('年初至今', '').replace('今年', '').strip()
+        start_time = datetime.datetime(datetime.datetime.now().year, 1, 1)
+        end_time = datetime.datetime.now()
     else:
         p = r'(\d{4}[./]\d{1,2}[./]\d{1,2})(?:[~-](\d{4}[./]\d{1,2}[./]\d{1,2}))?'  # noqa: E501
         match = re.search(p, txt)
