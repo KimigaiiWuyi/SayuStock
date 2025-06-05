@@ -1,4 +1,5 @@
 import datetime
+from typing import List, Optional
 
 AL = 'zh-CN,zh;q=0.8,zh-TW;q=0.7,zh-HK;q=0.5,en-US;q=0.3,en;q=0.2'
 UA = 'Mozilla/5.0 (Windows NT 6.3; Trident/7.0; Touch; rv:11.0) like Gecko'
@@ -343,7 +344,10 @@ whsc = {
 }
 
 
-def create_time_array(start_time: str = '09:15'):
+def create_time_array(
+    start_time: str = '09:15', code: Optional[str] = None
+) -> List[str]:
+    """"""
     if start_time == '09:15':
         AMStart = datetime.datetime.strptime('9:15', '%H:%M')
         AMEnd = datetime.datetime.strptime('11:30', '%H:%M')
@@ -364,6 +368,20 @@ def create_time_array(start_time: str = '09:15'):
         AMEnd = datetime.datetime.strptime('11:30', '%H:%M')
         PMStart = datetime.datetime.strptime('13:01', '%H:%M')
         PMEnd = datetime.datetime.strptime('16:00', '%H:%M')
+
+    if code:
+        _c = code.split('.')[0]
+        if _c == '101':
+            AMStart = datetime.datetime.strptime('00:00', '%H:%M')
+            AMEnd = datetime.datetime.strptime('23:59', '%H:%M')
+            PMStart = AMEnd  # 不需要下午时段
+            PMEnd = AMEnd
+        elif _c == '105':
+            # 美股，包含盘前（16:00-21:30）、正股（21:30-04:00）、盘后（04:00-08:00），均为北京时间，跨天处理
+            AMStart = datetime.datetime.strptime('16:00', '%H:%M')
+            AMEnd = datetime.datetime.strptime('23:59', '%H:%M')
+            PMStart = datetime.datetime.strptime('00:00', '%H:%M')
+            PMEnd = datetime.datetime.strptime('08:00', '%H:%M')
 
     delta = datetime.timedelta(minutes=1)
     time_array = []

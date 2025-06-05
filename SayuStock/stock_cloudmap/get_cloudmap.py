@@ -48,7 +48,9 @@ ErroText = {
 
 async def load_data_from_file(file: Path):
     async with aiofiles.open(file, 'r', encoding='UTF-8') as f:
-        return json.loads(await f.read())
+        data = json.loads(await f.read())
+    data['file_name'] = file.name
+    return data
 
 
 async def load_bk_data():
@@ -305,6 +307,16 @@ async def get_data(
     if sector == STOCK_SECTOR and resp['data'] is None:
         return ErroText['notStock']
 
+    # 处理个股折线数据
+    secid = next((value for key, value in params if key == 'secid'), None)
+    if sector == STOCK_SECTOR and secid:
+        trends = await get_single_fig_data(secid)
+        if isinstance(trends, str):
+            return resp
+        resp['trends'] = trends
+
+    resp['file_name'] = file.name
+
     # 写入文件
     logger.info("[SayuStock] 开始写入文件...")
     async with aiofiles.open(file, 'w', encoding='UTF-8') as f:
@@ -320,13 +332,6 @@ async def get_data(
         if not GK_DATA:
             await load_bk_data()
 
-    # 处理个股折线数据
-    secid = next((value for key, value in params if key == 'secid'), None)
-    if sector == STOCK_SECTOR and secid:
-        trends = await get_single_fig_data(secid)
-        if isinstance(trends, str):
-            return resp
-        resp['trends'] = trends
     return resp
 
 
@@ -474,10 +479,16 @@ async def to_single_fig(
     if not gained:
         return ErroText['notData']
 
+    code_id = raw_data.get('file_name')
+    if code_id:
+        code_id = code_id.split('_')[0]
     # 遍历TIME_RANGE如果存在没有数据的时间则插入空数据
     full_data = []
     existing_times = set(item['datetime'] for item in price_histroy)
-    ARRAY = create_time_array(price_histroy[0]['datetime'])
+    ARRAY = create_time_array(
+        price_histroy[0]['datetime'],
+        code_id,
+    )
     for time in ARRAY:
         if time in existing_times:
             full_data.append(
