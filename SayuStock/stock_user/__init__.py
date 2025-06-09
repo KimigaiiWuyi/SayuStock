@@ -53,9 +53,7 @@ async def bind_uid(bot: Bot, ev: Event):
         f'是否确认将下列股票添加自选?\n{send_m}\n请输入是或否。',
     )
     if resp is not None:
-        if resp.text == '否':
-            return await bot.send('已取消!')
-        else:
+        if resp.text == '是':
             for _u in add_dict:
                 await SsBind.insert_uid(
                     qid,
@@ -64,6 +62,8 @@ async def bind_uid(bot: Bot, ev: Event):
                     ev.group_id,
                     is_digit=False,
                 )
+        else:
+            return await bot.send('已取消!')
 
     return await bot.send(
         '✅[SayuStock] 添加自选成功!\n可发送[我的自选]查看或发送[删除自选]清除！'
@@ -100,11 +100,11 @@ async def delete_uid(bot: Bot, ev: Event):
         f"是否确认将下列股票删除自选?\n{_d}\n请输入是或否。"
     )
     if resp is not None:
-        if resp.text == '否':
-            return await bot.send('已取消!')
-        else:
+        if resp.text == '是':
             for _u in add_dict:
                 await SsBind.delete_uid(qid, ev.bot_id, add_dict[_u])
+        else:
+            return await bot.send('已取消!')
 
     await bot.send(
         '✅[SayuStock] 删除自选成功!\n可发送[我的自选]查看或发送[添加自选]清除！'

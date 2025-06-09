@@ -1,7 +1,7 @@
 import json
 from io import BytesIO
 from datetime import datetime, timedelta
-from typing import Any, Dict, Tuple, Union, Literal, Optional, cast
+from typing import Any, Dict, List, Tuple, Union, Literal, Optional, cast
 
 import aiofiles
 from gsuid_core.logger import logger
@@ -219,6 +219,7 @@ async def get_code_id(code: str) -> Optional[Tuple[str, str]]:
         ('input', f'{code}'),
         ('type', '14'),
         ('token', 'D43BF722C8E33BDC906FB84D85E326E8'),
+        ('count', '4'),
     )
     async with ClientSession() as sess:
         async with sess.get(url, params=params) as res:
@@ -227,8 +228,12 @@ async def get_code_id(code: str) -> Optional[Tuple[str, str]]:
                 text = await res.text()
                 logger.debug(text)
                 data = json.loads(text)
-                code_dict = data['QuotationCodeTable']['Data']
+                code_dict: List[Dict] = data['QuotationCodeTable']['Data']
                 if code_dict:
+                    # 排序：SecurityTypeName为"债券"的排到最后
+                    code_dict.sort(
+                        key=lambda x: x.get('SecurityTypeName') == '债券'
+                    )
                     return code_dict[0]['QuoteID'], code_dict[0]['Name']
                 else:
                     return None
