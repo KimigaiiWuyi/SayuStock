@@ -378,10 +378,10 @@ def create_time_array(
             PMEnd = AMEnd
         elif _c == '105':
             # 美股，包含盘前（16:00-21:30）、正股（21:30-04:00）、盘后（04:00-08:00），均为北京时间，跨天处理
-            AMStart = datetime.datetime.strptime('16:00', '%H:%M')
+            AMStart = datetime.datetime.strptime('21:30', '%H:%M')
             AMEnd = datetime.datetime.strptime('23:59', '%H:%M')
             PMStart = datetime.datetime.strptime('00:00', '%H:%M')
-            PMEnd = datetime.datetime.strptime('08:00', '%H:%M')
+            PMEnd = datetime.datetime.strptime('04:00', '%H:%M')
 
     delta = datetime.timedelta(minutes=1)
     time_array = []

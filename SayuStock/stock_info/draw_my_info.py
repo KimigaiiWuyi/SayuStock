@@ -8,8 +8,8 @@ from gsuid_core.utils.fonts.fonts import core_font as ss_font
 
 from ..utils.image import get_footer
 from ..utils.database.models import SsBind
-from ..utils.utils import number_to_chinese
 from ..stock_cloudmap.get_cloudmap import get_data
+from ..utils.utils import convert_list, number_to_chinese
 
 TEXT_PATH = Path(__file__).parent / 'texture2d'
 DIFF_MAP = {
@@ -24,9 +24,11 @@ DIFF_MAP = {
 async def draw_my_stock_img(ev: Event):
     user_id = ev.at if ev.at else ev.user_id
     uid = await SsBind.get_uid_list_by_game(user_id, ev.bot_id)
+
     if not uid:
         return '您还未添加自选呢~请输入 添加自选 查看帮助!'
 
+    uid = convert_list(uid)
     data_zs = await get_data('主要指数')
     data_hy = await get_data('行业板块')
     raw_data = await get_data()

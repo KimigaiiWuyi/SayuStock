@@ -7,6 +7,17 @@ from gsuid_core.logger import logger
 from .resource_path import DATA_PATH, HISTORY_PATH
 
 
+def convert_list(input_list: List[str]) -> List[str]:
+    result = []
+    for item in input_list:
+        if '.' not in item and result:  # 当前项不含点且结果列表不为空
+            result[-1] += '_' + item  # 合并到前一项
+        else:
+            result.append(item)  # 正常添加项
+    input_list = result
+    return input_list
+
+
 def get_file(
     market: str,
     suffix: str,
