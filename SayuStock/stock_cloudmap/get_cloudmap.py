@@ -814,10 +814,11 @@ async def render_html(
     elif market == '中证2000':
         market = '2000'
 
-    if market in market_dict and 'b:' in market_dict[market]:
-        sector = market
-    elif market in bk_dict:
-        sector = market
+    if sector != STOCK_SECTOR:
+        if market in market_dict and 'b:' in market_dict[market]:
+            sector = market
+        elif market in bk_dict:
+            sector = market
 
     if market in mdata:
         _sp_str = market
