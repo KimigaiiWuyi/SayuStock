@@ -31,15 +31,15 @@ async def draw_my_stock_img(ev: Event):
     uid = convert_list(uid)
     data_zs = await get_data('主要指数')
     data_hy = await get_data('行业板块')
-    raw_data = await get_data()
+    # raw_data = await get_data()
 
     if isinstance(data_zs, str):
 
         return data_zs
     if isinstance(data_hy, str):
         return data_hy
-    if isinstance(raw_data, str):
-        return raw_data
+    # if isinstance(raw_data, str):
+    #    return raw_data
 
     img = Image.new(
         'RGBA',

@@ -1,4 +1,5 @@
 import json
+import random
 import asyncio
 from pathlib import Path
 from datetime import datetime, timedelta
@@ -128,6 +129,7 @@ async def _get_data(
 ):
     if stop_event.is_set():
         return None
+    await asyncio.sleep(random.uniform(0.4, 0.9))
     resp2 = await req(url, params)
     if resp2['data']:
         resp['data']['diff'].extend(resp2['data']['diff'])
