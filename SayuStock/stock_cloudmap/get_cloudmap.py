@@ -335,7 +335,7 @@ async def get_data(
     return resp
 
 
-def int_to_percentage(value: Union[int, str]) -> str:
+def int_to_percentage(value: Union[int, str, float]) -> str:
     if isinstance(value, str):
         return '-%'
     sign = '+' if value >= 0 else ''
@@ -457,7 +457,7 @@ async def to_single_fig(
 ):
     logger.info('[SayuStock] 开始获取图形...')
     raw = raw_data['data']
-    gained = raw['f170']
+    gained: float = raw['f170']
     price_histroy = raw_data['trends']
     stock_name = raw['f58']
     new_price = raw['f43']
@@ -476,8 +476,10 @@ async def to_single_fig(
     }
     '''
 
+    '''
     if not gained:
         return ErroText['notData']
+    '''
 
     code_id = raw_data.get('file_name')
     if code_id:
