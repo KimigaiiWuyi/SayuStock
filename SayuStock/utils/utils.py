@@ -25,6 +25,7 @@ def get_file(
     sp: Optional[str] = None,
 ):
     a = f'{market}_{sector}_{sp}_data'
+    a = a[:254]
     return DATA_PATH / f"{a}.{suffix}"
 
 

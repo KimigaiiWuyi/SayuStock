@@ -7,7 +7,9 @@ from gsuid_core.models import Event
 from gsuid_core.aps import scheduler
 from gsuid_core.logger import logger
 
+from ..utils.utils import convert_list
 from .get_cloudmap import render_image
+from ..utils.database.models import SsBind
 from ..utils.resource_path import DATA_PATH, GN_BK_PATH
 
 sv_stock_cloudmap = SV("大盘云图")
@@ -140,6 +142,24 @@ async def send_compare_img(bot: Bot, ev: Event):
                 )
                 return
 
+    if not txt.strip():
+        user_id = ev.at if ev.at else ev.user_id
+        uid = await SsBind.get_uid_list_by_game(user_id, ev.bot_id)
+
+        if not uid:
+            return await bot.send(
+                '您还未添加自选呢~或者后跟具体股票代码, 例如：\n 个股对比 年初至今 中证白酒 中证2000'
+            )
+
+        uid = convert_list(uid)
+        if len(uid) > 12:
+            uid = uid[:12]
+            await bot.send(
+                '你添加的股票代码过多, 暂时只会对比前12支股票噢~请稍等结果...'
+            )
+        txt = ' '.join(uid)
+
+    logger.debug(f"[SayuStock] [对比个股] 生成的文本: {txt}")
     im = await render_image(
         txt,
         'compare-stock',
