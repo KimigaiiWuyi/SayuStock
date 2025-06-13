@@ -371,12 +371,12 @@ def create_time_array(
 
     if code:
         _c = code.split('.')[0]
-        if _c == '101':
+        if _c in ['101', '119', '133', '100', '102', '114']:
             AMStart = datetime.datetime.strptime('00:00', '%H:%M')
             AMEnd = datetime.datetime.strptime('23:59', '%H:%M')
             PMStart = AMEnd  # 不需要下午时段
             PMEnd = AMEnd
-        elif _c == '105':
+        elif _c in ['105', '106']:
             # 美股，包含盘前（16:00-21:30）、正股（21:30-04:00）、盘后（04:00-08:00），均为北京时间，跨天处理
             AMStart = datetime.datetime.strptime('21:30', '%H:%M')
             AMEnd = datetime.datetime.strptime('23:59', '%H:%M')
