@@ -1,6 +1,3 @@
-import datetime
-from typing import List, Optional
-
 AL = 'zh-CN,zh;q=0.8,zh-TW;q=0.7,zh-HK;q=0.5,en-US;q=0.3,en;q=0.2'
 UA = 'Mozilla/5.0 (Windows NT 6.3; Trident/7.0; Touch; rv:11.0) like Gecko'
 
@@ -242,6 +239,7 @@ code_id_dict = {
     '创业板指数': '0.399006',
     '沪深300': '1.000300',
     'hs300': '1.000300',
+    '沪深300': '1.000300',
     '上证50': '1.000016',
     'sz50': '1.000016',
     '上证180': '1.000010',
@@ -342,54 +340,3 @@ whsc = {
     # '澳元兑美元': '119.AUDUSD',
     # '美元兑泰铢': '119.USDTHB',
 }
-
-
-def create_time_array(
-    start_time: str = '09:15', code: Optional[str] = None
-) -> List[str]:
-    """"""
-    if start_time == '09:15':
-        AMStart = datetime.datetime.strptime('9:15', '%H:%M')
-        AMEnd = datetime.datetime.strptime('11:30', '%H:%M')
-        PMStart = datetime.datetime.strptime('13:01', '%H:%M')
-        PMEnd = datetime.datetime.strptime('16:00', '%H:%M')
-    elif start_time == '21:30':
-        AMStart = datetime.datetime.strptime('21:30', '%H:%M')
-        AMEnd = datetime.datetime.strptime('23:30', '%H:%M')
-        PMStart = datetime.datetime.strptime('23:31', '%H:%M')
-        PMEnd = datetime.datetime.strptime('04:00', '%H:%M')
-    elif start_time == '22:30':
-        AMStart = datetime.datetime.strptime('22:30', '%H:%M')
-        AMEnd = datetime.datetime.strptime('23:30', '%H:%M')
-        PMStart = datetime.datetime.strptime('23:31', '%H:%M')
-        PMEnd = datetime.datetime.strptime('05:00', '%H:%M')
-    else:
-        AMStart = datetime.datetime.strptime('9:15', '%H:%M')
-        AMEnd = datetime.datetime.strptime('11:30', '%H:%M')
-        PMStart = datetime.datetime.strptime('13:01', '%H:%M')
-        PMEnd = datetime.datetime.strptime('16:00', '%H:%M')
-
-    if code:
-        _c = code.split('.')[0]
-        if _c in ['101', '119', '133', '100', '102', '114']:
-            AMStart = datetime.datetime.strptime('00:00', '%H:%M')
-            AMEnd = datetime.datetime.strptime('23:59', '%H:%M')
-            PMStart = AMEnd  # 不需要下午时段
-            PMEnd = AMEnd
-        elif _c in ['105', '106']:
-            # 美股，包含盘前（16:00-21:30）、正股（21:30-04:00）、盘后（04:00-08:00），均为北京时间，跨天处理
-            AMStart = datetime.datetime.strptime('21:30', '%H:%M')
-            AMEnd = datetime.datetime.strptime('23:59', '%H:%M')
-            PMStart = datetime.datetime.strptime('00:00', '%H:%M')
-            PMEnd = datetime.datetime.strptime('04:00', '%H:%M')
-
-    delta = datetime.timedelta(minutes=1)
-    time_array = []
-
-    while AMStart <= AMEnd:
-        time_array.append(AMStart.strftime('%H:%M'))
-        AMStart += delta
-    while PMStart <= PMEnd:
-        time_array.append(PMStart.strftime('%H:%M'))
-        PMStart += delta
-    return time_array

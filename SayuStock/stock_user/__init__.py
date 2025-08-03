@@ -24,7 +24,7 @@ HINT2 = '''[SayuStock]
 
 
 @sv_user_info.on_command(
-    ('添加自选', '添加个股', '添加股票', '添加持仓'), block=True
+    ('添加自选', '添加个股', '添加股票', '添加持仓', '加入自选'), block=True
 )
 async def bind_uid(bot: Bot, ev: Event):
     qid = ev.user_id
@@ -75,6 +75,7 @@ async def bind_uid(bot: Bot, ev: Event):
         '删除自选',
         '删除个股',
         '删除股票',
+        '移除自选',
         '删除持仓',
     ),
     block=True,

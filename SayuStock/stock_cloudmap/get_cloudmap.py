@@ -11,15 +11,17 @@ import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 from gsuid_core.logger import logger
+from plotly.subplots import make_subplots
 from playwright.async_api import async_playwright
 from gsuid_core.utils.image.convert import convert_img
 
 from .utils import fill_kline
-from ..utils.utils import get_file
 from ..utils.request import get_code_id
 from .get_compare import to_compare_fig
 from ..utils.resource_path import GN_BK_PATH
+from ..utils.time_range import get_trading_minutes
 from ..stock_config.stock_config import STOCK_CONFIG
+from ..utils.utils import get_file, number_to_chinese
 from ..utils.load_data import mdata, get_full_security_code
 from ..utils.constant import (
     SP_STOCK,
@@ -30,7 +32,6 @@ from ..utils.constant import (
     bk_dict,
     market_dict,
     request_header,
-    create_time_array,
     trade_detail_dict,
 )
 
@@ -44,6 +45,7 @@ ErroText = {
     'typemap': '❌未找到对应板块, 请重新输入\n📄例如: \n大盘云图沪深A\n大盘云图创业板 \n等等...',
     'notData': '❌不存在该板块或市场, 暂无数据...',
     'notStock': '❌不存在该股票，暂无数据...',
+    'notOpen': '❌该股票未开盘，暂无数据...',
 }
 
 
@@ -416,9 +418,11 @@ async def to_single_fig_kline(
     fig.update_layout(
         title=dict(
             text=raw_data['data']['name'],
-            font=dict(size=60),
+            font=dict(size=80),
+            y=0.98,
             x=0.5,
             xanchor='center',
+            yanchor='top',
         ),
         xaxis=dict(
             title_font=dict(size=40),  # X轴标题字体大小
@@ -465,6 +469,9 @@ async def to_single_fig(
     new_price = raw['f43']
     custom_info = int_to_percentage(gained)
     turnover_rate = raw['f168']
+    total_amount = (
+        number_to_chinese(raw['f48']) if isinstance(raw['f48'], float) else 0
+    )
 
     '''
     result = {
@@ -489,10 +496,7 @@ async def to_single_fig(
     # 遍历TIME_RANGE如果存在没有数据的时间则插入空数据
     full_data = []
     existing_times = set(item['datetime'] for item in price_histroy)
-    ARRAY = create_time_array(
-        price_histroy[0]['datetime'],
-        code_id,
-    )
+    ARRAY = get_trading_minutes(code_id)
     for time in ARRAY:
         if time in existing_times:
             full_data.append(
@@ -519,8 +523,11 @@ async def to_single_fig(
         {
             'datetime': [item['datetime'] for item in full_data],
             'price': [item['price'] for item in full_data],
+            'money': [item['money'] for item in full_data],  # 新增 money 列
         }
     )
+
+    price_history_pd['price'] = price_history_pd['price'].ffill()
 
     # 设置最大波动率
     open_price = raw['f60']
@@ -530,39 +537,77 @@ async def to_single_fig(
         (max_price - open_price) / open_price,
         (open_price - min_price) / open_price,
     )
-    max_price = open_price * (1 + max_fluctuation + 0.01)
-    min_price = open_price * (1 - max_fluctuation - 0.01)
+    y_axis_max_price = open_price * (1 + max_fluctuation + 0.01)
+    y_axis_min_price = open_price * (1 - max_fluctuation - 0.01)
 
-    fig = px.line(
-        price_histroy,
-        x="datetime",
-        y="price",
-        # text='price',  # 数据点显示值
-        line_shape='linear',  # 共有6种插值方式：
-        # 'linear'、'spline'、'hv'、'vh'、'hvh'和'vhv'
+    fig = make_subplots(
+        rows=2,
+        cols=1,
+        shared_xaxes=True,  # 共享X轴
+        vertical_spacing=0.05,  # 子图间的垂直间距
+        row_heights=[0.7, 0.3],  # 第一行（价格）占70%高度，第二行（量能）占30%
     )
 
-    fig = go.Figure(fig)
-    fig.update_traces(line=dict(width=5, color='white'))  # 使用白色线条
+    # 1. 添加价格折线图到第一行
+    fig.add_trace(
+        go.Scatter(
+            x=price_history_pd['datetime'],
+            y=price_history_pd['price'],
+            mode='lines',
+            name='Price',
+            line=dict(width=3, color='white'),
+            showlegend=False,
+        ),
+        row=1,
+        col=1,
+    )
 
-    # 添加背景颜色和虚
-    fig.add_shape(
-        type="rect",
-        x0=price_history_pd['datetime'].min(),
-        x1=price_history_pd['datetime'].max(),
+    # 2. 为量能柱状图生成颜色
+    bar_colors = []
+    prices = price_history_pd['price']
+
+    if prices[0] is None:
+        return ErroText['notOpen']
+
+    for i in range(len(prices)):
+        if i == 0:
+            # 第一个数据点，可以与开盘价比较
+            bar_colors.append('red' if prices[i] > open_price else 'green')
+        else:
+            # 与前一个数据点比较
+            if prices[i] > prices[i - 1]:
+                bar_colors.append('red')
+            elif prices[i] < prices[i - 1]:
+                bar_colors.append('green')
+            else:
+                bar_colors.append('grey')  # 如果价格不变，使用灰色
+
+    # 3. 添加量能柱状图到第二行
+    fig.add_trace(
+        go.Bar(
+            x=price_history_pd['datetime'],
+            y=price_history_pd['money'],
+            name='Volume',
+            marker_color=bar_colors,  # 应用动态颜色
+            showlegend=False,
+        ),
+        row=2,
+        col=1,
+    )
+
+    # --- 将原有的 Shape 添加到第一个子图中 ---
+    fig.add_hrect(
         y0=open_price,
-        y1=max_price,
+        y1=y_axis_max_price,
         fillcolor="red",
         opacity=0.2,
         layer="below",
         line_width=0,
     )
 
-    fig.add_shape(
-        type="rect",
-        x0=price_history_pd['datetime'].min(),
-        x1=price_history_pd['datetime'].max(),
-        y0=min_price,
+    # 绘制绿色区域 (开盘价之下)
+    fig.add_hrect(
+        y0=y_axis_min_price,
         y1=open_price,
         fillcolor="green",
         opacity=0.2,
@@ -570,89 +615,99 @@ async def to_single_fig(
         line_width=0,
     )
 
-    # 添加0轴线
-    fig.add_shape(
-        type="line",
-        x0=price_history_pd['datetime'].min(),
-        x1=price_history_pd['datetime'].max(),
-        y0=open_price,
-        y1=open_price,
-        line=dict(
-            color="yellow",
-            width=3,
-            dash="dashdot",
-        ),
+    # 使用 add_hline 绘制横跨整个图表宽度的水平线
+    fig.add_hline(
+        y=open_price,
+        line=dict(color="yellow", width=2, dash="dashdot"),
     )
 
-    # 计算以open_price为基准每1%为单位到max_price和min_price
+    # 计算Y轴刻度
     tick_values = []
     tick_texts = []
+
+    max_range_percent = max_fluctuation * 100
+    if max_range_percent > 15:
+        step = 2
+    elif max_range_percent > 30:
+        step = 5
+    else:
+        step = 1
+
     for i in range(
         int(-(max_fluctuation + 0.01) * 100),
         int((max_fluctuation + 0.01) * 100) + 1,
     ):
-        if i % 1 == 0:
+        if i % step == 0:
             price = open_price * (1 + i / 100)
-            if min_price <= price <= max_price:
+            if y_axis_min_price <= price <= y_axis_max_price:
                 tick_values.append(price)
                 tick_texts.append(f'{i}%')
 
     title_str1 = f"{stock_name}  最新价：{new_price}"
-    title_str = f"【{title_str1}】 开盘价：{open_price} 跌涨幅：{custom_info} 换手率 {turnover_rate}%"  # noqa:E501
+    title_str = f"【{title_str1}】 开盘价：{open_price} 涨跌幅：{custom_info} 换手率 {turnover_rate}% 成交额 {total_amount}"
 
-    # fig.update_layout(
-    #     yaxis=dict(
-    #         title='价格',
-    #         range=[min_price, max_price],
-    #         showgrid=True,
-    #         tickvals=tick_values,
-    #         ticktext=tick_texts
-    #     ),
-    #     xaxis=dict(
-    #         title='时间',
-    #         showgrid=False,
-    #         dtick=15,
-    #     ),
-    #     title=title_str,
-    # )
-    # 修改y轴，x轴，title文字字号
-
+    # --- 更新整体布局和坐标轴 ---
     fig.update_layout(
-        yaxis=dict(
-            title='价格',
-            range=[min_price, max_price],
-            showgrid=True,
-            tickvals=tick_values,
-            ticktext=tick_texts,
-            title_font=dict(size=36),  # 修改y轴标题字号
-            tickfont=dict(size=36),  # 修改y轴刻度字号
-        ),
-        xaxis=dict(
-            title='时间',
-            showgrid=False,
-            dtick=15,
-            title_font=dict(size=36),  # 修改x轴标题字号
-            tickfont=dict(size=36),  # 修改x轴刻度字号
-        ),
         title=dict(
             text=title_str,
-            font=dict(size=50),  # 修改标题字号
-            y=0.985,
+            font=dict(size=35),
+            y=0.99,
             x=0.5,
             xanchor='center',
             yanchor='top',
         ),
-        # width=4800,
-        # height=4800,
-        margin=dict(t=100, l=50, r=50, b=50),
-    )
-
-    # 修改背景颜色
-    fig.update_layout(
+        margin=dict(t=80, l=50, r=50, b=50),
         paper_bgcolor="black",
         plot_bgcolor="black",
         font=dict(color="white"),
-        coloraxis_showscale=False,
+        # 隐藏所有图例
+        showlegend=False,
+        # 移除X轴的滑块
+        # xaxis_rangeslider_visible=False,
+    )
+
+    # 更新Y轴 (价格)
+    fig.update_yaxes(
+        title_text='价格',
+        range=[y_axis_min_price, y_axis_max_price],
+        showgrid=True,
+        gridcolor='rgba(255,255,255,0.2)',
+        tickvals=tick_values,
+        ticktext=tick_texts,
+        title_font=dict(size=30),
+        tickfont=dict(size=26),
+        row=1,
+        col=1,
+    )
+
+    # 更新Y轴 (量能)
+    fig.update_yaxes(
+        title_text='量能',
+        showgrid=False,
+        title_font=dict(size=30),
+        tickfont=dict(size=26),
+        row=2,
+        col=1,
+    )
+
+    # 更新X轴 (隐藏顶部的X轴刻度，只显示底部的)
+    fig.update_xaxes(
+        # showticklabels=False,
+        # showgrid=False,
+        dtick=60,
+        row=1,
+        col=1,
+        title_font=dict(size=30),
+        tickfont=dict(size=26),
+    )
+    fig.update_xaxes(
+        title_text='时间',
+        showgrid=False,
+        dtick=15,  # 每15分钟一个刻度
+        title_font=dict(size=30),
+        tickfont=dict(size=26),
+        row=2,
+        col=1,
     )
     return fig
 
@@ -812,7 +867,7 @@ async def render_html(
     logger.info(f"[SayuStock] market: {market} sector: {sector}")
 
     if market == '沪深300':
-        market = '300'
+        market = 'hs300'
     elif market == '1000':
         market = '中证1000'
     elif market == '中证2000':
@@ -838,6 +893,8 @@ async def render_html(
         market = '沪深A'
 
     logger.info("[SayuStock] 开始获取数据...")
+
+    # 对比个股 数据
     if sector == 'compare-stock':
         markets = market.split(' ')
         raw_datas: List[Dict] = []
@@ -857,6 +914,7 @@ async def render_html(
         st_f = start_time.strftime('%Y%m%d') if start_time else ''
         et_f = end_time.strftime('%Y%m%d') if end_time else ''
         _sp_str = f'compare-stock-{st_f}-{et_f}'
+    # 其他数据
     else:
         raw_data = await get_data(market, sector)
         if raw_data is None:
@@ -875,12 +933,16 @@ async def render_html(
             )
             return file
 
+    # 个股
     if sector == STOCK_SECTOR:
         fig = await to_single_fig(raw_data)
+    # 个股对比
     elif sector == 'compare-stock':
         fig = await to_compare_fig(raw_datas)
+    # 个股 日k 年k
     elif sector and sector.startswith('single-stock-kline'):
         fig = await to_single_fig_kline(raw_data)
+    # 大盘云图
     else:
         fig = await to_fig(
             raw_data,
@@ -924,6 +986,12 @@ async def render_image(
                 "height": 3000,
             }
             _scale = 1
+        elif sector == STOCK_SECTOR:
+            viewport = {
+                "width": 4000,
+                "height": 3000,
+            }
+            _scale = 1
         else:
             viewport = {
                 "width": view_port,
@@ -940,4 +1008,5 @@ async def render_image(
         await page.wait_for_selector(".plot-container")
         png_bytes = await page.screenshot(type='png')
         await browser.close()
+        return await convert_img(png_bytes)
         return await convert_img(png_bytes)
