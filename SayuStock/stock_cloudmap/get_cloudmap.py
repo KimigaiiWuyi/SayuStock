@@ -527,7 +527,7 @@ async def to_single_fig(
         }
     )
 
-    price_history_pd['price'] = price_history_pd['price'].ffill()
+    # price_history_pd['price'] = price_history_pd['price'].fillna(None)
 
     # 设置最大波动率
     open_price = raw['f60']

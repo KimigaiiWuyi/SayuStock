@@ -3,7 +3,7 @@
 <p align="center">
   <a href="https://github.com/KimigaiiWuyi/SayuStock"><img src="./ICON.png" width="256" height="256" alt="SayuStock"></a>
 </p>
-<h1 align = "center">早柚股票 SayuStock 0.4</h1>
+<h1 align = "center">早柚股票 SayuStock 0.5</h1>
 <h4 align = "center">🚧支持QQ群/频道、OneBot、微信、KOOK、Tg、飞书、DoDo、米游社、Discord的股票Bot插件🚧</h4>
 <div align = "center">
         <a href="http://docs.gsuid.gbots.work/#/" target="_blank">安装文档</a>
@@ -46,8 +46,8 @@
 <a><img src="https://s2.loli.net/2025/01/22/vsUthKeZk3TEfxR.png"></a>
 </p></details>
 
-<details><summary>个股 601919</summary><p>
-<a><img src="https://s2.loli.net/2025/01/22/RBhEXUVaWmwPe5z.png"></a>
+<details><summary>个股 沪深300</summary><p>
+<a><img src="https://s2.loli.net/2025/08/04/AQPOKB9T2WwU5sf.png"></a>
 </p></details>
 
 <details><summary>我的自选 (添加自选)</summary><p>
