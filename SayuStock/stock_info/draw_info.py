@@ -121,13 +121,13 @@ async def draw_block(zs_diff: Dict, _type: str = 'diff'):
 
     zs_draw.rounded_rectangle((15, 13, 185, 127), 0, zsc)
 
+    t_font = ss_font(24)
+
     if len(zs_diff["f14"]) >= 15:
         name = zs_diff["f14"][:6]
     else:
         if len(zs_diff["f14"]) >= 10:
             t_font = ss_font(18)
-        else:
-            t_font = ss_font(24)
 
         name = zs_diff["f14"]
 
