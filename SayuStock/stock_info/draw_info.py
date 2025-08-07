@@ -1,6 +1,6 @@
 from pathlib import Path
 from datetime import datetime
-from typing import Dict, List
+from typing import Dict, List, Tuple
 
 from PIL import Image, ImageOps, ImageDraw
 from gsuid_core.utils.image.convert import convert_img
@@ -54,6 +54,49 @@ def invert_colors(img: Image.Image):
     return inverted_img
 
 
+def calculate_alpha(diff: float) -> Tuple[int, int, int, int]:
+    abs_diff = abs(diff)
+    _max = 170
+    _min = 10
+
+    if abs_diff >= 10.0:
+        alpha: int = _max
+    elif abs_diff < 0.2:
+        alpha = _min
+    else:
+        alpha = int(_min + abs_diff * (_max - _min) / 10)
+
+    if alpha > _max:
+        alpha = _max
+
+    if diff >= 0.1:
+        return (185, 0, 6, alpha)
+    elif diff <= 0.1:
+        return (59, 140, 18, alpha)
+
+    return (41, 41, 41, 200)
+
+
+def calculate_gradient_rgb_from_gray(diff: float) -> tuple[int, int, int, int]:
+    max_diff = 4
+    # 中性色为深灰色
+    neutral_gray_level = 26
+    r, g, b = neutral_gray_level, neutral_gray_level, neutral_gray_level
+
+    if diff > 0:
+        # 上涨：从灰色渐变到红色
+        intensity = min(diff, max_diff) / max_diff
+        # R通道从40增加到255
+        r = int(neutral_gray_level + intensity * (170 - neutral_gray_level))
+    elif diff < 0:
+        # 下跌：从灰色渐变到绿色
+        intensity = min(abs(diff), max_diff) / max_diff
+        # G通道从40增加到255
+        g = int(neutral_gray_level + intensity * (170 - neutral_gray_level))
+
+    return r, g, b, 150
+
+
 async def draw_block(zs_diff: Dict, _type: str = 'diff'):
     if _type == 'single':
         zs_diff['f14'] = zs_diff['f58']
@@ -63,29 +106,34 @@ async def draw_block(zs_diff: Dict, _type: str = 'diff'):
         zs_diff['f100'] = '-'
 
     if isinstance(zs_diff['f3'], str):
-        diff = 0
+        diff: float = 0
     else:
         diff = round(zs_diff['f3'], 2)
 
     zs_img = Image.new('RGBA', (200, 140))
     zs_draw = ImageDraw.Draw(zs_img)
     if diff >= 0:
-        zsc = (140, 18, 22, 55)
+        zsc = calculate_gradient_rgb_from_gray(diff)
         zsc2 = (206, 34, 30)
     else:
-        zsc = (59, 140, 18, 55)
+        zsc = calculate_gradient_rgb_from_gray(diff)
         zsc2 = (36, 206, 30)
 
     zs_draw.rounded_rectangle((15, 13, 185, 127), 0, zsc)
 
-    if len(zs_diff["f14"]) >= 10:
-        t_font = ss_font(18)
+    if len(zs_diff["f14"]) >= 15:
+        name = zs_diff["f14"][:6]
     else:
-        t_font = ss_font(24)
+        if len(zs_diff["f14"]) >= 10:
+            t_font = ss_font(18)
+        else:
+            t_font = ss_font(24)
+
+        name = zs_diff["f14"]
 
     zs_draw.text(
         (100, 99),
-        f'{zs_diff["f14"]}',
+        name,
         (255, 255, 255),
         t_font,
         'mm',

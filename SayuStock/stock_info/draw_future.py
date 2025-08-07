@@ -10,6 +10,7 @@ from .draw_info import draw_block
 from ..utils.image import get_footer
 from ..stock_cloudmap.get_cloudmap import get_data
 from ..utils.constant import bond, whsc, i_code, commodity
+from ..utils.get_OKX import CRYPTO_MAP, get_all_crypto_price
 
 TEXT_PATH = Path(__file__).parent / 'texture2d'
 
@@ -52,8 +53,8 @@ async def draw_future_img():
 
     data2 = await _get_data(commodity)
     data3 = await _get_data(bond, append_jpy)
-    print(data3)
     data4 = await _get_data(whsc)
+    data5 = await get_all_crypto_price()
 
     img = Image.open(TEXT_PATH / 'bg1.jpg').convert('RGBA')
 
@@ -61,61 +62,40 @@ async def draw_future_img():
     oy = 140
 
     data_gz: List[Dict] = data1['data']['diff']
-    index = 0
-    for d in i_code:
-        for i in data_gz:
-            if i['f14'] != d:
-                continue
-            block = await draw_block(i)
-            img.paste(
-                block,
-                (62 + ox * (index % 4), 487 + oy * (index // 4)),
-                block,
-            )
-            index += 1
 
-    index = 0
-    for d in commodity:
-        for i in data2:
-            if data2[i]['f58'] != d:
-                continue
-            block = await draw_block(data2[i], 'single')
-            img.paste(
-                block,
-                (62 + ox * (index % 4), 1007 + oy * (index // 4)),
-                block,
-            )
-            index += 1
+    async def paste_blocks(data_list, keys, y_base, block_type=None):
+        index = 0
+        for d in keys:
+            for i in data_list:
+                item = data_list[i] if isinstance(data_list, dict) else i
+                if item.get('f58', item.get('f14')) != d:
+                    continue
+                block = (
+                    await draw_block(item, block_type)
+                    if block_type
+                    else await draw_block(item)
+                )
+                img.paste(
+                    block,
+                    (62 + ox * (index % 4), y_base + oy * (index // 4)),
+                    block,
+                )
+                index += 1
 
-    index = 0
-    for d in bond:
-        for i in data3:
-            if data3[i]['f58'] != d:
-                continue
-            block = await draw_block(data3[i], 'single')
-            img.paste(
-                block,
-                (62 + ox * (index % 4), 1395 + oy * (index // 4)),
-                block,
-            )
-            index += 1
-
-    index = 0
-    for d in whsc:
-        for i in data4:
-            if data4[i]['f58'] != d:
-                continue
-            block = await draw_block(data4[i], 'single')
-            img.paste(
-                block,
-                (62 + ox * (index % 4), 1773 + oy * (index // 4)),
-                block,
-            )
-            index += 1
+    # 指数
+    await paste_blocks(data_gz, i_code, 487)
+    # 商品
+    await paste_blocks(data2, commodity, 1007, 'single')
+    # 债券
+    await paste_blocks(data3, bond, 1395, 'single')
+    # 外汇
+    await paste_blocks(data4, whsc, 1773, 'single')
+    # 加密货币
+    await paste_blocks(data5, CRYPTO_MAP, 1988, 'single')
 
     footer = get_footer()
 
-    img.paste(footer, (75, 1951), footer)
-    img = await convert_img(img)
+    img.paste(footer, (75, 2135), footer)
+    res = await convert_img(img)
 
-    return img
+    return res
