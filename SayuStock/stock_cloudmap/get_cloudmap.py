@@ -196,21 +196,23 @@ async def get_data(
             kline_code = 101
             out_day = 50
         elif kline_code == '101':
-            out_day = 230
+            out_day = 245
         elif kline_code == '102':
-            out_day = 365
+            out_day = 800
         elif kline_code == '103':
-            out_day = 520
+            out_day = 2000
         elif kline_code == '104':
-            out_day = 580
+            out_day = 4000
         elif kline_code == '105':
-            out_day = 1300
+            out_day = 6000
+        elif kline_code == '106':
+            out_day = 10000
         elif kline_code == '111':
             kline_code = 101
             if start_time:
                 if end_time is None:
                     end_time = now
-            out_day = 720
+            out_day = 365
         else:
             out_day = 1600
 
@@ -1008,5 +1010,4 @@ async def render_image(
         await page.wait_for_selector(".plot-container")
         png_bytes = await page.screenshot(type='png')
         await browser.close()
-        return await convert_img(png_bytes)
         return await convert_img(png_bytes)

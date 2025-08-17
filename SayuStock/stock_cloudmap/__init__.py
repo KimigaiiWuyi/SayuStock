@@ -17,12 +17,18 @@ sv_stock_compare = SV("对比个股", priority=3)
 
 MS_MAP = {
     'k线': '100',
+    '日线': '101',
     '日k': '101',
     '周k': '102',
+    '周线': '102',
     '月k': '103',
+    '月线': '103',
     '季k': '104',
+    '季线': '104',
     '半年k': '105',
+    '半年线': '105',
     '年k': '106',
+    '年线': '106',
 }
 
 
@@ -111,8 +117,13 @@ async def send_compare_img(bot: Bot, ev: Event):
         )
         start_time = datetime.datetime.now() - datetime.timedelta(days=30)
         end_time = datetime.datetime.now()
-    elif '年初至今' in txt or '今年' in txt:
-        txt = txt.replace('年初至今', '').replace('今年', '').strip()
+    elif '年初至今' in txt or '今年以来' in txt or '今年' in txt:
+        txt = (
+            txt.replace('年初至今', '')
+            .replace('今年以来', '')
+            .replace('今年', '')
+            .strip()
+        )
         start_time = datetime.datetime(datetime.datetime.now().year, 1, 1)
         end_time = datetime.datetime.now()
     else:
