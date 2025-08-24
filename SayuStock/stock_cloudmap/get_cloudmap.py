@@ -15,16 +15,16 @@ from plotly.subplots import make_subplots
 from playwright.async_api import async_playwright
 from gsuid_core.utils.image.convert import convert_img
 
-from .utils import fill_kline
+from .get_vix import get_vix_data
 from ..utils.request import get_code_id
 from .get_compare import to_compare_fig
 from ..utils.resource_path import GN_BK_PATH
+from .utils import VIX_LIST, ErroText, fill_kline
 from ..utils.time_range import get_trading_minutes
 from ..stock_config.stock_config import STOCK_CONFIG
 from ..utils.utils import get_file, number_to_chinese
 from ..utils.load_data import mdata, get_full_security_code
 from ..utils.constant import (
-    SP_STOCK,
     STOCK_SECTOR,
     SINGLE_LINE_FIELDS1,
     SINGLE_LINE_FIELDS2,
@@ -40,13 +40,6 @@ scale: int = STOCK_CONFIG.get_config('mapcloud_scale').data
 minutes: int = STOCK_CONFIG.get_config('mapcloud_refresh_minutes').data
 
 GK_DATA = {}
-
-ErroText = {
-    'typemap': '❌未找到对应板块, 请重新输入\n📄例如: \n大盘云图沪深A\n大盘云图创业板 \n等等...',
-    'notData': '❌不存在该板块或市场, 暂无数据...',
-    'notStock': '❌不存在该股票，暂无数据...',
-    'notOpen': '❌该股票未开盘，暂无数据...',
-}
 
 
 async def load_data_from_file(file: Path):
@@ -167,10 +160,40 @@ async def get_data(
     if market == 'A500':
         market = 'A500ETF'
 
-    if market in SP_STOCK:
-        fields = 'f58,f57,f107,f43,f59,f169,f170,f152'
-        url = 'https://push2.eastmoney.com/api/qt/stock/get'
-        params.append(('secid', SP_STOCK[market]))
+    # 确认是否处理的是VIX数据
+    # 处理VIX相关数据
+    vix = ''
+    if market:
+        for i in VIX_LIST:
+            if i in market:
+                vix = VIX_LIST[i]
+                break
+
+    if vix:
+        trends = await get_vix_data(vix)
+        if isinstance(trends, str):
+            return trends
+
+        # 3. 计算涨跌幅
+        price_change_percent = 0.0
+        # 确保趋势数据非空且开盘价不为0，以避免除零错误
+        if len(trends) > 0 and trends[0]['open'] != 0:
+            latest_price = trends[-1]['price']
+            open_price = trends[0]['open']
+            price_change_percent: float = ((latest_price - open_price) / open_price) * 100  # type: ignore
+
+        resp = {
+            'data': {
+                'f43': trends[-1]['price'],
+                'f44': trends[-1]['price'],
+                'f58': vix,
+                'f60': open_price,
+                'f48': 0,
+                'f168': 0,
+                'f170': float(price_change_percent),
+            },
+            'trends': trends,
+        }
     elif sector == STOCK_SECTOR:
         # 个股
         fields = ",".join(SINGLE_STOCK_FIELDS)
@@ -184,6 +207,7 @@ async def get_data(
         file = get_file(secid, 'json', sector)
         params.append(('secid', secid))
     elif sector and sector.startswith('single-stock-kline'):
+        # 个股 日K
         url = 'https://push2his.eastmoney.com/api/qt/stock/kline/get'
         secid = await get_code_id(market)
         if secid is None:
@@ -246,7 +270,7 @@ async def get_data(
             )
             params.append(('end', now.strftime("%Y%m%d")))
     else:
-        # 大盘云图
+        # 大盘云图 概念云图
         url = 'http://push2.eastmoney.com/api/qt/clist/get'
         if market in market_dict:
             fs = market_dict[market]
@@ -270,7 +294,7 @@ async def get_data(
         is_loop = True
 
     if (
-        sector and not sector.startswith('single-stock-kline')
+        not vix and sector and not sector.startswith('single-stock-kline')
     ) or sector is None:
         params.append(('fields', fields))
 
@@ -285,7 +309,8 @@ async def get_data(
             return await load_data_from_file(file)
 
     logger.info("[SayuStock] 开始请求数据...")
-    resp = await req(url, params)
+    if not vix:
+        resp = await req(url, params)
 
     # 这里是在反复请求处理云图数据
     if is_loop and resp['data'] and len(resp['data']['diff']) >= 100:
@@ -316,10 +341,11 @@ async def get_data(
     # 处理个股折线数据
     secid = next((value for key, value in params if key == 'secid'), None)
     if sector == STOCK_SECTOR and secid:
-        trends = await get_single_fig_data(secid)
-        if isinstance(trends, str):
-            return resp
-        resp['trends'] = trends
+        if 'trends' not in resp:
+            trends = await get_single_fig_data(secid)
+            if isinstance(trends, str):
+                return resp
+            resp['trends'] = trends
 
     resp['file_name'] = file.name
 
@@ -474,23 +500,6 @@ async def to_single_fig(
     total_amount = (
         number_to_chinese(raw['f48']) if isinstance(raw['f48'], float) else 0
     )
-
-    '''
-    result = {
-        'MARKET_CAP': raw['f116'],  # 总市值
-        'NEW_PRICE': new_price,  # 最新价
-        'STOCK_NAME': stock_name,  # 名称
-        'GAINED': gained,  # 涨幅
-        'CUSTOM_INFO': custom_info,
-        'PRICE_HISTORY': price_histroy,
-        'TURNOVER_RATE': turnover_rate,
-    }
-    '''
-
-    '''
-    if not gained:
-        return ErroText['notData']
-    '''
 
     code_id = raw_data.get('file_name')
     if code_id:

@@ -7,6 +7,7 @@ from gsuid_core.models import Event
 from gsuid_core.aps import scheduler
 from gsuid_core.logger import logger
 
+from .utils import VIX_LIST
 from ..utils.utils import convert_list
 from .get_cloudmap import render_image
 from ..utils.database.models import SsBind
@@ -74,6 +75,11 @@ async def send_stock_img(bot: Bot, ev: Event):
         if content.startswith(g):
             content = content.replace(g, '')
             kline_code = MS_MAP[g]
+            for vix in VIX_LIST:
+                if vix in content:
+                    return await bot.send(
+                        f'[VIX] 仅支持使用 个股 300vix 方式调用, 暂时无法查看日K等数据'
+                    )
             im = await render_image(
                 content,
                 f'single-stock-kline-{kline_code}',

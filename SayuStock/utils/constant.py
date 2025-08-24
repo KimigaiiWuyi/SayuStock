@@ -30,10 +30,6 @@ trade_detail_dict = {
     # 'f124': '更新时间戳',
 }
 
-SP_STOCK = {
-    # 'A500': '1.000510',
-}
-
 STOCK_SECTOR = 'single-stock'
 SINGLE_LINE_FIELDS1 = [
     "f1",
