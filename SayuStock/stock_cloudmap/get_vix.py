@@ -33,18 +33,26 @@ async def get_vix_data(vix_name: str):
         logger.error("CSV 数据列数不足，无法获取第二列数据。")
         return ErroText['notStock']
 
-    # 获取第二列的列名，通常是 QVIX 或其变体
+    # 获取第二列的列名
     price_col_name = df.columns[1]
 
-    # --- 新增的数据清洗步骤 ---
-    # 1. 剔除 QVIX 列为空的行，inplace=True 表示直接在原 DataFrame 上修改
+    # --- Modified Data Cleaning Steps ---
+    # If the second column is null but the third column has data, fill the second with the third.
+    if len(df.columns) > 2:
+        third_col_name = df.columns[2]
+        # Condition: second column is null AND third column is not null
+        condition = df[price_col_name].isnull() & df[third_col_name].notnull()
+        # For rows matching the condition, copy data from the third to the second column
+        df.loc[condition, price_col_name] = df.loc[condition, third_col_name]
+
+    # 1. Now, drop rows where the price column is still empty
     df.dropna(subset=[price_col_name], inplace=True)
 
-    # 2. 确保时间格式正确并按时间排序，这对于后续取第一行和最后一行数据很重要
+    # 2. Ensure time format is correct and sort by time
     df['Time'] = pd.to_datetime(df['Time'], format='%H:%M:%S')
     df.sort_values(by='Time', inplace=True)
 
-    # 3. 重新填充空值（现在只剩下'Pre','max','min'列的空值）
+    # 3. Fill remaining nulls (now only in 'Pre', 'max', 'min' columns)
     df.fillna(0, inplace=True)
 
     stock_data: List[Dict[str, Union[str, float, int]]] = []
@@ -53,12 +61,11 @@ async def get_vix_data(vix_name: str):
         try:
             stock_data.append(
                 {
-                    'datetime': row['Time'].strftime('%H:%M'),  # type: ignore
+                    'datetime': row['Time'].strftime('%H:%M'),
                     'price': float(str(row[price_col_name]).strip()),
                     'open': float(str(row['Pre']).strip()),
                     'high': float(str(row['max']).strip()),
                     'low': float(str(row['min']).strip()),
-                    # 这些字段在 VIX CSV 数据中不存在，根据原始格式，我们用 0 填充
                     'amount': 0,
                     'money': 0.0,
                     'avg_price': 0.0,
@@ -66,8 +73,6 @@ async def get_vix_data(vix_name: str):
             )
         except (ValueError, KeyError) as e:
             logger.error(f"处理行数据时出错: {e}, 行数据: {row.to_dict()}")
-            continue  # 跳过当前行，继续处理下一行
+            continue
 
-    # 4. 返回处理好的字典列表
-    return stock_data
     return stock_data
