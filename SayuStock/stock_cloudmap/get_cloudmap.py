@@ -17,13 +17,13 @@ from .get_compare import to_compare_fig
 from ..utils.stock.utils import get_file
 from ..utils.time_range import get_trading_minutes
 from ..stock_config.stock_config import STOCK_CONFIG
-from ..utils.utils import int_to_percentage, number_to_chinese
-from ..utils.stock.request import get_gg, get_hotmap, get_mtdata
+from ..utils.stock.request import get_gg, get_vix, get_hotmap, get_mtdata
 from ..utils.constant import (
     ErroText,
     bk_dict,
     market_dict,
 )
+from ..utils.utils import get_vix_name, int_to_percentage, number_to_chinese
 
 view_port: int = STOCK_CONFIG.get_config('mapcloud_viewport').data
 scale: int = STOCK_CONFIG.get_config('mapcloud_scale').data
@@ -587,7 +587,13 @@ async def render_html(
         et_f = end_time.strftime('%Y%m%d') if end_time else ''
         _sp_str = f'compare-stock-{st_f}-{et_f}'
     elif sector == 'single-stock':
-        raw_data = await get_gg(market, 'single-stock', start_time, end_time)
+        m = get_vix_name(market)
+        if m is None:
+            raw_data = await get_gg(
+                market, 'single-stock', start_time, end_time
+            )
+        else:
+            raw_data = await get_vix(m)
     else:
         raw_data = await get_mtdata(market)
 

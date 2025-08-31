@@ -3,6 +3,7 @@ from gsuid_core.bot import Bot
 from gsuid_core.models import Event
 from gsuid_core.logger import logger
 
+from ..utils.utils import get_vix_name
 from ..utils.database.models import SsBind
 from ..utils.stock.request_utils import get_code_id
 
@@ -43,7 +44,13 @@ async def bind_uid(bot: Bot, ev: Event):
         _u = _u.strip()
         if not _u:
             continue
-        code_id = await get_code_id(_u)
+
+        vix_name = get_vix_name(_u)
+        if vix_name is None:
+            code_id = await get_code_id(_u)
+        else:
+            code_id = f'VIX.{vix_name}', vix_name
+
         if not code_id:
             return await bot.send(f'❎[SayuStock] 股票[{_u}]不存在!')
         add_dict[f'{code_id[1]}({code_id[0]})'] = code_id[0]

@@ -99,6 +99,9 @@ def async_file_cache(**get_file_args: Any) -> Callable:
                 f"🚧 [SayuStock] 缓存未命中。正在执行函数 {func.__name__}..."
             )
             result = await func(*args, **kwargs)
+            if isinstance(result, (int, str)):
+                return result
+
             result['file_name'] = file_path.name
 
             # 6. 将结果异步写入文件

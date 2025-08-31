@@ -29,7 +29,6 @@ from ..constant import (
 )
 
 MENU_CACHE = {}
-all_lock = False
 
 
 async def get_bar():
@@ -98,7 +97,7 @@ async def get_vix(vix_name: str):
             'f60': open_price,
             'f48': 0,
             'f168': 0,
-            'f170': float(price_change_percent),
+            'f170': round(float(price_change_percent), 2),
         },
         'trends': trends,
     }
@@ -285,18 +284,6 @@ async def get_mtdata(
     po: int = 1,  # 0为倒序，1为正序
     pz: int = 20,
 ):
-    global all_lock
-    for _ in range(4):
-        if all_lock:
-            await asyncio.sleep(5)
-            continue
-        break
-    else:
-        return '[SayuStock] 请求时长过久...请重试。'
-
-    if is_loop:
-        all_lock = True
-
     params = [
         ('pz', str(pz)),
         ('po', str(po)),
@@ -332,6 +319,8 @@ async def get_mtdata(
                     return ErroText['typemap']
 
     fields = ",".join(trade_detail_dict.keys())
+    if fs.startswith(('bk', 'BK')):
+        fs = f'b:{fs}'
     params.append(('fs', fs))
     params.append(('fields', fields))
 
@@ -357,7 +346,6 @@ async def get_mtdata(
             TASK.clear()
 
         await asyncio.gather(*TASK)
-        all_lock = False
 
     return resp
 
@@ -437,6 +425,9 @@ async def stock_request(
     _json: Optional[Dict[str, Any]] = None,
     data: Optional[FormData] = None,
 ) -> Union[Dict, int]:
+    logger.info(f'[SayuStock] 请求: {url}')
+    logger.info(f'[SayuStock] Params: {params}')
+
     async with ClientSession(
         connector=TCPConnector(verify_ssl=True)
     ) as client:

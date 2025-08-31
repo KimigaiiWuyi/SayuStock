@@ -1,5 +1,14 @@
 from typing import List, Union
 
+from .constant import VIX_LIST
+
+
+def get_vix_name(code: str):
+    code = code.replace(' ', '').upper()
+    for vix in VIX_LIST:
+        if code in vix:
+            return VIX_LIST[vix]
+
 
 def convert_list(input_list: List[str]) -> List[str]:
     result = []

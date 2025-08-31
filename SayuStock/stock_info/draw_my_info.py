@@ -8,8 +8,8 @@ from gsuid_core.utils.fonts.fonts import core_font as ss_font
 
 from ..utils.image import get_footer
 from ..utils.database.models import SsBind
-from ..utils.stock.request import get_gg, get_mtdata
 from ..utils.utils import convert_list, number_to_chinese
+from ..utils.stock.request import get_gg, get_vix, get_mtdata
 
 TEXT_PATH = Path(__file__).parent / 'texture2d'
 DIFF_MAP = {
@@ -29,7 +29,7 @@ async def draw_my_stock_img(ev: Event):
         return '您还未添加自选呢~请输入 添加自选 查看帮助!'
 
     uid = convert_list(uid)
-    data_zs = await get_mtdata('主要指数')
+    data_zs = await get_mtdata('主要指数', pz=100)
     data_hy = await get_mtdata('行业板块')
 
     if isinstance(data_zs, str):
@@ -123,7 +123,12 @@ async def draw_my_stock_img(ev: Event):
 
     async def sg(img: Image.Image, index: int, u: str, alluid: int):
         nonlocal all_p
-        data = await get_gg(u, 'single-stock')
+
+        if u.startswith('VIX.'):
+            data = await get_vix(u[4:])
+        else:
+            data = await get_gg(u, 'single-stock')
+
         if isinstance(data, str):
             return data
         mark_data: dict = data['data']

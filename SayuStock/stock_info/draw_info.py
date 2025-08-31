@@ -160,7 +160,7 @@ async def draw_block(zs_diff: Dict, _type: str = 'diff'):
 
 async def draw_info_img(is_save: bool = False):
     tasks = [
-        get_mtdata('主要指数'),
+        get_mtdata('主要指数', pz=100),
         get_mtdata('行业板块', po=1),
         get_mtdata('行业板块', po=0),
         get_mtdata('概念板块', po=1),
@@ -224,11 +224,28 @@ async def draw_info_img(is_save: bool = False):
         '-1~-2': df[1],
         '-2~-3': df[2],
         '-3~-5': df[3] + df[4],
-        '-5~-10+': df[5] + df[6] + df[7] + df[8] + df[9],
+        '-5~-10': df[5] + df[6] + df[7] + df[8] + df[9],
         '-10+': bars['6'],
     }
-
-    img = Image.new('RGBA', (1700, 2260), (7, 9, 27))
+    up_value = (
+        diff_bar['0~1']
+        + diff_bar['1~2']
+        + diff_bar['2~3']
+        + diff_bar['3~5']
+        + diff_bar['5~10']
+        + diff_bar['10+']
+    )
+    down_value = (
+        diff_bar['0~-1']
+        + diff_bar['-1~-2']
+        + diff_bar['-2~-3']
+        + diff_bar['-3~-5']
+        + diff_bar['-5~-10']
+        + diff_bar['-10+']
+    )
+    h0 = 90
+    h = 1060 + 20 * h0
+    img = Image.new('RGBA', (1700, h), (7, 9, 27))
     img_draw = ImageDraw.Draw(img)
 
     bar1 = Image.open(TEXT_PATH / 'bar1.png')
@@ -282,6 +299,29 @@ async def draw_info_img(is_save: bool = False):
     max_num = max(diff_bar.values())
     max_h = 366
 
+    div_draw.rectangle(
+        (20, 0, 100, 40),
+        (23, 199, 30, 150),
+    )
+    div_draw.rectangle(
+        (750, 0, 830, 40),
+        (187, 26, 26, 150),
+    )
+
+    div_draw.text(
+        (60, 20),
+        f'{down_value}',
+        (255, 255, 255),
+        ss_font(24),
+        'mm',
+    )
+    div_draw.text(
+        (790, 20),
+        f'{up_value}',
+        (255, 255, 255),
+        ss_font(24),
+        'mm',
+    )
     for dindex, ij_num in enumerate(diff_bar.values().__reversed__()):
         if dindex <= 5:
             color = (23, 199, 30)
@@ -388,29 +428,34 @@ async def draw_info_img(is_save: bool = False):
 
     img.paste(title, (0, -30), title)
 
-    await draw_bar(data_hy_z[:20], img, 10, 980)
-    await draw_bar(data_hy_f[:20], img, 415, 980)
+    await draw_bar(data_hy_z[:20], img, 10, 980, h0)
+    await draw_bar(data_hy_f[:20], img, 415, 980, h0)
 
-    await draw_bar(data_gn_z[:20], img, 860, 980)
-    await draw_bar(data_gn_f[:20], img, 1265, 980)
+    await draw_bar(data_gn_z[:20], img, 860, 980, h0)
+    await draw_bar(data_gn_f[:20], img, 1265, 980, h0)
 
     footer = get_footer()
-    img.paste(footer, (425, 2210), footer)
+    img.paste(footer, (425, h - 50), footer)
 
     res = await convert_img(img)
     return res
 
 
-async def draw_bar(sd: List[dict], img: Image.Image, start: int, y: int):
+async def draw_bar(
+    sd: List[dict], img: Image.Image, start: int, y: int, h: int = 90
+):
     ls = len(sd)
     for hindex, hy in enumerate(sd):
         hy_diff = hy['f3']
-        hy_img = Image.new('RGBA', (425, 60))
+        hy_img = Image.new('RGBA', (425, h))
         base_o = int(255 * (((ls + 1) - hindex) / ls))
         if hy_diff >= 0:
             hyc2 = (140, 18, 22, base_o)
+            dd = (201, 26, 32, 200)
         else:
             hyc2 = (59, 140, 18, base_o)
+            dd = (25, 199, 16, 200)
+
         hy_draw = ImageDraw.Draw(hy_img)
         hy_draw.rounded_rectangle((23, 2, 403, 57), 0, hyc2)
         hy_draw.text(
@@ -419,6 +464,23 @@ async def draw_bar(sd: List[dict], img: Image.Image, start: int, y: int):
             (255, 255, 255),
             ss_font(30),
             'lm',
+        )
+
+        hy_draw.text(
+            (53, 75),
+            f'{hy["f128"] if hy_diff >= 0 else hy["f207"]}',
+            dd,
+            # (140, 18, 22) if hy_diff >= 0 else (59, 140, 18),
+            ss_font(24),
+            'lm',
+        )
+        hy_draw.text(
+            (384, 75),
+            f'{"+" if hy_diff >= 0 else ""}{hy["f136"] if hy_diff >= 0 else hy["f222"]}%',
+            dd,
+            # (140, 18, 22) if hy_diff >= 0 else (59, 140, 18),
+            ss_font(24),
+            'rm',
         )
 
         hy_draw.text(
@@ -431,6 +493,6 @@ async def draw_bar(sd: List[dict], img: Image.Image, start: int, y: int):
 
         img.paste(
             hy_img,
-            (start, y + 60 * hindex),
+            (start, y + h * hindex),
             hy_img,
         )
