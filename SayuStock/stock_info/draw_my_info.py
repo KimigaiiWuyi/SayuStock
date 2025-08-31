@@ -8,7 +8,7 @@ from gsuid_core.utils.fonts.fonts import core_font as ss_font
 
 from ..utils.image import get_footer
 from ..utils.database.models import SsBind
-from ..stock_cloudmap.get_cloudmap import get_data
+from ..utils.stock.request import get_gg, get_mtdata
 from ..utils.utils import convert_list, number_to_chinese
 
 TEXT_PATH = Path(__file__).parent / 'texture2d'
@@ -29,17 +29,13 @@ async def draw_my_stock_img(ev: Event):
         return '您还未添加自选呢~请输入 添加自选 查看帮助!'
 
     uid = convert_list(uid)
-    data_zs = await get_data('主要指数')
-    data_hy = await get_data('行业板块')
-    # raw_data = await get_data()
+    data_zs = await get_mtdata('主要指数')
+    data_hy = await get_mtdata('行业板块')
 
     if isinstance(data_zs, str):
-
         return data_zs
     if isinstance(data_hy, str):
         return data_hy
-    # if isinstance(raw_data, str):
-    #    return raw_data
 
     img = Image.new(
         'RGBA',
@@ -127,7 +123,7 @@ async def draw_my_stock_img(ev: Event):
 
     async def sg(img: Image.Image, index: int, u: str, alluid: int):
         nonlocal all_p
-        data = await get_data(u, 'single-stock')
+        data = await get_gg(u, 'single-stock')
         if isinstance(data, str):
             return data
         mark_data: dict = data['data']

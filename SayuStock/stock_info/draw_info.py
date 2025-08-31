@@ -1,15 +1,16 @@
+import asyncio
 from pathlib import Path
 from datetime import datetime
-from typing import Dict, List, Tuple
+from typing import Dict, List, Tuple, cast
 
 from PIL import Image, ImageOps, ImageDraw
 from gsuid_core.utils.image.convert import convert_img
 from gsuid_core.utils.fonts.fonts import core_font as ss_font
 
 from ..utils.image import get_footer
-from ..stock_cloudmap.get_cloudmap import get_data
-from ..utils.utils import save_history, number_to_chinese
-from ..utils.request import get_hours_from_em, get_image_from_em
+from ..utils.utils import number_to_chinese
+from ..utils.stock.request import get_gg, get_bar, get_mtdata
+from ..utils.stock.request_utils import get_hours_from_em, get_image_from_em
 
 TEXT_PATH = Path(__file__).parent / 'texture2d'
 DIFF_MAP = {
@@ -158,31 +159,38 @@ async def draw_block(zs_diff: Dict, _type: str = 'diff'):
 
 
 async def draw_info_img(is_save: bool = False):
-    data_zs = await get_data('主要指数')
-    data_hy = await get_data('行业板块')
-    data_gn = await get_data('概念板块')
-    data_au = await get_data(
-        '118.AU9999',
-        'single-stock',
-    )
-    data_tlm = await get_data(
-        '220.TLM',
-        'single-stock',
-    )
-    raw_data = await get_data()
+    tasks = [
+        get_mtdata('主要指数'),
+        get_mtdata('行业板块', po=1),
+        get_mtdata('行业板块', po=0),
+        get_mtdata('概念板块', po=1),
+        get_mtdata('概念板块', po=0),
+        get_gg('118.AU9999', 'single-stock'),
+        get_gg('220.TLM', 'single-stock'),
+        get_bar(),
+    ]
 
-    if isinstance(data_zs, str):
-        return data_zs
-    if isinstance(data_hy, str):
-        return data_hy
-    if isinstance(data_gn, str):
-        return data_gn
-    if isinstance(raw_data, str):
-        return raw_data
-    if isinstance(data_au, str):
-        return data_au
-    if isinstance(data_tlm, str):
-        return data_tlm
+    results = await asyncio.gather(*tasks)
+
+    for result in results:
+        if isinstance(result, str):
+            return result
+
+    (
+        data_zs,
+        data_hy_z,
+        data_hy_f,
+        data_gn_z,
+        data_gn_f,
+        data_au,
+        data_tlm,
+        bars,
+    ) = cast(List[Dict], results)
+
+    data_hy_z = data_hy_z['data']['diff']
+    data_hy_f = data_hy_f['data']['diff']
+    data_gn_z = data_gn_z['data']['diff']
+    data_gn_f = data_gn_f['data']['diff']
 
     data_aud: Dict = data_au['data']
     data_tlmd: Dict = data_tlm['data']
@@ -202,29 +210,23 @@ async def draw_info_img(is_save: bool = False):
     data_zs['data']['diff'].append(data_aud)
     data_zs['data']['diff'].append(data_tlmd)
 
-    diffs = {
-        10: [],
-        5: [],
-        3: [],
-        2: [],
-        1: [],
-        0: [],
-        -1: [],
-        -2: [],
-        -3: [],
-        -5: [],
-        -10: [],
-        -100: [],
+    zf: List[int] = bars['2']
+    df: List[int] = bars['3']
+    diff_bar: Dict[str, int] = {
+        '10+': bars['5'],
+        '5~10': zf[5] + zf[6] + zf[7] + zf[8] + zf[9],
+        '3~5': zf[3] + zf[4],
+        '2~3': zf[2],
+        '1~2': zf[1],
+        '0~1': zf[0],
+        # '0': bars['4'],
+        '0~-1': df[0],
+        '-1~-2': df[1],
+        '-2~-3': df[2],
+        '-3~-5': df[3] + df[4],
+        '-5~-10+': df[5] + df[6] + df[7] + df[8] + df[9],
+        '-10+': bars['6'],
     }
-    all_f6: float = 0
-    for i in raw_data['data']['diff']:
-        if i['f6'] != '-':
-            all_f6 += i['f6']
-        if i['f20'] != '-' and i['f100'] != '-' and i['f3'] != '-':
-            for _d in diffs:
-                if i['f3'] >= _d:
-                    diffs[_d].append(i)
-                    break
 
     img = Image.new('RGBA', (1700, 2260), (7, 9, 27))
     img_draw = ImageDraw.Draw(img)
@@ -277,19 +279,15 @@ async def draw_info_img(is_save: bool = False):
     # 分布统计
     div = Image.open(TEXT_PATH / 'div.png')
     div_draw = ImageDraw.Draw(div)
-    max_num = 0
+    max_num = max(diff_bar.values())
     max_h = 366
-    for ij in diffs:
-        ij_num = len(diffs[ij])
-        if ij_num > max_num:
-            max_num = ij_num
 
-    for dindex, ij in enumerate(diffs.__reversed__()):
-        if ij < 0:
+    for dindex, ij_num in enumerate(diff_bar.values().__reversed__()):
+        if dindex <= 5:
             color = (23, 199, 30)
         else:
             color = (187, 26, 26)
-        ij_num = len(diffs[ij])
+
         if ij_num == 0:
             continue
         offset = dindex * 66
@@ -348,10 +346,7 @@ async def draw_info_img(is_save: bool = False):
         'mm',
     )
 
-    if is_save:
-        save_history(all_f6)
-
-    f6diff = await get_hours_from_em()
+    all_f6, f6diff = await get_hours_from_em()
     all_f6_str = number_to_chinese(all_f6)
 
     if f6diff > 0:
@@ -393,22 +388,11 @@ async def draw_info_img(is_save: bool = False):
 
     img.paste(title, (0, -30), title)
 
-    sorted_hy = sorted(
-        data_hy['data']['diff'],
-        key=lambda x: x['f3'],
-        reverse=True,
-    )
-    sorted_gn = sorted(
-        data_gn['data']['diff'],
-        key=lambda x: x['f3'],
-        reverse=True,
-    )
+    await draw_bar(data_hy_z[:20], img, 10, 980)
+    await draw_bar(data_hy_f[:20], img, 415, 980)
 
-    await draw_bar(sorted_hy[:20], img, 10, 980)
-    await draw_bar(sorted_hy[-1:-21:-1], img, 415, 980)
-
-    await draw_bar(sorted_gn[:20], img, 860, 980)
-    await draw_bar(sorted_gn[-1:-21:-1], img, 1265, 980)
+    await draw_bar(data_gn_z[:20], img, 860, 980)
+    await draw_bar(data_gn_f[:20], img, 1265, 980)
 
     footer = get_footer()
     img.paste(footer, (425, 2210), footer)

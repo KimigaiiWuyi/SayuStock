@@ -8,7 +8,7 @@ from gsuid_core.utils.image.convert import convert_img
 from .get_jp_data import get_jpy
 from .draw_info import draw_block
 from ..utils.image import get_footer
-from ..stock_cloudmap.get_cloudmap import get_data
+from ..utils.stock.request import get_gg, get_mtdata
 from ..utils.constant import bond, whsc, i_code, commodity
 from ..utils.get_OKX import CRYPTO_MAP, get_all_crypto_price
 
@@ -16,7 +16,7 @@ TEXT_PATH = Path(__file__).parent / 'texture2d'
 
 
 async def __get_data(result: Dict, stock: str):
-    data = await get_data(stock, 'single-stock')
+    data = await get_gg(stock, 'single-stock')
     if isinstance(data, str):
         return data
     result[data['data']['f58']] = data['data']
@@ -46,7 +46,7 @@ async def append_jpy(result: Dict):
 
 
 async def draw_future_img():
-    data1 = await get_data('国际市场')
+    data1 = await get_mtdata('国际市场')
 
     if isinstance(data1, str):
         return data1

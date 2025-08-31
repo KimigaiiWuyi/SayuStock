@@ -3,8 +3,8 @@ from gsuid_core.bot import Bot
 from gsuid_core.models import Event
 from gsuid_core.logger import logger
 
-from ..utils.request import get_code_id
 from ..utils.database.models import SsBind
+from ..utils.stock.request_utils import get_code_id
 
 sv_user_info = SV('股票用户信息', priority=1)
 

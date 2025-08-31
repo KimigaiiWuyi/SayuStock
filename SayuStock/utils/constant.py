@@ -1,6 +1,44 @@
 AL = 'zh-CN,zh;q=0.8,zh-TW;q=0.7,zh-HK;q=0.5,en-US;q=0.3,en;q=0.2'
 UA = 'Mozilla/5.0 (Windows NT 6.3; Trident/7.0; Touch; rv:11.0) like Gecko'
 
+ErroText = {
+    'typemap': '❌未找到对应板块, 请重新输入\n📄例如: \n大盘云图沪深A\n大盘云图创业板 \n等等...',
+    'notData': '❌不存在该板块或市场, 暂无数据...',
+    'notStock': '❌不存在该股票，暂无数据...',
+    'notOpen': '❌该股票未开盘，暂无数据...',
+}
+
+VIX_LIST = {
+    '300ETFVIX': 'vix300',
+    '沪深300VIX': 'vix300',
+    'HS300VIX': 'vix300',
+    '300VIX': 'vix300',
+    'VIX300': 'vix300',
+    '300IV': 'vix300',
+    'IV300': 'vix300',
+    '50VIX': 'vix50',
+    '50ETFVIX': 'vix50',
+    '50IV': 'vix50',
+    'VIX50': 'vix50',
+    'IV50': 'vix50',
+    '1000VIX': 'vixindex1000',
+    'VIX1000': 'vixindex1000',
+    'IV1000': 'vixindex1000',
+    '1000ETFVIX': 'vixindex1000',
+    '科创板VIX': 'vixkcb',
+    '科创版VIX': 'vixkcb',
+    'VIX科创版': 'vixkcb',
+    'VIX科创板': 'vixkcb',
+    'VIXKCB': 'vixkcb',
+    'KCBVIX': 'vixkcb',
+    '创业板VIX': 'vixcyb',
+    'VIX创业板': 'vixcyb',
+    '创业板IV': 'vixcyb',
+    'IV创业板': 'vixcyb',
+    '创业版VIX': 'vixcyb',
+    'VIX创业版': 'vixcyb',
+}
+
 request_header = {
     'User-Agent': UA,
     'Accept': '*/*',
@@ -30,7 +68,6 @@ trade_detail_dict = {
     # 'f124': '更新时间戳',
 }
 
-STOCK_SECTOR = 'single-stock'
 SINGLE_LINE_FIELDS1 = [
     "f1",
     "f2",
@@ -194,6 +231,8 @@ market_dict = {
     '期货': 'm:113,m:114,m:115,m:8,m:142',
     'ETF': 'b:MK0021,b:MK0022,b:MK0023,b:MK0024',
     'LOF': 'b:MK0404,b:MK0405,b:MK0406,b:MK0407',
+    '概念S': 'm:90+t:3+f:!50',
+    '行业S': 'm:90+t:2+f:!50',
 }
 
 bk_dict = {

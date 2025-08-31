@@ -2,11 +2,6 @@ import json
 from pathlib import Path
 from decimal import Decimal
 
-output_data = Path(__file__).parent / 'output.json'
-
-with output_data.open('r', encoding='utf-8') as f:
-    mdata = json.load(f)
-
 SZMarket = "SA"
 SHMarket = "HA"
 

@@ -7,11 +7,11 @@ from gsuid_core.models import Event
 from gsuid_core.aps import scheduler
 from gsuid_core.logger import logger
 
-from .utils import VIX_LIST
+from ..utils.constant import VIX_LIST
 from ..utils.utils import convert_list
 from .get_cloudmap import render_image
 from ..utils.database.models import SsBind
-from ..utils.resource_path import DATA_PATH, GN_BK_PATH
+from ..utils.resource_path import DATA_PATH
 
 sv_stock_cloudmap = SV("大盘云图")
 sv_stock_compare = SV("对比个股", priority=3)
@@ -40,8 +40,6 @@ async def delete_all_data():
     for i in DATA_PATH.iterdir():
         if i.is_file():
             i.unlink()
-    if GN_BK_PATH.exists():
-        GN_BK_PATH.unlink()
 
     logger.success("[SayuStock] [删除全部缓存数据] 执行完成！")
 
@@ -49,21 +47,21 @@ async def delete_all_data():
 @sv_stock_cloudmap.on_command(("大盘云图"))
 async def send_cloudmap_img(bot: Bot, ev: Event):
     logger.info("开始执行[大盘云图]")
-    im = await render_image(ev.text.strip())
+    im = await render_image('沪深A', '大盘云图')
     await bot.send(im)
 
 
 @sv_stock_cloudmap.on_command(("板块云图", "行业云图", "行业板块"))
 async def send_typemap_img(bot: Bot, ev: Event):
     logger.info("开始执行[板块云图]")
-    im = await render_image('沪深A', ev.text.strip())
+    im = await render_image('行业云图', ev.text.strip())
     await bot.send(im)
 
 
 @sv_stock_cloudmap.on_command(("概念云图", "概念板块云图", "概念板块"))
 async def send_gn_img(bot: Bot, ev: Event):
     logger.info("开始执行[概念云图]")
-    im = await render_image(ev.text.strip(), ev.text.strip())
+    im = await render_image('概念云图', ev.text.strip())
     await bot.send(im)
 
 

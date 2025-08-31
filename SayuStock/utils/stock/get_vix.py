@@ -5,7 +5,7 @@ import aiohttp
 import pandas as pd
 from gsuid_core.logger import logger
 
-from .utils import ErroText
+from ..constant import ErroText
 
 URL = 'https://1.optbbs.com/d/csv/d/{}.csv'
 
@@ -36,32 +36,24 @@ async def get_vix_data(vix_name: str):
     # 获取第二列的列名
     price_col_name = df.columns[1]
 
-    # --- Modified Data Cleaning Steps ---
-    # If the second column is null but the third column has data, fill the second with the third.
     if len(df.columns) > 2:
         third_col_name = df.columns[2]
-        # Condition: second column is null AND third column is not null
         condition = df[price_col_name].isnull() & df[third_col_name].notnull()
-        # For rows matching the condition, copy data from the third to the second column
         df.loc[condition, price_col_name] = df.loc[condition, third_col_name]
 
-    # 1. Now, drop rows where the price column is still empty
-    df.dropna(subset=[price_col_name], inplace=True)
+    df.dropna(subset=[price_col_name], inplace=True)  # type: ignore
 
-    # 2. Ensure time format is correct and sort by time
     df['Time'] = pd.to_datetime(df['Time'], format='%H:%M:%S')
     df.sort_values(by='Time', inplace=True)
 
-    # 3. Fill remaining nulls (now only in 'Pre', 'max', 'min' columns)
     df.fillna(0, inplace=True)
-
     stock_data: List[Dict[str, Union[str, float, int]]] = []
 
     for _, row in df.iterrows():
         try:
             stock_data.append(
                 {
-                    'datetime': row['Time'].strftime('%H:%M'),
+                    'datetime': row['Time'].strftime('%H:%M'),  # type: ignore
                     'price': float(str(row[price_col_name]).strip()),
                     'open': float(str(row['Pre']).strip()),
                     'high': float(str(row['max']).strip()),

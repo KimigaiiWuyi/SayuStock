@@ -1,12 +1,9 @@
-import json
-import random
-import asyncio
+import math
 from pathlib import Path
+from collections import defaultdict
 from datetime import datetime, timedelta
 from typing import Dict, List, Union, Optional
 
-import aiohttp
-import aiofiles
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
@@ -15,368 +12,21 @@ from plotly.subplots import make_subplots
 from playwright.async_api import async_playwright
 from gsuid_core.utils.image.convert import convert_img
 
-from .get_vix import get_vix_data
-from ..utils.request import get_code_id
+from .utils import fill_kline
 from .get_compare import to_compare_fig
-from ..utils.resource_path import GN_BK_PATH
-from .utils import VIX_LIST, ErroText, fill_kline
+from ..utils.stock.utils import get_file
 from ..utils.time_range import get_trading_minutes
 from ..stock_config.stock_config import STOCK_CONFIG
-from ..utils.utils import get_file, number_to_chinese
-from ..utils.load_data import mdata, get_full_security_code
+from ..utils.utils import int_to_percentage, number_to_chinese
+from ..utils.stock.request import get_gg, get_hotmap, get_mtdata
 from ..utils.constant import (
-    STOCK_SECTOR,
-    SINGLE_LINE_FIELDS1,
-    SINGLE_LINE_FIELDS2,
-    SINGLE_STOCK_FIELDS,
+    ErroText,
     bk_dict,
     market_dict,
-    request_header,
-    trade_detail_dict,
 )
 
 view_port: int = STOCK_CONFIG.get_config('mapcloud_viewport').data
 scale: int = STOCK_CONFIG.get_config('mapcloud_scale').data
-minutes: int = STOCK_CONFIG.get_config('mapcloud_refresh_minutes').data
-
-GK_DATA = {}
-
-
-async def load_data_from_file(file: Path):
-    async with aiofiles.open(file, 'r', encoding='UTF-8') as f:
-        data = json.loads(await f.read())
-    data['file_name'] = file.name
-    return data
-
-
-async def load_bk_data():
-    global GK_DATA
-    _GK_DATA = {}
-    if GN_BK_PATH.exists():
-        _GK_DATA = await load_data_from_file(GN_BK_PATH)
-    for i in _GK_DATA:
-        GK_DATA[i.upper()] = _GK_DATA[i]
-    return GK_DATA
-
-
-# 获取个股折线数据
-async def get_single_fig_data(secid: str):
-    params = []
-    url = "https://push2.eastmoney.com/api/qt/stock/trends2/get"
-    fields1 = ",".join(SINGLE_LINE_FIELDS1)
-    fields2 = ",".join(SINGLE_LINE_FIELDS2)
-    params.append(('fields1', fields1))
-    params.append(('fields2', fields2))
-    params.append(('secid', secid))
-    async with aiohttp.ClientSession() as session:
-        async with session.get(
-            url,
-            headers=request_header,
-            params=params,
-        ) as response:
-            resp = await response.json()
-    # 处理获取个股数据错误
-    if resp['data'] is None:
-        return ErroText['notStock']
-    stock_line_data: list[str] = resp['data']['trends']
-    stock_data: list[Dict[str, Union[str, float, int]]] = []
-    for item in stock_line_data:
-        # 原始数据格式
-        # "2024-12-31 14:05,15.63,15.62,15.63,15.61,3300,5154770.00,15.672"
-        parts = item.split(',')
-        # 原始时间格式为'2024-12-31 14:05'
-        datetime = parts[0].split(' ') if len(parts[0]) > 0 else ['', '']
-        stock_data.append(
-            {
-                'datetime': datetime[1],
-                'price': float(parts[1]),
-                'open': float(parts[2]),
-                'high': float(parts[3]),
-                'low': float(parts[4]),
-                'amount': int(parts[5]),
-                'money': float(parts[6]),
-                'avg_price': float(parts[7]),
-            }
-        )
-    return stock_data
-
-
-async def req(url: str, params: List[tuple]):
-    async with aiohttp.ClientSession() as session:
-        logger.debug(f'[SayuStock] 请求参数: URL: {url}')
-        logger.debug(f'[SayuStock] 请求参数: params: {params}')
-        async with session.get(
-            url,
-            headers=request_header,
-            params=params,
-        ) as response:
-            text = await response.text()
-            logger.debug(text)
-            resp = json.loads(text)
-            return resp
-
-
-async def _get_data(
-    resp: Dict,
-    url: str,
-    params: List[tuple],
-    stop_event: asyncio.Event,
-):
-    if stop_event.is_set():
-        return None
-    await asyncio.sleep(random.uniform(0.4, 0.9))
-    resp2 = await req(url, params)
-    if resp2['data']:
-        resp['data']['diff'].extend(resp2['data']['diff'])
-        if len(resp2['data']['diff']) < 100:
-            stop_event.set()
-    else:
-        stop_event.set()
-
-
-async def get_data(
-    market: str = '沪深A',
-    sector: Optional[str] = None,
-    start_time: Optional[datetime] = None,
-    end_time: Optional[datetime] = None,
-) -> Union[Dict, str]:
-    market = market.upper()
-    if not market:
-        market = '沪深A'
-
-    file = get_file(market, 'json')
-
-    is_loop = False
-    params = [
-        ('pz', '200'),
-        ('po', '1'),
-        ('np', '1'),
-        ('fltt', '2'),
-        ('invt', '2'),
-        ('fid', 'f3'),
-        ('pn', '1'),
-    ]
-
-    if market == 'A500':
-        market = 'A500ETF'
-
-    # 确认是否处理的是VIX数据
-    # 处理VIX相关数据
-    vix = ''
-    if market:
-        for i in VIX_LIST:
-            if i in market:
-                vix = VIX_LIST[i]
-                break
-
-    if vix:
-        trends = await get_vix_data(vix)
-        if isinstance(trends, str):
-            return trends
-
-        # 3. 计算涨跌幅
-        price_change_percent = 0.0
-        # 确保趋势数据非空且开盘价不为0，以避免除零错误
-        if len(trends) > 0:
-            latest_price = trends[-1]['price']
-            open_price = (
-                trends[0]['open']
-                if trends[0]['open'] != 0
-                else trends[0]['price']
-            )
-
-            price_change_percent: float = ((latest_price - open_price) / open_price) * 100  # type: ignore
-
-        resp = {
-            'data': {
-                'f43': trends[-1]['price'],
-                'f44': trends[-1]['price'],
-                'f58': vix,
-                'f60': open_price,
-                'f48': 0,
-                'f168': 0,
-                'f170': float(price_change_percent),
-            },
-            'trends': trends,
-        }
-    elif sector == STOCK_SECTOR:
-        # 个股
-        fields = ",".join(SINGLE_STOCK_FIELDS)
-        url = 'https://push2.eastmoney.com/api/qt/stock/get'
-        logger.info(f'[SayuStock] get_single_fig_data code: {market}')
-        secid = await get_code_id(market)
-        if secid is None:
-            return ErroText['notStock']
-        logger.info(f'[SayuStock] get_single_fig_data secid: {secid}')
-        secid = get_full_security_code(secid[0])
-        file = get_file(secid, 'json', sector)
-        params.append(('secid', secid))
-    elif sector and sector.startswith('single-stock-kline'):
-        # 个股 日K
-        url = 'https://push2his.eastmoney.com/api/qt/stock/kline/get'
-        secid = await get_code_id(market)
-        if secid is None:
-            return ErroText['notStock']
-        logger.info(f'[SayuStock] get_single_fig_data secid: {secid}')
-        secid = get_full_security_code(secid[0])
-        now = datetime.now()
-        kline_code = sector.split('-')[-1]
-        if kline_code == '100':
-            kline_code = 101
-            out_day = 50
-        elif kline_code == '101':
-            out_day = 245
-        elif kline_code == '102':
-            out_day = 800
-        elif kline_code == '103':
-            out_day = 2000
-        elif kline_code == '104':
-            out_day = 4000
-        elif kline_code == '105':
-            out_day = 6000
-        elif kline_code == '106':
-            out_day = 10000
-        elif kline_code == '111':
-            kline_code = 101
-            if start_time:
-                if end_time is None:
-                    end_time = now
-            out_day = 365
-        else:
-            out_day = 1600
-
-        st_f = start_time.strftime('%Y%m%d') if start_time else ''
-        et_f = end_time.strftime('%Y%m%d') if end_time else ''
-        file = get_file(
-            secid,
-            'json',
-            sector,
-            f"{st_f}-{et_f}",
-        )
-
-        params = [
-            ('fields1', 'f1,f2,f3,f4,f5,f6,f7,f8,f9,f10,f11,f12,f13'),
-            ('fields2', 'f51,f52,f53,f54,f55,f56,f57,f58,f59,f60,f61'),
-            ('rtntype', '6'),
-            ('klt', kline_code),
-            ('fqt', '1'),
-            (
-                'secid',
-                secid,
-            ),
-        ]
-
-        if start_time and end_time:
-            params.append(('beg', start_time.strftime('%Y%m%d')))
-            params.append(('end', end_time.strftime('%Y%m%d')))
-        else:
-            params.append(
-                ('beg', (now - timedelta(days=out_day)).strftime("%Y%m%d"))
-            )
-            params.append(('end', now.strftime("%Y%m%d")))
-    else:
-        # 大盘云图 概念云图
-        url = 'http://push2.eastmoney.com/api/qt/clist/get'
-        if market in market_dict:
-            fs = market_dict[market]
-        else:
-            # 概念云图
-            if not GK_DATA:
-                await load_bk_data()
-
-            if market in GK_DATA:
-                fs = GK_DATA[market]
-            else:
-                for i in GK_DATA:
-                    if market in i:
-                        fs = GK_DATA[i]
-                        break
-                else:
-                    return ErroText['typemap']
-
-        fields = ",".join(trade_detail_dict.keys())
-        params.append(('fs', fs))
-        is_loop = True
-
-    if (
-        not vix and sector and not sector.startswith('single-stock-kline')
-    ) or sector is None:
-        params.append(('fields', fields))
-
-    # 检查当前目录下是否有符合条件的文件
-    if file.exists():
-        # 检查文件的修改时间是否在一分钟以内
-        file_mod_time = datetime.fromtimestamp(file.stat().st_mtime)
-        if datetime.now() - file_mod_time < timedelta(minutes=minutes):
-            logger.info(
-                f"[SayuStock] json文件在{minutes}分钟内，直接返回文件数据。"
-            )
-            return await load_data_from_file(file)
-
-    logger.info("[SayuStock] 开始请求数据...")
-    if not vix:
-        resp = await req(url, params)
-
-    # 这里是在反复请求处理云图数据
-    if is_loop and resp['data'] and len(resp['data']['diff']) >= 100:
-        stop_event = asyncio.Event()
-        pn = 2
-        TASK = []
-        params.remove(('pn', '1'))
-        params.remove(('pz', '200'))
-        params.append(('pz', str(len(resp['data']['diff']))))
-
-        while not stop_event.is_set():
-            for _ in range(10):
-                _params = params.copy()
-                _params.append(('pn', str(pn)))
-                TASK.append(_get_data(resp, url, _params, stop_event))
-                pn += 1
-            await asyncio.gather(*TASK)
-            TASK.clear()
-
-        await asyncio.gather(*TASK)
-
-    logger.info("[SayuStock] 数据获取完成...")
-
-    # 处理获取个股数据错误
-    if sector == STOCK_SECTOR and resp['data'] is None:
-        return ErroText['notStock']
-
-    # 处理个股折线数据
-    secid = next((value for key, value in params if key == 'secid'), None)
-    if sector == STOCK_SECTOR and secid:
-        if 'trends' not in resp:
-            trends = await get_single_fig_data(secid)
-            if isinstance(trends, str):
-                return resp
-            resp['trends'] = trends
-
-    resp['file_name'] = file.name
-
-    # 写入文件
-    logger.info("[SayuStock] 开始写入文件...")
-    async with aiofiles.open(file, 'w', encoding='UTF-8') as f:
-        await f.write(json.dumps(resp, ensure_ascii=False, indent=4))
-
-    if market == '概念板块':
-        sresult = {}
-        for a in resp['data']['diff']:
-            sresult[a['f14']] = f"b:{a['f12']}+f:!50"
-        async with aiofiles.open(GN_BK_PATH, 'w', encoding='UTF-8') as f:
-            await f.write(json.dumps(sresult, ensure_ascii=False, indent=4))
-
-        if not GK_DATA:
-            await load_bk_data()
-
-    return resp
-
-
-def int_to_percentage(value: Union[int, str, float]) -> str:
-    if isinstance(value, str):
-        return '-%'
-    sign = '+' if value >= 0 else ''
-    return f"{sign}{value:.2f}%"
 
 
 async def to_single_fig_kline(
@@ -731,81 +381,91 @@ async def to_single_fig(
 async def to_fig(
     raw_data: Dict,
     sector: Optional[str] = None,
-    sp: Optional[str] = None,
     layer: int = 2,
 ):
-    result = {}
+    '''
+    layer = 2 是按照F100分类，大盘云图
 
-    for i in raw_data['data']['diff']:
-        if i['f14'].startswith(('ST', '*ST')):
-            i['f100'] = 'ST'
+    layer = 1 就全部都在一起，概念云图
+    '''
+    all_stocks = []
+    for item in raw_data.get('data', {}).get('diff', []):
+        if (
+            item.get('f20') == '-'
+            or item.get('f100') == '-'
+            or item.get('f3') == '-'
+        ):
+            continue
 
-        if layer == 1:
-            i['f100'] = sector
+        category_name = item['f100']
+        if item['f14'].startswith(('ST', '*ST')):
+            category_name = 'ST'
 
-        if i['f20'] != '-' and i['f100'] != '-' and i['f3'] != '-':
-            # stock = {'市值': i['f20'], '股票名称': i['f14']}
-            if i['f100'] not in result:
-                result[i['f100']] = {
-                    '总市值': i['f20'],
-                    '个股': [i],
-                    'name': [i['f14']],
-                }
-            else:
-                if i['f14'] not in result[i['f100']]['name']:
-                    result[i['f100']]['总市值'] += i['f20']
-                    result[i['f100']]['个股'].append(i)
-                    result[i['f100']]['name'].append(i['f14'])
-
-    if sector is None:
-        fit = 0.2
-    elif sector and layer == 1 and len(result[sector]) > 100:
-        scale = 1 - (len(result[sector]) - 100) * 0.7 / 500
-        fit = max(0.3, min(scale, 1))
-    else:
-        fit = 1
-
-    if fit != 1:
-        for r in result:
-            stock_item = result[r]['个股']
-            sorted_stock = sorted(
-                stock_item, key=lambda x: x['f20'], reverse=True
-            )
-            num_items = len(sorted_stock)
-            num_to_extract = int(num_items * fit)
-            subset_data = sorted_stock[:num_to_extract]
-            result[r]['个股'] = subset_data
-
-    sorted_result = dict(
-        sorted(
-            result.items(),
-            key=lambda item: item[1]['总市值'],
-            reverse=True,
+        all_stocks.append(
+            {
+                'category': category_name,
+                'name': item['f14'],
+                'value': item['f20'],
+                'diff_val': item['f3'],
+                'code': item['f12'],
+            }
         )
+
+    if not all_stocks:
+        return ErroText['notData']
+
+    grouped_by_category = defaultdict(list)
+    for stock in all_stocks:
+        grouped_by_category[stock['category']].append(stock)
+
+    final_stock_list = []
+    categories_to_process = (
+        [sector]
+        if sector and sector in grouped_by_category
+        else grouped_by_category.keys()
     )
 
-    category = []
-    stock_name = []
-    values = []
-    diff = []
-    custom_info = []
+    for cat_name in categories_to_process:
+        stock_items = grouped_by_category[cat_name]
+        num_items = len(stock_items)  # 获取当前行业的股票总数
+        if layer == 1:
+            fit = 1
+            num_to_extract = num_items
+        else:
+            if num_items <= 40:
+                fit = 0.5  # 总数40以内，计划显示50%
+            elif num_items <= 100:
+                fit = 0.4  # 40到100之间，计划显示40%
+            else:
+                fit = 0.3  # 超过100，计划显示30%
 
-    for r in sorted_result:
-        if sector and sector not in r:
-            continue
-        for s in sorted_result[r]['个股']:
-            if sp and s['f12'] not in sp:
-                continue
-            category.append(f'<b>{r}</b>')
-            stock_name.append(s['f14'])
-            values.append(s['f20'])
-            _d: float = s['f3']
-            diff.append(_d)
-            d_str = '+' + str(_d) if _d >= 0 else str(_d)
-            custom_info.append(f"{d_str}%")
+            ideal_count = math.ceil(num_items * fit)
+            clamped_count = max(5, min(ideal_count, 20))
+            num_to_extract = min(clamped_count, num_items)
 
-    if not diff:
+        sorted_stocks = sorted(
+            stock_items, key=lambda x: x['value'], reverse=True
+        )
+        subset_data = sorted_stocks[:num_to_extract]
+
+        final_stock_list.extend(subset_data)
+
+    if not final_stock_list:
         return ErroText['notData']
+
+    # 步骤 4, 5, 6: 创建DataFrame并返回指定格式 (此部分不变)
+    df = pd.DataFrame(final_stock_list)
+    df = df.sort_values(by='value', ascending=False)
+
+    category = ('<b>' + df['category'] + '</b>').tolist()
+    stock_name = df['name'].tolist()
+    values = df['value'].tolist()
+    diff = df['diff_val'].tolist()
+    custom_info = (
+        df['diff_val']
+        .apply(lambda d: f"+{d}%" if d >= 0 else f"{d}%")
+        .tolist()
+    )
 
     data = {
         "Category": category,
@@ -879,30 +539,16 @@ async def render_html(
     end_time: Optional[datetime] = None,
 ) -> Union[str, Path]:
     _sp_str = None
-    sp = None
     logger.info(f"[SayuStock] market: {market} sector: {sector}")
 
-    if market == '沪深300':
-        market = 'hs300'
-    elif market == '1000':
-        market = '中证1000'
-    elif market == '中证2000':
-        market = '2000'
-
-    if sector != STOCK_SECTOR:
+    if sector != 'single-stock':
         if market in market_dict and 'b:' in market_dict[market]:
             sector = market
         elif market in bk_dict:
             sector = market
 
-    if market in mdata:
-        _sp_str = market
-        sp = mdata[market]
-        logger.info(f"[SayuStock] 触发SP数据{_sp_str}: {len(sp)}...")
-        market = '沪深A'
-
     # 如果是个股错误
-    if sector == STOCK_SECTOR and not market:
+    if sector == 'single-stock' and not market:
         return ErroText['notMarket']
 
     if not market:
@@ -911,13 +557,23 @@ async def render_html(
     logger.info("[SayuStock] 开始获取数据...")
 
     # 对比个股 数据
-    if sector == 'compare-stock':
+    if sector == '大盘云图':
+        raw_data = await get_hotmap()
+        # raw_data = await get_mtdata('沪深A', True, 1, 100)
+    elif market == '行业云图':
+        raw_data = await get_hotmap()
+    elif market == '概念云图':
+        if sector:
+            raw_data = await get_mtdata(sector, True, 1, 100)
+        else:
+            raw_data = '概念云图需要后跟概念类型, 例如： 概念云图 华为欧拉'
+    elif sector == 'compare-stock':
         markets = market.split(' ')
         raw_datas: List[Dict] = []
         for m in markets:
             if m == 'A500':
                 m = 'A500ETF'
-            raw_data = await get_data(
+            raw_data = await get_gg(
                 m,
                 'single-stock-kline-111',
                 start_time,
@@ -930,18 +586,17 @@ async def render_html(
         st_f = start_time.strftime('%Y%m%d') if start_time else ''
         et_f = end_time.strftime('%Y%m%d') if end_time else ''
         _sp_str = f'compare-stock-{st_f}-{et_f}'
-    # 其他数据
+    elif sector == 'single-stock':
+        raw_data = await get_gg(market, 'single-stock', start_time, end_time)
     else:
-        raw_data = await get_data(market, sector)
-        if raw_data is None:
-            return '数据处理失败, 请检查后台...'
-        elif isinstance(raw_data, str):
-            return raw_data
+        raw_data = await get_mtdata(market)
+
+    if isinstance(raw_data, str):
+        return raw_data
 
     file = get_file(market, 'html', sector, _sp_str)
-    # 检查当前目录下是否有符合条件的文件
     if file.exists():
-        # 检查文件的修改时间是否在一分钟以内
+        minutes = STOCK_CONFIG.get_config('mapcloud_refresh_minutes').data
         file_mod_time = datetime.fromtimestamp(file.stat().st_mtime)
         if datetime.now() - file_mod_time < timedelta(minutes=minutes):
             logger.info(
@@ -950,7 +605,7 @@ async def render_html(
             return file
 
     # 个股
-    if sector == STOCK_SECTOR:
+    if sector == 'single-stock':
         fig = await to_single_fig(raw_data)
     # 个股对比
     elif sector == 'compare-stock':
@@ -963,8 +618,7 @@ async def render_html(
         fig = await to_fig(
             raw_data,
             sector,
-            sp,
-            2 if market != sector else 1,
+            2 if sector == '大盘云图' else 1,
         )
     if isinstance(fig, str):
         return fig
@@ -1002,7 +656,7 @@ async def render_image(
                 "height": 3000,
             }
             _scale = 1
-        elif sector == STOCK_SECTOR:
+        elif sector == 'single-stock':
             viewport = {
                 "width": 4000,
                 "height": 3000,
