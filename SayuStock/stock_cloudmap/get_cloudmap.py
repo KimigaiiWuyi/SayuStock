@@ -17,12 +17,8 @@ from .get_compare import to_compare_fig
 from ..utils.stock.utils import get_file
 from ..utils.time_range import get_trading_minutes
 from ..stock_config.stock_config import STOCK_CONFIG
+from ..utils.constant import ErroText, bk_dict, market_dict
 from ..utils.stock.request import get_gg, get_vix, get_hotmap, get_mtdata
-from ..utils.constant import (
-    ErroText,
-    bk_dict,
-    market_dict,
-)
 from ..utils.utils import get_vix_name, int_to_percentage, number_to_chinese
 
 view_port: int = STOCK_CONFIG.get_config('mapcloud_viewport').data
@@ -419,11 +415,17 @@ async def to_fig(
         grouped_by_category[stock['category']].append(stock)
 
     final_stock_list = []
-    categories_to_process = (
-        [sector]
-        if sector and sector in grouped_by_category
-        else grouped_by_category.keys()
-    )
+
+    if sector:
+        if sector in grouped_by_category:
+            categories_to_process = [sector]
+        else:
+            for i in grouped_by_category.keys():
+                if sector in i:
+                    categories_to_process = [i]
+                    break
+            else:
+                return ErroText['notData']
 
     for cat_name in categories_to_process:
         stock_items = grouped_by_category[cat_name]
@@ -567,6 +569,13 @@ async def render_html(
             raw_data = await get_mtdata(sector, True, 1, 100)
         else:
             raw_data = '概念云图需要后跟概念类型, 例如： 概念云图 华为欧拉'
+    elif sector and sector.startswith('single-stock-kline'):
+        raw_data = await get_gg(
+            market,
+            sector,
+            start_time,
+            end_time,
+        )
     elif sector == 'compare-stock':
         markets = market.split(' ')
         raw_datas: List[Dict] = []
