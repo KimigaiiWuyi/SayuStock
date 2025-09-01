@@ -417,7 +417,9 @@ async def to_fig(
     final_stock_list = []
 
     if sector:
-        if sector in grouped_by_category:
+        if sector == '大盘云图':
+            categories_to_process = list(grouped_by_category.keys())
+        elif sector in grouped_by_category:
             categories_to_process = [sector]
         else:
             for i in grouped_by_category.keys():
