@@ -47,7 +47,7 @@ async def delete_all_data():
 @sv_stock_cloudmap.on_command(("大盘云图"))
 async def send_cloudmap_img(bot: Bot, ev: Event):
     logger.info("开始执行[大盘云图]")
-    im = await render_image('沪深A', '大盘云图')
+    im = await render_image('大盘云图', ev.text.strip())
     await bot.send(im)
 
 

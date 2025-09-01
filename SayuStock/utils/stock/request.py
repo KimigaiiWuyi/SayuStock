@@ -350,6 +350,27 @@ async def get_mtdata(
     return resp
 
 
+async def _get_data(
+    resp: Dict,
+    url: str,
+    params: List[tuple],
+    stop_event: asyncio.Event,
+):
+    if stop_event.is_set():
+        return None
+    await asyncio.sleep(random.uniform(0.4, 0.9))
+    resp2 = await stock_request(url, params=params)
+    if isinstance(resp2, int):
+        return stop_event.set()
+
+    if 'code' not in resp2 and resp2['data']:
+        resp['data']['diff'].extend(resp2['data']['diff'])
+        if len(resp2['data']['diff']) < 100:
+            stop_event.set()
+    else:
+        stop_event.set()
+
+
 @async_file_cache(
     market='大盘云图',
     sector='大盘云图',
@@ -389,32 +410,12 @@ async def get_hotmap():
                 "f14": data[1],
                 "f20": float(data[17]) * 100000 if data[17] != '-' else 0,
                 "f100": bk[int(data[0])],
+                "dd": data[4][1:-1].split(','),
             }
             result['data']['diff'].append(diff)
 
     result['data']['total'] = len(result['data']['diff'])
     return result
-
-
-async def _get_data(
-    resp: Dict,
-    url: str,
-    params: List[tuple],
-    stop_event: asyncio.Event,
-):
-    if stop_event.is_set():
-        return None
-    await asyncio.sleep(random.uniform(0.4, 0.9))
-    resp2 = await stock_request(url, params=params)
-    if isinstance(resp2, int):
-        raise Exception(f'[SayuStock] 请求错误, 错误码：{resp2}')
-
-    if 'code' not in resp2 and resp2['data']:
-        resp['data']['diff'].extend(resp2['data']['diff'])
-        if len(resp2['data']['diff']) < 100:
-            stop_event.set()
-    else:
-        stop_event.set()
 
 
 async def stock_request(

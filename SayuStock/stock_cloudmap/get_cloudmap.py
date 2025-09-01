@@ -376,6 +376,7 @@ async def to_single_fig(
 
 async def to_fig(
     raw_data: Dict,
+    market: str,
     sector: Optional[str] = None,
     layer: int = 2,
 ):
@@ -416,18 +417,17 @@ async def to_fig(
 
     final_stock_list = []
 
-    if sector:
-        if sector == '大盘云图':
-            categories_to_process = list(grouped_by_category.keys())
-        elif sector in grouped_by_category:
-            categories_to_process = [sector]
+    if market == '大盘云图' or market == '概念云图':
+        categories_to_process = list(grouped_by_category.keys())
+    elif sector in grouped_by_category:
+        categories_to_process = [sector]
+    else:
+        for i in grouped_by_category.keys():
+            if sector in i:
+                categories_to_process = [i]
+                break
         else:
-            for i in grouped_by_category.keys():
-                if sector in i:
-                    categories_to_process = [i]
-                    break
-            else:
-                return ErroText['notData']
+            return ErroText['notData']
 
     for cat_name in categories_to_process:
         stock_items = grouped_by_category[cat_name]
@@ -561,7 +561,7 @@ async def render_html(
     logger.info("[SayuStock] 开始获取数据...")
 
     # 对比个股 数据
-    if sector == '大盘云图':
+    if market == '大盘云图':
         raw_data = await get_hotmap()
         # raw_data = await get_mtdata('沪深A', True, 1, 100)
     elif market == '行业云图':
@@ -634,6 +634,7 @@ async def render_html(
     else:
         fig = await to_fig(
             raw_data,
+            market,
             sector,
             2 if sector == '大盘云图' else 1,
         )
