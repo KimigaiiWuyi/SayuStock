@@ -437,14 +437,14 @@ async def to_fig(
             num_to_extract = num_items
         else:
             if num_items <= 40:
-                fit = 0.5  # 总数40以内，计划显示50%
+                fit = 0.4  # 总数40以内，计划显示50%
             elif num_items <= 100:
-                fit = 0.4  # 40到100之间，计划显示40%
+                fit = 0.3  # 40到100之间，计划显示40%
             else:
-                fit = 0.3  # 超过100，计划显示30%
+                fit = 0.2  # 超过100，计划显示30%
 
             ideal_count = math.ceil(num_items * fit)
-            clamped_count = max(5, min(ideal_count, 20))
+            clamped_count = max(3, min(ideal_count, 15))
             num_to_extract = min(clamped_count, num_items)
 
         sorted_stocks = sorted(
@@ -636,7 +636,7 @@ async def render_html(
             raw_data,
             market,
             sector,
-            2 if sector == '大盘云图' else 1,
+            2 if market == '大盘云图' else 1,
         )
     if isinstance(fig, str):
         return fig

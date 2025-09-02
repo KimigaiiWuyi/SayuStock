@@ -8,17 +8,11 @@ from gsuid_core.utils.fonts.fonts import core_font as ss_font
 
 from ..utils.image import get_footer
 from ..utils.database.models import SsBind
+from ..stock_info.draw_info import DIFF_MAP
 from ..utils.utils import convert_list, number_to_chinese
 from ..utils.stock.request import get_gg, get_vix, get_mtdata
 
 TEXT_PATH = Path(__file__).parent / 'texture2d'
-DIFF_MAP = {
-    5: '1',
-    3: '2',
-    1: '3',
-    -1: '4',
-    -3: '5',
-}
 
 
 async def draw_my_stock_img(ev: Event):
@@ -195,7 +189,8 @@ async def draw_my_stock_img(ev: Event):
             title_num = DIFF_MAP[i]
             break
     else:
-        title_num = 6
+        title_num = 11
+
     title = Image.open(TEXT_PATH / f'title{title_num}.png')
     img.paste(
         title,

@@ -14,11 +14,16 @@ from ..utils.stock.request_utils import get_hours_from_em, get_image_from_em
 
 TEXT_PATH = Path(__file__).parent / 'texture2d'
 DIFF_MAP = {
-    1.3: '1',
-    0.7: '2',
-    0.2: '3',
-    -0.5: '4',
-    -1.3: '5',
+    3.3: '1',
+    2.7: '2',
+    2: '3',
+    1: '4',
+    0: '5',
+    -0.5: '6',
+    -1.3: '7',
+    -2.1: '8',
+    -3.1: '9',
+    -4: '10',
 }
 
 
@@ -272,12 +277,16 @@ async def draw_info_img(is_save: bool = False):
 
     # 主要指数
     n = 0
+    qz_diff = 0
     sz_diff = 0
 
     for zs_name in zyzs:
         for zs_diff in data_zs['data']['diff']:
             if zs_name != zs_diff['f14']:
                 continue
+
+            if zs_diff['f14'] == '中证全指':
+                qz_diff = zs_diff['f3']
 
             if zs_diff['f14'] == '上证指数':
                 sz_diff = zs_diff['f3']
@@ -412,11 +421,11 @@ async def draw_info_img(is_save: bool = False):
     )
 
     for i in DIFF_MAP:
-        if sz_diff >= i:
+        if qz_diff >= i:
             title_num = DIFF_MAP[i]
             break
     else:
-        title_num = 6
+        title_num = 11
 
     title = Image.open(TEXT_PATH / f'title{title_num}.png')
 

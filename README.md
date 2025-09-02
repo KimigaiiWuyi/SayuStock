@@ -3,7 +3,7 @@
 <p align="center">
   <a href="https://github.com/KimigaiiWuyi/SayuStock"><img src="./ICON.png" width="256" height="256" alt="SayuStock"></a>
 </p>
-<h1 align = "center">早柚股票 SayuStock 0.5</h1>
+<h1 align = "center">早柚股票 SayuStock 0.6</h1>
 <h4 align = "center">🚧支持QQ群/频道、OneBot、微信、KOOK、Tg、飞书、DoDo、米游社、Discord的股票Bot插件🚧</h4>
 <div align = "center">
         <a href="http://docs.gsuid.gbots.work/#/" target="_blank">安装文档</a>
@@ -15,7 +15,7 @@
 
 > **注意：该插件为[早柚核心(gsuid_core)](https://github.com/Genshin-bots/gsuid_core)的扩展，具体安装方式可参考[GenshinUID](https://github.com/KimigaiiWuyi/GenshinUID)**
 >
-> 支持NoneBot2 & HoshinoBot & ZeroBot & YunzaiBot & Koishi的雀魂Bot插件
+> 支持NoneBot2 & HoshinoBot & ZeroBot & YunzaiBot & Koishi的股票Bot插件
 
 ## 丨安装方式
 1. 发送`core安装插件SayuStock`
