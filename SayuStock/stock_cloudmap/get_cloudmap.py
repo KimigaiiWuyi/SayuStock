@@ -1,9 +1,11 @@
 import math
+import asyncio
 from pathlib import Path
 from collections import defaultdict
 from datetime import datetime, timedelta
 from typing import Dict, List, Union, Optional
 
+import numpy as np
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
@@ -136,10 +138,7 @@ async def to_single_fig_kline(
 
 
 # 获取个股图形
-async def to_single_fig(
-    raw_data: Dict,
-    sp: Optional[str] = None,
-):
+async def to_single_fig(raw_data: Dict):
     logger.info('[SayuStock] 开始获取图形...')
     raw = raw_data['data']
     gained: float = raw['f170']
@@ -312,7 +311,7 @@ async def to_single_fig(
     fig.update_layout(
         title=dict(
             text=title_str,
-            font=dict(size=35),
+            font=dict(size=60),
             y=0.99,
             x=0.5,
             xanchor='center',
@@ -321,7 +320,7 @@ async def to_single_fig(
         margin=dict(t=80, l=50, r=50, b=50),
         paper_bgcolor="black",
         plot_bgcolor="black",
-        font=dict(color="white"),
+        font=dict(color="white", size=40),
         # 隐藏所有图例
         showlegend=False,
         # 移除X轴的滑块
@@ -336,7 +335,7 @@ async def to_single_fig(
         gridcolor='rgba(255,255,255,0.2)',
         tickvals=tick_values,
         ticktext=tick_texts,
-        title_font=dict(size=30),
+        title_font=dict(size=45),
         tickfont=dict(size=26),
         row=1,
         col=1,
@@ -346,7 +345,7 @@ async def to_single_fig(
     fig.update_yaxes(
         title_text='量能',
         showgrid=False,
-        title_font=dict(size=30),
+        title_font=dict(size=45),
         tickfont=dict(size=26),
         row=2,
         col=1,
@@ -359,18 +358,255 @@ async def to_single_fig(
         dtick=60,
         row=1,
         col=1,
-        title_font=dict(size=30),
+        title_font=dict(size=45),
         tickfont=dict(size=26),
     )
     fig.update_xaxes(
         title_text='时间',
         showgrid=False,
         dtick=15,  # 每15分钟一个刻度
-        title_font=dict(size=30),
+        title_font=dict(size=45),
         tickfont=dict(size=26),
         row=2,
         col=1,
     )
+    return fig
+
+
+async def to_multi_fig(raw_data_list: List[Dict]):
+    """
+    Generates a plotly figure for multiple stocks, with a multi-line title and sorted volume bars.
+    """
+    logger.info(
+        '[SayuStock] Starting to generate multi-stock figure with multi-line title...'
+    )
+
+    fig = make_subplots(
+        rows=2,
+        cols=1,
+        shared_xaxes=True,
+        vertical_spacing=0.05,
+        row_heights=[0.7, 0.3],
+    )
+
+    colors = ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd']
+
+    max_fluctuation = 0.0
+    processed_stocks = []
+    time_array = None
+
+    # First pass to process data
+    for raw_data in raw_data_list:
+        raw = raw_data['data']
+        open_price = raw.get('f60')
+        if not isinstance(open_price, (int, float)) or open_price == 0:
+            print(
+                f"Skipping {raw.get('f58', 'Unknown')} due to invalid open price: {open_price}."
+            )
+            continue
+
+        code_id = raw_data.get('file_name', '').split('_')[0]
+        if time_array is None:
+            time_array = get_trading_minutes(code_id)
+
+        full_data = []
+        existing_times = {item['datetime'] for item in raw_data['trends']}
+        for time in time_array:
+            if time in existing_times:
+                full_data.append(
+                    next(
+                        item
+                        for item in raw_data['trends']
+                        if item['datetime'] == time
+                    )
+                )
+            else:
+                full_data.append({'datetime': time, 'price': None, 'money': 0})
+
+        price_history_pd = pd.DataFrame(full_data)
+        price_history_pd['percentage_change'] = (
+            (price_history_pd['price'] / open_price) - 1
+        ) * 100
+
+        current_max = price_history_pd['percentage_change'].max()
+        current_min = price_history_pd['percentage_change'].min()
+        if not np.isnan(current_max):
+            max_fluctuation = max(max_fluctuation, abs(current_max))
+        if not np.isnan(current_min):
+            max_fluctuation = max(max_fluctuation, abs(current_min))
+
+        processed_stocks.append(
+            {
+                'name': raw['f58'],
+                'df': price_history_pd,
+                # 🌟 **核心修改点 1: 计算并存储总成交额**
+                'total_volume': price_history_pd['money'].sum(),
+            }
+        )
+
+    # 🌟 **核心修改点 2: 按总成交额降序排序**
+    # 这将确保成交额大的股票先被绘制（在底层），成交额小的后绘制（在顶层）
+    processed_stocks.sort(key=lambda x: x['total_volume'], reverse=True)
+
+    y_axis_max = (max_fluctuation // 2 + 1) * 2
+    y_axis_min = -y_axis_max
+
+    # Second pass to add traces in the new sorted order
+    for i, stock_data in enumerate(processed_stocks):
+        df = stock_data['df']
+        line_color = colors[i % len(colors)]
+
+        fig.add_trace(
+            go.Scatter(
+                x=df['datetime'],
+                y=df['percentage_change'],
+                mode='lines',
+                name=stock_data['name'],
+                line=dict(width=3, color=line_color),
+                showlegend=True,
+            ),
+            row=1,
+            col=1,
+        )
+
+        last_valid_index = df['percentage_change'].last_valid_index()
+        if last_valid_index is not None:
+            last_x = df['datetime'][last_valid_index]
+            last_y = df['percentage_change'][last_valid_index]
+            fig.add_annotation(
+                x=last_x,
+                y=last_y,
+                text=f"<b>{stock_data['name']}</b>",
+                showarrow=False,
+                xshift=25,
+                yshift=10,
+                bgcolor=line_color,
+                font=dict(color='white', size=18),
+                row=1,
+                col=1,
+            )
+
+        fig.add_trace(
+            go.Bar(
+                x=df['datetime'],
+                y=df['money'].fillna(0),
+                name=stock_data['name'] + ' Volume',
+                marker_color=line_color,
+                showlegend=False,
+            ),
+            row=2,
+            col=1,
+        )
+
+    main_title = "<b>分时涨跌幅对比</b>"
+    subtitle_parts = []
+
+    for stock in processed_stocks:
+        df = stock['df']
+        last_change_series = df['percentage_change'].dropna()
+        if not last_change_series.empty:
+            last_change = last_change_series.iloc[-1]
+            color = 'red' if last_change >= 0 else 'green'
+            sign = '+' if last_change >= 0 else ''
+            subtitle_parts.append(
+                f"<b>{stock['name']}: <span style='color:{color};'>{sign}{last_change:.2f}%</span></b>"
+            )
+
+    final_title = (
+        f"{main_title}<br>{'&nbsp;&nbsp;&nbsp;'.join(subtitle_parts)}"
+    )
+
+    fig.add_hrect(
+        y0=0,
+        y1=y_axis_max,
+        fillcolor="red",
+        opacity=0.1,
+        layer="below",
+        line_width=0,
+        row=1,  # type: ignore
+        col=1,  # type: ignore
+    )
+    fig.add_hrect(
+        y0=y_axis_min,
+        y1=0,
+        fillcolor="green",
+        opacity=0.1,
+        layer="below",
+        line_width=0,
+        row=1,  # type: ignore
+        col=1,  # type: ignore
+    )
+    fig.add_hline(
+        y=0,
+        line=dict(color="yellow", width=1, dash="dash"),
+        row=1,  # type: ignore
+        col=1,  # type: ignore
+    )
+
+    fig.update_layout(
+        title=dict(
+            text=final_title,
+            font=dict(size=60),
+            y=0.96,
+            x=0.5,
+            xanchor='center',
+            yanchor='top',
+        ),
+        margin=dict(t=200, l=70, r=70, b=80),
+        paper_bgcolor="black",
+        plot_bgcolor="black",
+        font=dict(color="white", size=40),
+        legend=dict(
+            orientation="h",
+            yanchor="bottom",
+            y=1.08,
+            xanchor="right",
+            x=1,
+            font=dict(size=60),
+        ),
+        barmode='stack',
+    )
+
+    tick_values = [
+        p
+        for p in range(
+            int(np.floor(y_axis_min)), int(np.ceil(y_axis_max)) + 1, 2
+        )
+        if y_axis_min <= p <= y_axis_max
+    ]
+    tick_texts = [f"{p}%" for p in tick_values]
+
+    fig.update_yaxes(
+        title_text='<b>涨跌幅 (%)</b>',
+        showgrid=True,
+        gridcolor='rgba(255,255,255,0.2)',
+        range=[y_axis_min, y_axis_max],
+        tickvals=tick_values,
+        ticktext=tick_texts,
+        row=1,
+        col=1,
+    )
+
+    fig.update_yaxes(title_text='<b>成交额</b>', showgrid=False, row=2, col=1)
+    fig.update_xaxes(
+        showticklabels=True,
+        showgrid=True,
+        gridcolor='rgba(255,255,255,0.2)',
+        dtick=60,
+        tickangle=0,
+        row=1,
+        col=1,
+    )
+    fig.update_xaxes(
+        title_text='<b>时间</b>',
+        showgrid=True,
+        gridcolor='rgba(255,255,255,0.2)',
+        tickangle=45,
+        dtick=30,
+        row=2,
+        col=1,
+    )
+
     return fig
 
 
@@ -559,6 +795,8 @@ async def render_html(
         market = '沪深A'
 
     logger.info("[SayuStock] 开始获取数据...")
+    m_list = []
+    raw_datas = []
 
     # 对比个股 数据
     if market == '大盘云图':
@@ -600,11 +838,22 @@ async def render_html(
     elif sector == 'single-stock':
         m = get_vix_name(market)
         if m is None:
-            raw_data = await get_gg(
-                market, 'single-stock', start_time, end_time
-            )
+            m_list = market.split(' ')
+            if len(m_list) == 1:
+                raw_data = await get_gg(
+                    m_list[0], 'single-stock', start_time, end_time
+                )
+            else:
+                TASK = []
+                for m in m_list:
+                    TASK.append(
+                        get_gg(m, 'single-stock', start_time, end_time)
+                    )
+                raw_datas = await asyncio.gather(*TASK)
+                raw_data = raw_datas[0]
         else:
             raw_data = await get_vix(m)
+
     else:
         raw_data = await get_mtdata(market)
 
@@ -623,7 +872,10 @@ async def render_html(
 
     # 个股
     if sector == 'single-stock':
-        fig = await to_single_fig(raw_data)
+        if raw_datas:
+            fig = await to_multi_fig(raw_datas)
+        else:
+            fig = await to_single_fig(raw_data)
     # 个股对比
     elif sector == 'compare-stock':
         fig = await to_compare_fig(raw_datas)

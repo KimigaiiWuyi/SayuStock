@@ -6,7 +6,7 @@ from .constant import VIX_LIST
 def get_vix_name(code: str):
     code = code.replace(' ', '').upper()
     for vix in VIX_LIST:
-        if code in vix:
+        if code == vix:
             return VIX_LIST[vix]
 
 

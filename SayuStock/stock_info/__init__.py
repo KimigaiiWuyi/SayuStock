@@ -19,7 +19,7 @@ async def send_stock_info(bot: Bot, ev: Event):
     await bot.send(im)
 
 
-@sv_my_stock.on_fullmatch(('我的自选', '我的持仓', '我的个股', '我的股票'))
+@sv_my_stock.on_fullmatch(('我的自选', '我的持仓', '我的股票'))
 async def send_my_stock(bot: Bot, ev: Event):
     logger.info('[SayuStock] 开始执行[我的自选]')
     await bot.send(await draw_my_stock_img(ev))

@@ -3,7 +3,7 @@
 <p align="center">
   <a href="https://github.com/KimigaiiWuyi/SayuStock"><img src="./ICON.png" width="256" height="256" alt="SayuStock"></a>
 </p>
-<h1 align = "center">早柚股票 SayuStock 0.6</h1>
+<h1 align = "center">早柚股票 SayuStock 0.7</h1>
 <h4 align = "center">🚧支持QQ群/频道、OneBot、微信、KOOK、Tg、飞书、DoDo、米游社、Discord的股票Bot插件🚧</h4>
 <div align = "center">
         <a href="http://docs.gsuid.gbots.work/#/" target="_blank">安装文档</a>
@@ -69,6 +69,11 @@
 <details><summary>对比个股 A500 沪深300 上证指数 中证白酒</summary><p>
 <a><img src="https://s2.loli.net/2025/06/02/a41cqb2rGzTvSWy.png"></a>
 </p></details>
+
+<details><summary>我的个股 / 个股 证券ETF 通信ETF 中证白酒</summary><p>
+<a><img src="https://s2.loli.net/2025/09/05/P6U8wCLFGrkfI9p.png"></a>
+</p></details>
+
 
 ## 丨感谢&参考
 

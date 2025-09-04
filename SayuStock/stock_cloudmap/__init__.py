@@ -8,10 +8,10 @@ from gsuid_core.aps import scheduler
 from gsuid_core.logger import logger
 
 from ..utils.constant import VIX_LIST
-from ..utils.utils import convert_list
 from .get_cloudmap import render_image
 from ..utils.database.models import SsBind
 from ..utils.resource_path import DATA_PATH
+from ..utils.utils import convert_list, get_vix_name
 
 sv_stock_cloudmap = SV("大盘云图")
 sv_stock_compare = SV("对比个股", priority=3)
@@ -65,19 +65,45 @@ async def send_gn_img(bot: Bot, ev: Event):
     await bot.send(im)
 
 
+@sv_stock_cloudmap.on_fullmatch(("我的个股"))
+async def send_my_stock_img(bot: Bot, ev: Event):
+    logger.info("开始执行[我的个股数据]")
+    user_id = ev.at if ev.at else ev.user_id
+    uid = await SsBind.get_uid_list_by_game(user_id, ev.bot_id)
+
+    if not uid:
+        return await bot.send(
+            '您还未添加自选呢~或者后跟具体股票代码, 例如：\n 个股 中证白酒 中证2000'
+        )
+
+    uid = convert_list(uid)
+    if len(uid) > 5:
+        uid = uid[:5]
+    txt = ' '.join(uid)
+
+    im = await render_image(
+        txt,
+        'single-stock',
+    )
+    await bot.send(im)
+
+
 @sv_stock_cloudmap.on_command(("个股"))
 async def send_stock_img(bot: Bot, ev: Event):
     logger.info("开始执行[个股数据]")
     content = ev.text.strip().lower()
+    if not content:
+        return await bot.send('请后跟股票代码使用, 例如：个股 证券ETF')
+
     for g in MS_MAP:
         if content.startswith(g):
             content = content.replace(g, '')
             kline_code = MS_MAP[g]
-            for vix in VIX_LIST:
-                if vix in content:
-                    return await bot.send(
-                        f'[VIX] 仅支持使用 个股 300vix 方式调用, 暂时无法查看日K等数据'
-                    )
+            vix_name = get_vix_name(content)
+            if vix_name:
+                return await bot.send(
+                    f'[VIX] 仅支持使用 个股 300vix 方式调用, 暂时无法查看日K等数据'
+                )
             im = await render_image(
                 content,
                 f'single-stock-kline-{kline_code}',
@@ -85,7 +111,7 @@ async def send_stock_img(bot: Bot, ev: Event):
             break
     else:
         im = await render_image(
-            content.replace('分时', ''),
+            content.replace('分时', '').strip(),
             'single-stock',
         )
     await bot.send(im)
