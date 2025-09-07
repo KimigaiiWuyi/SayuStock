@@ -98,7 +98,16 @@ async def delete_uid(bot: Bot, ev: Event):
     u = uid.split(' ')
     add_dict = {}
     for _u in u:
-        code_id = await get_code_id(_u)
+        _u = _u.strip()
+        if not _u:
+            continue
+
+        vix_name = get_vix_name(_u)
+        if vix_name is None:
+            code_id = await get_code_id(_u)
+        else:
+            code_id = f'VIX.{vix_name}', vix_name
+
         if not code_id:
             return await bot.send(f'❎[SayuStock] 股票[{_u}]不存在!')
         add_dict[f'{code_id[1]}({code_id[0]})'] = code_id[0]

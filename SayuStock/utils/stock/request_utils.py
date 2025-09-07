@@ -35,11 +35,29 @@ async def get_hours_from_em() -> Tuple[float, float]:
     return ya, y
 
 
-async def get_code_id(code: str) -> Optional[Tuple[str, str]]:
+async def get_code_id(
+    code: str, priority: Optional[str] = None
+) -> Optional[Tuple[str, str]]:
     """
     生成东方财富股票专用的行情ID
     code:可以是代码或简称或英文
     """
+    if code.endswith('.h'):
+        code = code.replace('.h', '')
+        priority = 'h'
+    elif code.endswith('.hk'):
+        code = code.replace('.hk', '')
+        priority = 'h'
+    elif code.endswith('.us'):
+        code = code.replace('.us', '')
+        priority = 'us'
+    elif code.endswith('.a'):
+        code = code.replace('.a', '')
+        priority = 'a'
+
+    if priority is not None:
+        priority = priority.lower()
+
     if '.' in code:
         return code, ''
     if code in code_id_dict.keys():
@@ -64,7 +82,24 @@ async def get_code_id(code: str) -> Optional[Tuple[str, str]]:
                     code_dict.sort(
                         key=lambda x: x.get('SecurityTypeName') == '债券'
                     )
-                    return code_dict[0]['QuoteID'], code_dict[0]['Name']
+                    for i in code_dict:
+                        if priority is None:
+                            return i['QuoteID'], i['Name']
+                        elif priority == 'h':
+                            if i['SecurityTypeName'] in ['港股']:
+                                return i['QuoteID'], i['Name']
+                        elif priority == 'us':
+                            if i['SecurityTypeName'] in ['美股', '粉单']:
+                                return i['QuoteID'], i['Name']
+                        elif priority == 'a':
+                            if i['SecurityTypeName'] in [
+                                '沪深A',
+                                '沪A',
+                                '深A',
+                            ]:
+                                return i['QuoteID'], i['Name']
+                    else:
+                        return code_dict[0]['QuoteID'], code_dict[0]['Name']
                 else:
                     return None
     return None

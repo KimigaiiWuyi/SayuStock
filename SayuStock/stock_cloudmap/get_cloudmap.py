@@ -305,7 +305,7 @@ async def to_single_fig(raw_data: Dict):
                 tick_texts.append(f'{i}%')
 
     title_str1 = f"{stock_name}  最新价：{new_price}"
-    title_str = f"【{title_str1}】 开盘价：{open_price} 涨跌幅：{custom_info} 换手率 {turnover_rate}% 成交额 {total_amount}"
+    title_str = f"<b>【{title_str1}】 开盘价：{open_price} 涨跌幅：<span style='color:{'red' if gained>=0 else 'green'};'>{custom_info}</span> 换手率 {turnover_rate}% 成交额 {total_amount}</b>"
 
     # --- 更新整体布局和坐标轴 ---
     fig.update_layout(
@@ -846,9 +846,13 @@ async def render_html(
             else:
                 TASK = []
                 for m in m_list:
-                    TASK.append(
-                        get_gg(m, 'single-stock', start_time, end_time)
-                    )
+                    vix_m = get_vix_name(m)
+                    if vix_m is None:
+                        TASK.append(
+                            get_gg(m, 'single-stock', start_time, end_time)
+                        )
+                    else:
+                        TASK.append(get_vix(vix_m))
                 raw_datas = await asyncio.gather(*TASK)
                 raw_data = raw_datas[0]
         else:
