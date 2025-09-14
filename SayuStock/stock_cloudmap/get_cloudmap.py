@@ -20,8 +20,14 @@ from ..utils.stock.utils import get_file
 from ..utils.time_range import get_trading_minutes
 from ..stock_config.stock_config import STOCK_CONFIG
 from ..utils.constant import ErroText, bk_dict, market_dict
-from ..utils.stock.request import get_gg, get_vix, get_hotmap, get_mtdata
 from ..utils.utils import get_vix_name, int_to_percentage, number_to_chinese
+from ..utils.stock.request import (
+    get_gg,
+    get_vix,
+    get_menu,
+    get_hotmap,
+    get_mtdata,
+)
 
 view_port: int = STOCK_CONFIG.get_config('mapcloud_viewport').data
 scale: int = STOCK_CONFIG.get_config('mapcloud_scale').data
@@ -641,6 +647,7 @@ async def to_fig(
                 'value': item['f20'],
                 'diff_val': item['f3'],
                 'code': item['f12'],
+                'sector': sector,
             }
         )
 
@@ -713,16 +720,22 @@ async def to_fig(
         "Values": values,
         "Diff": diff,
         "CustomInfo": custom_info,
+        "sector": sector,
     }
 
     df = pd.DataFrame(data)
 
     df = df.sort_values(by='Values', ascending=False, inplace=False)
 
+    if layer == 1:
+        treemap_path = ["sector", "Category", "StockName"]
+    else:
+        treemap_path = ["Category", "StockName"]
+
     # 生成 Treemap
     fig = px.treemap(
         df,
-        path=["Category", "StockName"],
+        path=treemap_path,
         values="Values",  # 定义块的大小
         color="Diff",  # 根据数值上色
         color_continuous_scale=[
@@ -803,10 +816,37 @@ async def render_html(
         raw_data = await get_hotmap()
         # raw_data = await get_mtdata('沪深A', True, 1, 100)
     elif market == '行业云图':
+        '''
+        hybk = await get_menu(2)
+        if market in hybk:
+            fs = hybk[market]
+        else:
+            for i in hybk:
+                if market in i:
+                    fs = hybk[i]
+                    break
+            else:
+                return ErroText['typemap']
+        '''
+
         raw_data = await get_hotmap()
     elif market == '概念云图':
         if sector:
-            raw_data = await get_mtdata(sector, True, 1, 100)
+            sector = sector.upper()
+            gnbk = await get_menu(3)
+
+            if sector in gnbk:
+                fs = gnbk[sector]
+            else:
+                for i in gnbk:
+                    if sector in i:
+                        sector = i
+                        fs = gnbk[i]
+                        break
+                else:
+                    return ErroText['typemap']
+
+            raw_data = await get_mtdata(fs, True, 1, 100)
         else:
             raw_data = '概念云图需要后跟概念类型, 例如： 概念云图 华为欧拉'
     elif sector and sector.startswith('single-stock-kline'):

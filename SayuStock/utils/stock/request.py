@@ -298,25 +298,7 @@ async def get_mtdata(
     if market in market_dict:
         fs = market_dict[market]
     else:
-        hybk = await get_menu(2)
-        gnbk = await get_menu(3)
-
-        if market in hybk:
-            fs = hybk[market]
-        elif market in gnbk:
-            fs = gnbk[market]
-        else:
-            for i in hybk:
-                if market in i:
-                    fs = hybk[i]
-                    break
-            else:
-                for i in gnbk:
-                    if market in i:
-                        fs = gnbk[i]
-                        break
-                else:
-                    return ErroText['typemap']
+        fs = market
 
     fields = ",".join(trade_detail_dict.keys())
     if fs.startswith(('bk', 'BK')):
