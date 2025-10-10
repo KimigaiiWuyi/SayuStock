@@ -19,7 +19,9 @@ async def __get_data(result: Dict, stock: str):
     data = await get_gg(stock, 'single-stock')
     if isinstance(data, str):
         return data
-    result[data['data']['f58']] = data['data']
+    pure_name = data['data']['f58'].split(' (')[0]
+    data['data']['f58'] = pure_name
+    result[pure_name] = data['data']
     return result
 
 
@@ -68,6 +70,7 @@ async def draw_future_img():
         for d in keys:
             for i in data_list:
                 item = data_list[i] if isinstance(data_list, dict) else i
+                print(item)
                 if item.get('f58', item.get('f14')) != d:
                     continue
                 block = (

@@ -18,6 +18,7 @@ class Market(Enum):
     UNKNOWN = auto()
     COMMODITY = auto()  # 商品期货
     SPOT = auto()  # 现货
+    TLM = auto()  # TLM
 
 
 def is_us_daylight_saving() -> bool:
@@ -71,6 +72,10 @@ MARKET_SESSIONS: Dict[Market, List[Tuple[str, str]]] = {
         ('09:00', '15:30'),
         ('20:00', '02:30'),
     ],
+    Market.TLM: [  # TLM
+        ('09:30', '11:30'),
+        ('13:00', '15:15'),
+    ],
 }
 
 
@@ -101,8 +106,10 @@ def _parse_em_code(code: str) -> Market:
         prefix, main_code = code.split('.', 1)
         if prefix in ['118']:
             return Market.SPOT
-        if prefix in ['101', '102']:
+        if prefix in ['101', '102', '171']:
             return Market.COMMODITY
+        if prefix in ['220']:
+            return Market.TLM
         if prefix in ['0', '1']:
             # 进一步判断是股票还是债券
             if main_code.startswith(('01', '10', '11', '12')):
