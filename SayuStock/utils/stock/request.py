@@ -277,7 +277,6 @@ async def _get_gg_kline(
     if resp['data'] is None:
         return ErroText['notStock']
 
-    print(resp['data'])
     resp['data']['name'] = f"{resp['data']['name']} ({sec_type})"
 
     return resp

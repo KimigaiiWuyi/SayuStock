@@ -95,6 +95,10 @@ async def delete_uid(bot: Bot, ev: Event):
     if not uid:
         return await bot.send(HINT2)
 
+    now_uid = await SsBind.get_uid_list_by_game(qid, ev.bot_id)
+    if not now_uid:
+        return await bot.send('您还未添加自选呢~请输入 添加自选 查看帮助!')
+
     u = uid.split(' ')
     add_dict = {}
     for _u in u:
@@ -110,7 +114,14 @@ async def delete_uid(bot: Bot, ev: Event):
 
         if not code_id:
             return await bot.send(f'❎[SayuStock] 股票[{_u}]不存在!')
-        add_dict[f'{code_id[1]}({code_id[0]})'] = code_id[0]
+
+        _name = f'{code_id[1]}({code_id[0]})'
+        add_dict[_name] = code_id[0]
+
+        if code_id[0] not in now_uid:
+            return await bot.send(
+                f'❎[SayuStock] 股票[{_name}]不在您的自选中!'
+            )
 
     _d = '\n'.join(add_dict.keys())
     resp = await bot.receive_resp(

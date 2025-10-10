@@ -11,7 +11,7 @@ from aiohttp import (
     ClientConnectorError,
 )
 
-from ..constant import code_id_dict
+from ..constant import PREFIX_DATA, code_id_dict
 from .utils import get_file, calculate_difference
 from ...stock_config.stock_config import STOCK_CONFIG
 
@@ -63,7 +63,13 @@ async def get_code_id(
         is_bond = True
 
     if '.' in code:
-        return code, '', ''
+        code_prefix = code.split('.')[0]
+        if code_prefix in PREFIX_DATA:
+            _sec_type = PREFIX_DATA[code_prefix]
+        else:
+            _sec_type = '未知'
+
+        return code, '', _sec_type
 
     if code in code_id_dict.keys():
         return code_id_dict[code], code, ''
