@@ -37,7 +37,7 @@ async def get_hours_from_em() -> Tuple[float, float]:
 
 async def get_code_id(
     code: str, priority: Optional[str] = None
-) -> Optional[Tuple[str, str]]:
+) -> Optional[Tuple[str, str, str]]:
     """
     生成东方财富股票专用的行情ID
     code:可以是代码或简称或英文
@@ -58,10 +58,16 @@ async def get_code_id(
     if priority is not None:
         priority = priority.lower()
 
+    is_bond = False
+    if code in ['us10y', 'us30y', 'us2y', 'cn10y', 'cn30y', 'cn2y', 'tlm']:
+        is_bond = True
+
     if '.' in code:
-        return code, ''
+        return code, '', ''
+
     if code in code_id_dict.keys():
-        return code_id_dict[code], code
+        return code_id_dict[code], code, ''
+
     url = 'https://searchapi.eastmoney.com/api/suggest/get'
     params = (
         ('input', f'{code}'),
@@ -79,27 +85,48 @@ async def get_code_id(
                 code_dict: List[Dict] = data['QuotationCodeTable']['Data']
                 if code_dict:
                     # 排序：SecurityTypeName为"债券"的排到最后
-                    code_dict.sort(
-                        key=lambda x: x.get('SecurityTypeName') == '债券'
-                    )
+                    if not is_bond:
+                        code_dict.sort(
+                            key=lambda x: x.get('SecurityTypeName') == '债券'
+                        )
                     for i in code_dict:
                         if priority is None:
-                            return i['QuoteID'], i['Name']
+                            return (
+                                i['QuoteID'],
+                                i['Name'],
+                                i['SecurityTypeName'],
+                            )
                         elif priority == 'h':
                             if i['SecurityTypeName'] in ['港股']:
-                                return i['QuoteID'], i['Name']
+                                return (
+                                    i['QuoteID'],
+                                    i['Name'],
+                                    i['SecurityTypeName'],
+                                )
                         elif priority == 'us':
                             if i['SecurityTypeName'] in ['美股', '粉单']:
-                                return i['QuoteID'], i['Name']
+                                return (
+                                    i['QuoteID'],
+                                    i['Name'],
+                                    i['SecurityTypeName'],
+                                )
                         elif priority == 'a':
                             if i['SecurityTypeName'] in [
                                 '沪深A',
                                 '沪A',
                                 '深A',
                             ]:
-                                return i['QuoteID'], i['Name']
+                                return (
+                                    i['QuoteID'],
+                                    i['Name'],
+                                    i['SecurityTypeName'],
+                                )
                     else:
-                        return code_dict[0]['QuoteID'], code_dict[0]['Name']
+                        return (
+                            code_dict[0]['QuoteID'],
+                            code_dict[0]['Name'],
+                            i['SecurityTypeName'],
+                        )
                 else:
                     return None
     return None

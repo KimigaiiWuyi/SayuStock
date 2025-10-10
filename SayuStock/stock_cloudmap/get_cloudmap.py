@@ -813,7 +813,10 @@ async def render_html(
 
     # 对比个股 数据
     if market == '大盘云图':
-        raw_data = await get_hotmap()
+        if sector:
+            raw_data = await get_mtdata(sector, True, 1, 100)
+        else:
+            raw_data = await get_hotmap()
         # raw_data = await get_mtdata('沪深A', True, 1, 100)
     elif market == '行业云图':
         '''

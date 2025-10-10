@@ -16,6 +16,7 @@ class Market(Enum):
     SG_FUTURE = auto()  # 新加坡期货（如A50）
     BOND = auto()
     UNKNOWN = auto()
+    COMMODITY = auto()  # 商品期货
 
 
 def is_us_daylight_saving() -> bool:
@@ -62,6 +63,9 @@ MARKET_SESSIONS: Dict[Market, List[Tuple[str, str]]] = {
         ('09:30', '11:30'),
         ('13:00', '15:00'),
     ],
+    Market.COMMODITY: [  # 商品期货
+        ('06:00', '05:00') if is_us_daylight_saving() else ('07:00', '06:00'),
+    ],
 }
 
 
@@ -90,6 +94,8 @@ def _parse_em_code(code: str) -> Market:
     # 带市场前缀的代码 (e.g., '1.600519', '106.BABA')
     if '.' in code:
         prefix, main_code = code.split('.', 1)
+        if prefix == '101':
+            return Market.COMMODITY
         if prefix in ['0', '1']:
             # 进一步判断是股票还是债券
             if main_code.startswith(('01', '10', '11', '12')):

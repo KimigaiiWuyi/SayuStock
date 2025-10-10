@@ -151,16 +151,16 @@ async def get_gg(
 ):
     logger.info(f'[SayuStock] get_single_fig_data code: {market}')
 
-    sec_id = await get_code_id(market)
-    if sec_id is None:
+    sec_id_data = await get_code_id(market)
+    if sec_id_data is None:
         return ErroText['notStock']
 
-    sec_id = get_full_security_code(sec_id[0])
+    sec_id = get_full_security_code(sec_id_data[0])
     if sec_id is None:
         return ErroText['notStock']
 
     if sector == 'single-stock':
-        result = await _get_gg(sec_id)
+        result = await _get_gg(sec_id, sec_id_data[2])
     elif sector.startswith('single-stock-kline'):
         kline_code = sector.split('-')[-1]
         if kline_code == '100':
@@ -191,7 +191,13 @@ async def get_gg(
         st_f = start_time.strftime('%Y%m%d') if start_time else ''
         et_f = end_time.strftime('%Y%m%d') if end_time else ''
 
-        result = await _get_gg_kline(sec_id, kline_code, st_f, et_f)
+        result = await _get_gg_kline(
+            sec_id,
+            sec_id_data[2],
+            kline_code,
+            st_f,
+            et_f,
+        )
     else:
         result = {}
 
@@ -200,7 +206,7 @@ async def get_gg(
 
 # 个股
 @async_file_cache(market='{sec_id}', sector='single-stock', suffix='json')
-async def _get_gg(sec_id: str):
+async def _get_gg(sec_id: str, sec_type: str):
     params = [
         ('pz', '200'),
         ('po', '1'),
@@ -232,6 +238,8 @@ async def _get_gg(sec_id: str):
             return resp
         resp['trends'] = trends
 
+    resp['data']['f58'] = f"{resp['data']['f58']} ({sec_type})"
+
     return resp
 
 
@@ -244,6 +252,7 @@ async def _get_gg(sec_id: str):
 )
 async def _get_gg_kline(
     sec_id: str,
+    sec_type: str,
     kline_code: Union[str, int],
     start_time: str,
     end_time: str,
@@ -267,6 +276,9 @@ async def _get_gg_kline(
 
     if resp['data'] is None:
         return ErroText['notStock']
+
+    print(resp['data'])
+    resp['data']['name'] = f"{resp['data']['name']} ({sec_type})"
 
     return resp
 

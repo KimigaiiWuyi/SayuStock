@@ -8,8 +8,10 @@ from gsuid_core.logger import logger
 CRYPTO_MAP = {
     "BTC USD": "BTC-USD",
     "ETH USD": "ETH-USD",
-    "USDT": "USDT-USD",
-    "USDC": "USDC-USD",
+    # "USDT": "USDT-USD",
+    # "USDC": "USDC-USD",
+    "SOL": "SOL-USD",
+    "XRP": "XRP-USD",
 }
 
 
