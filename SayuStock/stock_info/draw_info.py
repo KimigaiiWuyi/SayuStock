@@ -282,13 +282,18 @@ async def draw_info_img(is_save: bool = False):
 
     for zs_name in zyzs:
         for zs_diff in data_zs['data']['diff']:
-            if zs_name != zs_diff['f14']:
+            diff_name: str = zs_diff['f14']
+            diff_name = diff_name.split('(')[0].strip()
+
+            if zs_name != diff_name:
                 continue
 
-            if zs_diff['f14'] == '中证全指':
+            zs_diff['f14'] = zs_name
+
+            if diff_name == '中证全指':
                 qz_diff = zs_diff['f3']
 
-            if zs_diff['f14'] == '上证指数':
+            if diff_name == '上证指数':
                 sz_diff = zs_diff['f3']
 
             zs_img = await draw_block(zs_diff)
