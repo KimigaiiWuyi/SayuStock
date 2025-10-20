@@ -121,7 +121,7 @@ def _parse_em_code(code: str) -> Market:
             if main_code.startswith(('01', '10', '11', '12')):
                 return Market.BOND
             return Market.A_SHARE
-        if prefix in ['105', '106', '107', '153']:
+        if prefix in ['105', '106', '107', '153', '100']:
             return Market.US_STOCK
         if prefix == '116':
             return Market.HK_STOCK
