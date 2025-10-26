@@ -43,7 +43,7 @@ async def send_delete_subscribe_info(bot: Bot, ev: Event):
 
 
 # 每隔十分钟检查一次订阅
-@scheduler.scheduled_job('cron', minute='*/10')
+@scheduler.scheduled_job('cron', minute='1-59/5')
 async def send_subscribe_info():
     await asyncio.sleep(15 + random.random() * 10)
     datas = await gs_subscribe.get_subscribe(TASK_NAME)
@@ -57,7 +57,7 @@ async def send_subscribe_info():
 
         for subscribe in datas:
             # 发送
-            for new in news[1]['items']:
+            for new in reversed(news[1]['items']):
                 em = subscribe.extra_message
                 if em and new['id'] > int(em) and new['mark'] in [1]:
                     dt_local = datetime.fromtimestamp(
