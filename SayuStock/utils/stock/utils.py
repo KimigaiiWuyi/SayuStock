@@ -1,4 +1,3 @@
-import os
 import json
 import inspect
 import functools
@@ -7,6 +6,7 @@ from typing import Any, List, Tuple, Callable, Optional, Coroutine
 
 import aiofiles
 from gsuid_core.logger import logger
+from plotly.graph_objects import Figure
 
 from ..resource_path import DATA_PATH
 from ...stock_config.stock_config import STOCK_CONFIG
@@ -45,8 +45,13 @@ def async_file_cache(**get_file_args: Any) -> Callable:
                 return await func(*args, **kwargs)
 
             # 2. 根据函数参数动态生成 get_file 的参数
+            minutes = 0
             resolved_get_file_args = {}
             for key, value in get_file_args.items():
+                if key == 'minutes':
+                    minutes = int(value)
+                    continue
+
                 if isinstance(value, str):
                     # 格式化字符串，将 {arg_name} 替换为实际参数值
                     try:
@@ -68,9 +73,11 @@ def async_file_cache(**get_file_args: Any) -> Callable:
             if file_path.exists():
                 try:
                     # 检查文件的修改时间是否在一分钟以内
-                    minutes: int = STOCK_CONFIG.get_config(
-                        'mapcloud_refresh_minutes'
-                    ).data
+                    if minutes == 0:
+                        minutes: int = STOCK_CONFIG.get_config(
+                            'mapcloud_refresh_minutes'
+                        ).data
+
                     file_mod_time = datetime.fromtimestamp(
                         file_path.stat().st_mtime
                     )
@@ -80,6 +87,10 @@ def async_file_cache(**get_file_args: Any) -> Callable:
                         logger.info(
                             f"[SayuStock] json文件在{minutes}分钟内，直接返回文件数据。"
                         )
+
+                        if file_path.suffix == '.html':
+                            return file_path
+
                         async with aiofiles.open(
                             file_path, mode='r', encoding='utf-8'
                         ) as f:
@@ -101,6 +112,10 @@ def async_file_cache(**get_file_args: Any) -> Callable:
             result = await func(*args, **kwargs)
             if isinstance(result, (int, str)):
                 return result
+
+            if isinstance(result, Figure):
+                result.write_html(file_path)
+                return file_path
 
             result['file_name'] = file_path.name
 

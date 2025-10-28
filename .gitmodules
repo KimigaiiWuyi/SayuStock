@@ -1,0 +1,3 @@
+[submodule "SayuStock/Kronos"]
+	path = SayuStock/Kronos
+	url = https://github.com/shiyu-coder/Kronos

@@ -11,12 +11,11 @@ import plotly.express as px
 import plotly.graph_objects as go
 from gsuid_core.logger import logger
 from plotly.subplots import make_subplots
-from playwright.async_api import async_playwright
-from gsuid_core.utils.image.convert import convert_img
 
 from .utils import fill_kline
 from .get_compare import to_compare_fig
 from ..utils.stock.utils import get_file
+from ..utils.image import render_image_by_pw
 from ..utils.time_range import get_trading_minutes
 from ..stock_config.stock_config import STOCK_CONFIG
 from ..utils.constant import ErroText, bk_dict, market_dict
@@ -28,9 +27,6 @@ from ..utils.stock.request import (
     get_hotmap,
     get_mtdata,
 )
-
-view_port: int = STOCK_CONFIG.get_config('mapcloud_viewport').data
-scale: int = STOCK_CONFIG.get_config('mapcloud_scale').data
 
 
 async def to_single_fig_kline(
@@ -961,38 +957,26 @@ async def render_image(
     if isinstance(html_path, str):
         return html_path
 
-    async with async_playwright() as p:
-        browser = await p.chromium.launch(headless=True)
-        if (
-            sector
-            and sector.startswith('single-stock-kline')
-            or sector == 'compare-stock'
-        ):
-            viewport = {
-                "width": 4600,
-                "height": 3000,
-            }
-            _scale = 1
-        elif sector == 'single-stock':
-            viewport = {
-                "width": 4000,
-                "height": 3000,
-            }
-            _scale = 1
-        else:
-            viewport = {
-                "width": view_port,
-                "height": view_port,
-            }
-            _scale = scale
+    if (
+        sector
+        and sector.startswith('single-stock-kline')
+        or sector == 'compare-stock'
+    ):
+        w = 4600
+        h = 3000
+        _scale = 1
+    elif sector == 'single-stock':
+        w = 4000
+        h = 3000
+        _scale = 1
+    else:
+        w = 0
+        h = 0
+        _scale = 0
 
-        context = await browser.new_context(
-            viewport=viewport,  # type: ignore
-            device_scale_factor=_scale,
-        )
-        page = await context.new_page()
-        await page.goto(html_path.absolute().as_uri())
-        await page.wait_for_selector(".plot-container")
-        png_bytes = await page.screenshot(type='png')
-        await browser.close()
-        return await convert_img(png_bytes)
+    return await render_image_by_pw(
+        html_path,
+        w,
+        h,
+        _scale,
+    )

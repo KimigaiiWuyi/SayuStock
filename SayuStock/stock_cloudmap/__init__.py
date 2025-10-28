@@ -7,7 +7,6 @@ from gsuid_core.models import Event
 from gsuid_core.aps import scheduler
 from gsuid_core.logger import logger
 
-from ..utils.constant import VIX_LIST
 from .get_cloudmap import render_image
 from ..utils.database.models import SsBind
 from ..utils.resource_path import DATA_PATH

@@ -4,7 +4,6 @@ import asyncio
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Tuple, Union, Literal, Optional
 
-import aiofiles
 from gsuid_core.logger import logger
 from aiohttp import (
     FormData,
@@ -167,7 +166,7 @@ async def get_gg(
             kline_code = 101
             out_day = 50
         elif kline_code == '101':
-            out_day = 245
+            out_day = 380
         elif kline_code == '102':
             out_day = 800
         elif kline_code == '103':
