@@ -4,7 +4,10 @@ from pathlib import Path
 from contextlib import contextmanager
 from typing import Dict, Optional, cast
 
+import numpy as np
 import pandas as pd
+from tqdm import trange
+from gsuid_core.bot import Bot
 import plotly.graph_objects as go
 from gsuid_core.logger import logger
 
@@ -14,6 +17,8 @@ from ..utils.image import render_image_by_pw
 from ..utils.stock.utils import async_file_cache
 from ..utils.stock.request_utils import get_code_id
 from ..utils.load_data import get_full_security_code
+
+NOW_QUEUE = []
 
 
 @contextmanager
@@ -92,7 +97,7 @@ def fill_kline_by_kronos(raw_data: Dict) -> Optional[pd.DataFrame]:
     return final_df
 
 
-async def draw_ai_kline_with_forecast(market: str):
+async def draw_ai_kline_with_forecast(market: str, bot: Bot):
     logger.info(f'[SayuStock] get_single_fig_data code: {market}')
 
     sec_id_data = await get_code_id(market)
@@ -103,7 +108,21 @@ async def draw_ai_kline_with_forecast(market: str):
     if sec_id is None:
         return ErroText['notStock']
 
-    fig = await _draw_ai_kline_with_forecast(sec_id)
+    if sec_id in NOW_QUEUE:
+        return '当前股票已在预测队列中，请稍后...'
+
+    if NOW_QUEUE:
+        return f'当前队列中还有{len(NOW_QUEUE)}只股票在预测中，请稍后提交...'
+
+    await bot.send('[SayuStock] 模型预测中，预计将会持续八分钟，请稍后...')
+    NOW_QUEUE.append(sec_id)
+    try:
+        fig = await _draw_ai_kline_with_forecast(sec_id)
+    except Exception as e:
+        logger.error(f'[SayuStock] 模型预测出现错误: {e}')
+        return f'模型预测出现错误: {e}'
+    finally:
+        NOW_QUEUE.remove(sec_id)
 
     if isinstance(fig, str):
         return fig
@@ -145,131 +164,251 @@ def gdf(df: pd.DataFrame, raw_data: Dict):
     if total_len == 0:
         return ErroText['notData']
 
-    max_lookback = 400
-    lookback = min(max_lookback, total_len - 1)
-    pred_len = 30
+    # --- 1. 定义参数 ---
+    pred_len = 30  # 回测期 和 预测期 长度
+    sample_count = 15  # 预测采样次数
+    max_lookback = 400  # 最大回看窗口
 
-    x_df = df.iloc[:lookback, :][
-        ['open', 'high', 'low', 'close', 'volume', 'amount']
-    ].reset_index(drop=True)
-    x_timestamp_ser = df.iloc[:lookback]['timestamps'].reset_index(drop=True)
+    # 检查数据是否足够进行回测
+    if (
+        total_len < pred_len + 20
+    ):  # 至少需要 pred_len 天用于回测，以及一些（如20天）数据用于预测
+        return "数据量不足，无法进行回测和预测"
 
-    timestamps = df['timestamps']
-    if len(timestamps) >= 2:
-        freq = timestamps.iloc[-1] - timestamps.iloc[-2]
-    else:
-        freq = pd.Timedelta(days=1)
+    # 定义回测开始的索引
+    backtest_start_index = total_len - pred_len
 
-    last_timestamp = timestamps.iloc[-1]
-    y_timestamp_ser = pd.date_range(
-        start=last_timestamp + freq, periods=pred_len, freq=freq
+    # ---------------------------------
+    # --- 2. 准备和执行 "回测" (Prediction 1) ---
+    # ---------------------------------
+    logger.info("[SayuStock] 正在执行回测预测...")
+
+    # 回测的输入数据：回测期之前的数据
+    lookback_backtest = min(max_lookback, backtest_start_index - 1)
+    backtest_input_start_index = backtest_start_index - lookback_backtest
+    backtest_input_end_index = backtest_start_index
+
+    x_backtest_df = df.iloc[
+        backtest_input_start_index:backtest_input_end_index
+    ][['open', 'high', 'low', 'close', 'volume', 'amount']].reset_index(
+        drop=True
     )
-    y_timestamp_ser = pd.Series(y_timestamp_ser)
+    x_backtest_ts = df.iloc[
+        backtest_input_start_index:backtest_input_end_index
+    ]['timestamps'].reset_index(drop=True)
 
-    if x_df.shape[0] != len(x_timestamp_ser):
-        msg = f"长度不匹配: x_df rows={x_df.shape[0]} vs x_timestamp={len(x_timestamp_ser)}"
-        logger.error(msg)
-        raise RuntimeError(msg)
+    # 回测的输出时间：即实际数据的最后 pred_len 天
+    y_backtest_ts = df.iloc[backtest_start_index:]['timestamps'].reset_index(
+        drop=True
+    )
 
-    if len(y_timestamp_ser) != pred_len:
-        msg = f"预测时间戳长度不等于 pred_len: len(y_timestamp)={len(y_timestamp_ser)} vs pred_len={pred_len}"
-        logger.warning(msg + "，将以实际长度为准并调整 pred_len。")
-        pred_len = len(y_timestamp_ser)
-
-    try:
+    preds_backtest = []
+    for _ in trange(sample_count, desc="Predicting backtest samples"):
         pred_df = predictor.predict(
-            df=x_df,
-            x_timestamp=x_timestamp_ser,
-            y_timestamp=y_timestamp_ser,
+            df=x_backtest_df,
+            x_timestamp=x_backtest_ts,
+            y_timestamp=y_backtest_ts,
             pred_len=pred_len,
             T=1.0,
-            top_p=0.9,
-            sample_count=1,
+            top_p=0.95,
+            sample_count=3,
         )
-
-        # Kronos返回的DataFrame通常以y_timestamp为index，需要显式恢复为列
-        if pred_df.index.name is None or pred_df.index.name != 'timestamps':
-            pred_df = pred_df.copy()
-            pred_df['timestamps'] = y_timestamp_ser.values
-        else:
+        if pred_df.index.name != 'timestamps':
             pred_df = pred_df.reset_index()
+        preds_backtest.append(pred_df['close'].values)
 
-    except Exception as e:
-        logger.exception(
-            "模型预测失败。x_df.shape=%s, x_stamp.shape=%s, y_stamp.shape=%s, pred_len=%s",
-            x_df.shape,
-            getattr(x_timestamp_ser, 'shape', None),
-            getattr(y_timestamp_ser, 'shape', None),
-            pred_len,
+    preds_backtest = np.stack(preds_backtest)
+    mean_backtest = preds_backtest.mean(axis=0)
+    min_backtest = preds_backtest.min(axis=0)
+    max_backtest = preds_backtest.max(axis=0)
+
+    # ---------------------------------
+    # --- 3. 准备和执行 "未来预测" (Prediction 2) ---
+    # ---------------------------------
+    logger.info("[SayuStock] 正在执行未来预测...")
+
+    # 未来预测的输入数据：使用所有（或最后 lookback）的可用数据
+    lookback_future = min(max_lookback, total_len - 1)
+    future_input_start_index = total_len - lookback_future
+
+    x_future_df = df.iloc[future_input_start_index:][
+        ['open', 'high', 'low', 'close', 'volume', 'amount']
+    ].reset_index(drop=True)
+    x_future_ts = df.iloc[future_input_start_index:]['timestamps'].reset_index(
+        drop=True
+    )
+
+    # 未来预测的输出时间
+    timestamps = df['timestamps']
+    freq = (
+        timestamps.iloc[-1] - timestamps.iloc[-2]
+        if len(timestamps) >= 2
+        else pd.Timedelta(days=1)
+    )
+    last_timestamp = timestamps.iloc[-1]
+    y_future_ts = pd.date_range(
+        start=last_timestamp + freq, periods=pred_len, freq=freq
+    )
+
+    preds_future = []
+    for _ in trange(sample_count, desc="Predicting future samples"):
+        pred_df = predictor.predict(
+            df=x_future_df,
+            x_timestamp=x_future_ts,
+            y_timestamp=pd.Series(y_future_ts),
+            pred_len=pred_len,
+            T=1.0,
+            top_p=0.95,
+            sample_count=3,
         )
-        raise
+        if pred_df.index.name != 'timestamps':
+            pred_df = pred_df.reset_index()
+        preds_future.append(pred_df['close'].values)
 
-    pred_df['is_forecast'] = True
-    df['is_forecast'] = False
+    preds_future = np.stack(preds_future)
+    mean_future = preds_future.mean(axis=0)
+    min_future = preds_future.min(axis=0)
+    max_future = preds_future.max(axis=0)
 
-    merged_df = pd.concat([df, pred_df], ignore_index=True)
-
+    # ---------------------------------
+    # --- 4. 绘图 ---
+    # ---------------------------------
     fig = go.Figure()
 
-    hist_df = merged_df[~merged_df['is_forecast']]
+    # 历史数据 (包含回测区的实际数据)
+    hist_t = df['timestamps']
+    hist_close = df['close']
     fig.add_trace(
-        go.Candlestick(
-            x=hist_df['timestamps'],
-            open=hist_df['open'],
-            high=hist_df['high'],
-            low=hist_df['low'],
-            close=hist_df['close'],
-            increasing_line_color='red',
-            decreasing_line_color='green',
-            name='历史K线',
+        go.Scatter(
+            x=hist_t,
+            y=hist_close,
+            mode="lines",
+            name="历史实际走势",
+            line=dict(color="blue", width=2),
         )
     )
 
-    forecast_df = merged_df[merged_df['is_forecast']]
-    if not forecast_df.empty:
-        fig.add_trace(
-            go.Candlestick(
-                x=forecast_df['timestamps'],
-                open=forecast_df['open'],
-                high=forecast_df['high'],
-                low=forecast_df['low'],
-                close=forecast_df['close'],
-                increasing_line_color='orange',
-                decreasing_line_color='blue',
-                name='预测K线',
-            )
-        )
+    # --- 回测区 ---
+    backtest_t_plotting = df.iloc[backtest_start_index:]['timestamps']
 
+    # 回测预测均值 (绿色虚线)
+    fig.add_trace(
+        go.Scatter(
+            x=backtest_t_plotting,
+            y=mean_backtest,
+            mode="lines",
+            name="回测-预测均值",
+            line=dict(color="green", width=2, dash="dot"),
+        )
+    )
+
+    # 回测阴影范围
+    fig.add_trace(
+        go.Scatter(
+            x=list(backtest_t_plotting) + list(backtest_t_plotting[::-1]),
+            y=list(max_backtest) + list(min_backtest[::-1]),
+            fill="toself",
+            fillcolor="rgba(0,255,0,0.2)",
+            line=dict(color="rgba(255,255,255,0)"),
+            hoverinfo="skip",
+            name="回测范围 (Min–Max)",
+        )
+    )
+
+    # --- 未来预测区 ---
+
+    # 为了让历史曲线和预测曲线“连接”上，我们把历史的最后一个点加入到预测曲线的开头
+    connected_future_t = pd.concat([hist_t.iloc[-1:], pd.Series(y_future_ts)])
+    connected_future_close = np.concatenate(
+        [[hist_close.iloc[-1]], mean_future]
+    )
+
+    # 预测均值曲线 (连接的)
+    fig.add_trace(
+        go.Scatter(
+            x=connected_future_t,
+            y=connected_future_close,
+            mode="lines",
+            name="未来-预测均值",
+            line=dict(color="orange", width=2),
+        )
+    )
+
+    # 未来阴影范围
+    fig.add_trace(
+        go.Scatter(
+            x=list(y_future_ts) + list(y_future_ts[::-1]),
+            y=list(max_future) + list(min_future[::-1]),
+            fill="toself",
+            fillcolor="rgba(255,165,0,0.3)",
+            line=dict(color="rgba(255,255,255,0)"),
+            hoverinfo="skip",
+            name="未来范围 (Min–Max)",
+        )
+    )
+
+    # --- 5. 添加分割线和布局 ---
+
+    # 分割线 1: 回测开始
+    backtest_start_time = df['timestamps'].iloc[backtest_start_index]
+    fig.add_shape(
+        type="line",
+        x0=backtest_start_time,
+        x1=backtest_start_time,
+        xref="x",
+        y0=0,
+        y1=1,
+        yref="paper",
+        line=dict(color="grey", dash="dash", width=2),
+    )
+    fig.add_annotation(
+        x=backtest_start_time,
+        y=1.02,
+        xref="x",
+        yref="paper",
+        text="回测开始",
+        showarrow=False,
+        align="right",
+        font=dict(color="grey"),
+    )
+
+    # 分割线 2: 预测开始
+    future_start_time = pd.to_datetime(last_timestamp).to_pydatetime()
+    fig.add_shape(
+        type="line",
+        x0=future_start_time,
+        x1=future_start_time,
+        xref="x",
+        y0=0,
+        y1=1,
+        yref="paper",
+        line=dict(color="red", dash="dash", width=2),
+    )
+    fig.add_annotation(
+        x=future_start_time,
+        y=1.02,
+        xref="x",
+        yref="paper",
+        text="预测开始",
+        showarrow=False,
+        align="left",
+        font=dict(color="red"),
+    )
+
+    # -----------------------------
+    # 布局
+    # -----------------------------
     fig.update_layout(
         title=dict(
-            text=f"{raw_data['data'].get('name', 'K线预测')}",
-            font=dict(size=40),
-            y=0.95,
+            text=f"{raw_data['data'].get('name', 'Price Forecast')} (含30天回测与30天预测)",
+            font=dict(size=24),
             x=0.5,
             xanchor='center',
-            yanchor='top',
         ),
-        xaxis=dict(
-            title="时间",
-            title_font=dict(size=20),
-            tickfont=dict(size=18),
-        ),
-        yaxis=dict(
-            title="价格",
-            title_font=dict(size=20),
-            tickfont=dict(size=18),
-        ),
-        xaxis_rangeslider_visible=False,
-        legend=dict(
-            font=dict(size=18),
-            orientation='h',
-            yanchor='bottom',
-            y=1.02,
-            xanchor='right',
-            x=1,
-        ),
+        xaxis=dict(title="时间", title_font=dict(size=18)),
+        yaxis=dict(title="价格", title_font=dict(size=18)),
+        legend=dict(font=dict(size=14)),
         template="plotly_white",
     )
 
-    fig.update_xaxes(tickformat='%Y-%m-%d')
     return fig

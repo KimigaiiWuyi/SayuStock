@@ -8,8 +8,8 @@ from .draw_ai_map import draw_ai_kline_with_forecast
 sv_stock_kronos = SV('模型预测')
 
 
-@sv_stock_kronos.on_prefix(('模型预测', 'ai预测', 'AI预测'))
+@sv_stock_kronos.on_prefix(('模型预测', 'ai预测', 'AI预测', '趋势预测'))
 async def send_stock_kronos(bot: Bot, ev: Event):
     logger.info('[SayuStock] 开始执行[模型预测]')
-    im = await draw_ai_kline_with_forecast(ev.text.strip())
-    await bot.send(im)
+    im = await draw_ai_kline_with_forecast(ev.text.strip(), bot)
+    await bot.send(im, at_sender=True)
