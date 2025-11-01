@@ -43,7 +43,6 @@ async def get_menu(mode: int = 3) -> Dict:
     mode = 2 为行业板块
     mode = 3 为概念板块
     '''
-
     now = datetime.now().strftime('%Y%m%d')
     if now in MENU_CACHE:
         return MENU_CACHE[now][mode]
@@ -69,7 +68,7 @@ async def get_menu(mode: int = 3) -> Dict:
         for key in keys_to_remove:
             del MENU_CACHE[key]
 
-    return data
+    return MENU_CACHE[now][mode]
 
 
 @async_file_cache(market='vix_market', sector='{vix_name}', suffix='json')
