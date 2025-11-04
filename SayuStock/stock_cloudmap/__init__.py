@@ -16,6 +16,10 @@ sv_stock_cloudmap = SV("大盘云图")
 sv_stock_compare = SV("对比个股", priority=3)
 
 MS_MAP = {
+    '5k': '5',
+    '15k': '15',
+    '30k': '30',
+    '60k': '60',
     'k线': '100',
     '日线': '101',
     '日k': '101',

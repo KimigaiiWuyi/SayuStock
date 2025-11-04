@@ -1,6 +1,7 @@
+import random
 import asyncio
 from pathlib import Path
-from typing import Dict, List, Callable, Optional
+from typing import Any, Dict, List, Union, Callable, Optional
 
 from PIL import Image
 from gsuid_core.utils.image.convert import convert_img
@@ -13,9 +14,11 @@ from ..utils.constant import bond, whsc, i_code, commodity
 from ..utils.get_OKX import CRYPTO_MAP, get_all_crypto_price
 
 TEXT_PATH = Path(__file__).parent / 'texture2d'
+DataLike = Optional[Union[List[Dict[str, Any]], Dict[str, Dict[str, Any]]]]
 
 
 async def __get_data(result: Dict, stock: str):
+    await asyncio.sleep(random.uniform(0.2, 1))
     data = await get_gg(stock, 'single-stock')
     if isinstance(data, str):
         return data
@@ -49,29 +52,46 @@ async def append_jpy(result: Dict):
 
 async def draw_future_img():
     data1 = await get_mtdata('国际市场')
-
     if isinstance(data1, str):
         return data1
 
-    data2 = await _get_data(commodity)
-    data3 = await _get_data(bond, append_jpy)
-    data4 = await _get_data(whsc)
-    data5 = await get_all_crypto_price()
+    # 并发获取数据
+    results = await asyncio.gather(
+        _get_data(commodity),
+        _get_data(bond, append_jpy),
+        _get_data(whsc),
+        get_all_crypto_price(),
+        return_exceptions=True,
+    )
+
+    def safe_data(result) -> DataLike:
+        if isinstance(result, Exception):
+            return None
+        return result
+
+    data2: DataLike = safe_data(results[0])
+    data3: DataLike = safe_data(results[1])
+    data4: DataLike = safe_data(results[2])
+    data5: DataLike = safe_data(results[3])
 
     img = Image.open(TEXT_PATH / 'bg1.jpg').convert('RGBA')
-
     ox = 223
     oy = 140
-
     data_gz: List[Dict] = data1['data']['diff']
 
-    async def paste_blocks(data_list, keys, y_base, block_type=None):
+    async def paste_blocks(data_list: DataLike, keys, y_base, block_type=None):
+        if data_list is None:
+            return
+
         index = 0
+        # 统一迭代：支持 dict.values() 或 list
+        items = (
+            data_list.values() if isinstance(data_list, dict) else data_list
+        )
         for d in keys:
-            for i in data_list:
-                item = data_list[i] if isinstance(data_list, dict) else i
-                print(item)
-                if item.get('f58', item.get('f14')) != d:
+            for item in items:
+                name = item.get('f58', item.get('f14'))
+                if name != d:
                     continue
                 block = (
                     await draw_block(item, block_type)
@@ -85,20 +105,14 @@ async def draw_future_img():
                 )
                 index += 1
 
-    # 指数
+    # 绘制各板块
     await paste_blocks(data_gz, i_code, 487)
-    # 商品
     await paste_blocks(data2, commodity, 1007, 'single')
-    # 债券
     await paste_blocks(data3, bond, 1395, 'single')
-    # 外汇
     await paste_blocks(data4, whsc, 1773, 'single')
-    # 加密货币
     await paste_blocks(data5, CRYPTO_MAP, 1988, 'single')
 
     footer = get_footer()
-
     img.paste(footer, (75, 2135), footer)
     res = await convert_img(img)
-
     return res

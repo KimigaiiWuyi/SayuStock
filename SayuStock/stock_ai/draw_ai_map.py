@@ -2,7 +2,7 @@ import sys
 import asyncio
 from pathlib import Path
 from contextlib import contextmanager
-from typing import Dict, Optional, cast
+from typing import Dict, Union, Optional, cast
 
 import numpy as np
 import pandas as pd
@@ -32,7 +32,7 @@ def temp_sys_path(path: str):
         sys.path[:] = old_path
 
 
-base_dir = Path(__file__).parent  # 当前 stock_ai 目录
+base_dir = Path(__file__).parent
 kronos_dir = base_dir.parent / 'Kronos'
 
 # 临时添加 Kronos 路径进行导入
@@ -114,7 +114,7 @@ async def draw_ai_kline_with_forecast(market: str, bot: Bot):
     if NOW_QUEUE:
         return f'当前队列中还有{len(NOW_QUEUE)}只股票在预测中，请稍后提交...'
 
-    await bot.send('[SayuStock] 模型预测中，预计将会持续八分钟，请稍后...')
+    await bot.send('[SayuStock] 模型预测中，预计将会持续3分钟，请稍后...')
     NOW_QUEUE.append(sec_id)
     try:
         fig = await _draw_ai_kline_with_forecast(sec_id)
@@ -139,7 +139,7 @@ async def draw_ai_kline_with_forecast(market: str, bot: Bot):
     minutes=150,
 )
 async def _draw_ai_kline_with_forecast(sec_id: str):
-    raw_data = await get_gg(sec_id, 'single-stock-kline-101')
+    raw_data = await get_gg(sec_id, 'single-stock-kline-30')
     if isinstance(raw_data, str):
         return raw_data
 
@@ -151,23 +151,127 @@ async def _draw_ai_kline_with_forecast(sec_id: str):
     return fig
 
 
+def generate_trading_times(
+    start: pd.Timestamp,
+    periods: int,
+    freq: Union[str, pd.Timedelta] = "1H",
+    *,
+    # 可选：交易日的时间段（小时小数），默认简单时段 9:30-15:00（含午盘）
+    trading_intervals: list[tuple[float, float]] = [(9.5, 11.5), (13.0, 15.0)],
+    skip_weekends: bool = True,
+) -> pd.DatetimeIndex:
+    """
+    从 start 开始，按步长 freq 生成 `periods` 个时间戳，但只保留交易时段（按 trading_intervals）
+    支持 freq 为 str（如 "1H", "30min"）或 pd.Timedelta。
+    如果传入 freq 为 NaT 或无效，会抛出 ValueError。
+    """
+    # 规范化 freq 为 Timedelta
+    if isinstance(freq, str):
+        try:
+            freq_td = pd.Timedelta(freq)
+        except Exception as e:
+            raise ValueError(f"无法解析字符串 freq={freq!r}: {e}") from e
+    else:
+        freq_td = freq
+
+    # 检查 NaT / 非 Timedelta
+    if pd.isna(freq_td):
+        raise ValueError(
+            "freq 是 NaT 或无效，请传入有效的 str 或 pd.Timedelta（例如 '1H' 或 pd.Timedelta(hours=1)）"
+        )
+    if not isinstance(freq_td, pd.Timedelta):
+        # 例如用户传入 numpy.timedelta64 等
+        try:
+            freq_td = pd.Timedelta(freq_td)
+        except Exception as e:
+            raise ValueError(f"无法转换 freq 为 Timedelta: {e}") from e
+
+    times = []
+    curr = pd.to_datetime(start)
+    # 安全上限，避免死循环（例如 freq 非交易时间粒度太小）
+    max_iters = periods * 1000 + 10000
+
+    iters = 0
+    while len(times) < periods and iters < max_iters:
+        iters += 1
+        curr = curr + freq_td
+
+        # 跳过周末
+        if skip_weekends and curr.weekday() >= 5:
+            continue
+
+        # 检查是否在任一交易区间内（小时小数）
+        t_float = curr.hour + curr.minute / 60.0 + curr.second / 3600.0
+        in_trade = any(
+            start_h <= t_float <= end_h
+            for (start_h, end_h) in trading_intervals
+        )
+        if not in_trade:
+            continue
+
+        times.append(curr)
+
+    if len(times) < periods:
+        raise RuntimeError(
+            f"无法生成足够的交易时间戳 (requested {periods}, got {len(times)}). "
+            "请检查 freq、trading_intervals 是否合理，或增大 max_iters。"
+        )
+
+    return pd.DatetimeIndex(times)
+
+
 def gdf(df: pd.DataFrame, raw_data: Dict):
     tokenizer = KronosTokenizer.from_pretrained(
         "NeoQuasar/Kronos-Tokenizer-base"
     )
-    model = Kronos.from_pretrained("NeoQuasar/Kronos-base")
+    model = Kronos.from_pretrained("NeoQuasar/Kronos-mini")
     predictor = KronosPredictor(
-        model, tokenizer, device="cpu", max_context=512
+        model,
+        tokenizer,
+        device="cpu",
+        max_context=512,
     )
 
     total_len = len(df)
     if total_len == 0:
         return ErroText['notData']
 
-    # --- 1. 定义参数 ---
-    pred_len = 30  # 回测期 和 预测期 长度
-    sample_count = 15  # 预测采样次数
-    max_lookback = 400  # 最大回看窗口
+    sample_count = 5  # 预测采样次数
+    max_lookback = 470  # 最大回看窗口
+
+    timestamps = pd.to_datetime(df["timestamps"], unit='ms')
+    df["timestamps"] = timestamps.sort_values()
+
+    if len(timestamps) >= 2:
+        inferred_freq = timestamps.iloc[-1] - timestamps.iloc[-2]
+    else:
+        inferred_freq = pd.Timedelta(days=1)
+
+    if bool(pd.isna(inferred_freq)):
+        inferred_freq = pd.Timedelta(days=1)
+    elif not isinstance(inferred_freq, pd.Timedelta):
+        inferred_freq = pd.Timedelta(inferred_freq)
+
+    inferred_freq = cast(pd.Timedelta, inferred_freq)
+    freq_minutes = inferred_freq.total_seconds() / 60.0
+
+    logger.info(f'[SayuStock] 股票K线周期: {freq_minutes}')
+
+    if freq_minutes >= 1440 - 1:
+        freq_label = "1D"
+    elif freq_minutes >= 60:
+        freq_label = f"{int(freq_minutes/60)}H"
+    else:
+        # 对于例如 30.0 会得到 "30min"
+        freq_label = f"{int(freq_minutes)}min"
+
+    # --- 根据周期调整预测长度 ---
+    if "min" in freq_label:
+        pred_len = 30
+    elif "H" in freq_label:
+        pred_len = 30
+    else:
+        pred_len = 30
 
     # 检查数据是否足够进行回测
     if (
@@ -193,6 +297,7 @@ def gdf(df: pd.DataFrame, raw_data: Dict):
     ][['open', 'high', 'low', 'close', 'volume', 'amount']].reset_index(
         drop=True
     )
+
     x_backtest_ts = df.iloc[
         backtest_input_start_index:backtest_input_end_index
     ]['timestamps'].reset_index(drop=True)
@@ -211,7 +316,7 @@ def gdf(df: pd.DataFrame, raw_data: Dict):
             pred_len=pred_len,
             T=1.0,
             top_p=0.95,
-            sample_count=3,
+            sample_count=4,
         )
         if pred_df.index.name != 'timestamps':
             pred_df = pred_df.reset_index()
@@ -246,20 +351,18 @@ def gdf(df: pd.DataFrame, raw_data: Dict):
         else pd.Timedelta(days=1)
     )
     last_timestamp = timestamps.iloc[-1]
-    y_future_ts = pd.date_range(
-        start=last_timestamp + freq, periods=pred_len, freq=freq
-    )
+    pred_times = generate_trading_times(last_timestamp, pred_len, freq)
 
     preds_future = []
     for _ in trange(sample_count, desc="Predicting future samples"):
         pred_df = predictor.predict(
             df=x_future_df,
             x_timestamp=x_future_ts,
-            y_timestamp=pd.Series(y_future_ts),
+            y_timestamp=pd.Series(pred_times),
             pred_len=pred_len,
             T=1.0,
             top_p=0.95,
-            sample_count=3,
+            sample_count=4,
         )
         if pred_df.index.name != 'timestamps':
             pred_df = pred_df.reset_index()
@@ -318,7 +421,7 @@ def gdf(df: pd.DataFrame, raw_data: Dict):
     # --- 未来预测区 ---
 
     # 为了让历史曲线和预测曲线“连接”上，我们把历史的最后一个点加入到预测曲线的开头
-    connected_future_t = pd.concat([hist_t.iloc[-1:], pd.Series(y_future_ts)])
+    connected_future_t = pd.concat([hist_t.iloc[-1:], pd.Series(pred_times)])
     connected_future_close = np.concatenate(
         [[hist_close.iloc[-1]], mean_future]
     )
@@ -337,7 +440,7 @@ def gdf(df: pd.DataFrame, raw_data: Dict):
     # 未来阴影范围
     fig.add_trace(
         go.Scatter(
-            x=list(y_future_ts) + list(y_future_ts[::-1]),
+            x=list(pred_times) + list(pred_times[::-1]),
             y=list(max_future) + list(min_future[::-1]),
             fill="toself",
             fillcolor="rgba(255,165,0,0.3)",
@@ -400,7 +503,7 @@ def gdf(df: pd.DataFrame, raw_data: Dict):
     # -----------------------------
     fig.update_layout(
         title=dict(
-            text=f"{raw_data['data'].get('name', 'Price Forecast')} (含30天回测与30天预测)",
+            text=f"{raw_data['data'].get('name', 'Price Forecast')} (含回测与预测)",
             font=dict(size=24),
             x=0.5,
             xanchor='center',
@@ -409,6 +512,14 @@ def gdf(df: pd.DataFrame, raw_data: Dict):
         yaxis=dict(title="价格", title_font=dict(size=18)),
         legend=dict(font=dict(size=14)),
         template="plotly_white",
+    )
+    fig.update_xaxes(
+        rangeslider_visible=False,
+        tickformat="%Y-%m-%d %H:%M",
+        rangebreaks=[
+            dict(bounds=["sat", "mon"]),  # 跳过周末
+            dict(bounds=[15.0, 9.5], pattern="hour"),  # 跳过夜间
+        ],
     )
 
     return fig

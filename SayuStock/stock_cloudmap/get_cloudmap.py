@@ -29,13 +29,16 @@ from ..utils.stock.request import (
 )
 
 
-async def to_single_fig_kline(
-    raw_data: Dict,
-    sp: Optional[str] = None,
-):
+async def to_single_fig_kline(raw_data: Dict, sp: Optional[str] = None):
     df = fill_kline(raw_data)
     if df is None:
         return ErroText['notData']
+
+    if not pd.api.types.is_datetime64_any_dtype(df['日期']):
+        df['日期'] = pd.to_datetime(df['日期'])
+
+    dates = pd.DatetimeIndex(df['日期'].sort_values())  # type: ignore
+    freq = pd.infer_freq(dates) or "D"
 
     fig = go.Figure(
         data=[
@@ -57,7 +60,6 @@ async def to_single_fig_kline(
                 yaxis='y2',
                 name='换手率',
             ),
-            # 添加5日均线
             go.Scatter(
                 x=df['日期'],
                 y=df['5日均线'],
@@ -65,7 +67,6 @@ async def to_single_fig_kline(
                 line=dict(color='orange', width=3),
                 name='5日均线',
             ),
-            # 添加10日均线
             go.Scatter(
                 x=df['日期'],
                 y=df['10日均线'],
@@ -76,7 +77,23 @@ async def to_single_fig_kline(
         ]
     )
 
-    fig.update_layout(xaxis_rangeslider_visible=False)
+    # 根据K线频率调整时间显示格式
+    if 'T' in freq:  # 分钟K
+        tickformat = '%m-%d %H:%M'
+    elif freq in ['H']:
+        tickformat = '%m-%d %H:%M'
+    else:
+        tickformat = '%Y.%m.%d'
+
+    fig.update_xaxes(
+        tickformat=tickformat,
+        type='date',
+        rangeslider_visible=False,
+        rangebreaks=[
+            dict(bounds=["sat", "mon"]),  # 隐藏周末
+            dict(bounds=[16, 9.5], pattern="hour"),  # 隐藏夜间
+        ],
+    )
 
     df['is_max'] = (
         df['换手率'] == df['换手率'].rolling(window=3, center=True).max()
