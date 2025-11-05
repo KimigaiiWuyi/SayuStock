@@ -34,11 +34,69 @@ async def to_single_fig_kline(raw_data: Dict, sp: Optional[str] = None):
     if df is None:
         return ErroText['notData']
 
-    if not pd.api.types.is_datetime64_any_dtype(df['日期']):
-        df['日期'] = pd.to_datetime(df['日期'])
+    df['日期'] = pd.to_datetime(df['日期'], errors='coerce')
+    df = df.dropna(subset=['日期']).reset_index(drop=True)
 
-    dates = pd.DatetimeIndex(df['日期'].sort_values())  # type: ignore
-    freq = pd.infer_freq(dates) or "D"
+    # 为频率判断用一个单独的已排序 Series（不改变后续绘图所用 df 顺序，除非你想按时间绘图）
+    sorted_dates = df['日期'].sort_values(ignore_index=True)
+
+    # 计算相邻差值并取中位数（更鲁棒，能抵抗周末/节假日带来的长间隔）
+    deltas = sorted_dates.diff().dropna()
+    if deltas.empty:
+        # 退回到日线
+        median_delta = pd.Timedelta(days=1)
+    else:
+        median_delta = deltas.dt.total_seconds().median()  # float seconds
+
+    # 把 median_delta 统一为 Timedelta 便于后续判断与日志
+    if isinstance(median_delta, (int, float)):
+        median_delta = pd.Timedelta(seconds=float(median_delta))
+    elif not isinstance(median_delta, pd.Timedelta):
+        median_delta = pd.to_timedelta(median_delta)
+
+    # debug 打印（运行一次看输出）
+    logger.info(f'[SayuStock] median delta: {median_delta}')
+
+    # 基于中位差值做分类（阈值使用 0.9 做容忍）
+    seconds = median_delta.total_seconds()
+    if seconds >= 0.9 * 86400:  # 大于或接近 1 天 -> 日线
+        inferred_freq = 'D'
+        freq_label = '1D'
+    elif seconds >= 0.9 * 3600:  # 大于或接近 1 小时 -> 小时线
+        # 以小时为单位取整（比如 1H, 2H）
+        hours = max(1, int(round(seconds / 3600)))
+        inferred_freq = f'{hours}H'
+        freq_label = inferred_freq
+    else:
+        # 分钟级：向最接近的整数分钟取整，并使用 pandas 的 'T' 表示分钟频率
+        minutes = max(1, int(round(seconds / 60)))
+        # 如果常见分钟档（1,5,15,30,60）则优先映射到这些
+        for m in (1, 5, 15, 30, 60):
+            if abs(minutes - m) <= (m * 0.25):  # 容忍 25% 误差映射到常见档位
+                minutes = m
+                break
+        inferred_freq = f'{minutes}T'
+        freq_label = f'{minutes}min'
+
+    if 'T' in inferred_freq:  # 分钟K
+        tickformat = '%m-%d %H:%M'
+    elif inferred_freq in ['H']:
+        tickformat = '%m-%d %H:%M'
+    elif inferred_freq in ['M']:
+        tickformat = '%Y.%m'
+    else:
+        tickformat = '%Y.%m.%d'
+
+    logger.info(
+        f'[SayuStock] 判定周期 inferred_freq={inferred_freq}, freq_label={freq_label}'
+    )
+
+    x_min, x_max = df['日期'].min(), df['日期'].max()
+
+    # 添加 trace 前强制类型检查
+    assert pd.api.types.is_datetime64_any_dtype(
+        df['日期']
+    ), "日期列必须是 datetime64 类型"
 
     fig = go.Figure(
         data=[
@@ -77,22 +135,10 @@ async def to_single_fig_kline(raw_data: Dict, sp: Optional[str] = None):
         ]
     )
 
-    # 根据K线频率调整时间显示格式
-    if 'T' in freq:  # 分钟K
-        tickformat = '%m-%d %H:%M'
-    elif freq in ['H']:
-        tickformat = '%m-%d %H:%M'
-    else:
-        tickformat = '%Y.%m.%d'
-
     fig.update_xaxes(
         tickformat=tickformat,
         type='date',
         rangeslider_visible=False,
-        rangebreaks=[
-            dict(bounds=["sat", "mon"]),  # 隐藏周末
-            dict(bounds=[16, 9.5], pattern="hour"),  # 隐藏夜间
-        ],
     )
 
     df['is_max'] = (
@@ -151,7 +197,13 @@ async def to_single_fig_kline(raw_data: Dict, sp: Optional[str] = None):
         font=dict(size=40),  # 设置整个图表的字体大小
     )
 
-    fig.update_xaxes(tickformat='%Y.%m')
+    # fig.update_xaxes(tickformat='%Y.%m')
+    fig.update_xaxes(
+        type='date',
+        tickformat=tickformat,
+        range=[x_min, x_max],
+        rangeslider_visible=False,
+    )
     # fig.update_layout(width=10000)
     return fig
 
