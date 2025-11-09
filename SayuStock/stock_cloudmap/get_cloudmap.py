@@ -163,7 +163,7 @@ async def to_single_fig_kline(raw_data: Dict, sp: Optional[str] = None):
 
     fig.update_layout(
         title=dict(
-            text=raw_data['data']['name'],
+            text=f'{raw_data["data"]["name"]} {freq_label}',
             font=dict(size=80),
             y=0.98,
             x=0.5,
@@ -174,17 +174,22 @@ async def to_single_fig_kline(raw_data: Dict, sp: Optional[str] = None):
             title_font=dict(size=40),  # X轴标题字体大小
             tickfont=dict(size=40),  # X轴刻度标签字体大小
         ),
+        xaxis2=dict(
+            anchor='y2',
+            matches='x',  # X轴同步
+            showticklabels=True,
+        ),
         yaxis=dict(
-            title_font=dict(size=40),  # Y轴标题字体大小
-            tickfont=dict(size=40),  # Y轴刻度标签字体大小
             title='价格',
+            domain=[0.3, 1],  # 主图占上方 70%
+            title_font=dict(size=40),
+            tickfont=dict(size=40),
         ),
         yaxis2=dict(
-            title_font=dict(size=40),  # Y轴标题字体大小
-            tickfont=dict(size=40),  # Y轴刻度标签字体大小
             title='换手率',
-            overlaying='y',
-            side='right',
+            domain=[0, 0.25],  # 换手率图放在下方
+            title_font=dict(size=40),
+            tickfont=dict(size=40),
             tickformat=".0%",
         ),
         legend=dict(
@@ -199,18 +204,21 @@ async def to_single_fig_kline(raw_data: Dict, sp: Optional[str] = None):
 
     dates = df['日期']
 
-    # 计算时间差（相邻日期的间隔）
+    dates = df['日期']
     diffs = dates.diff()
-    threshold = pd.Timedelta(days=1.5)
+    threshold = median_delta * 1.5  # 根据推断的周期自动放宽
     breaks = []
-
     for i in range(1, len(dates)):
         if diffs.iloc[i] > threshold:
             start = dates.iloc[i - 1]
             end = dates.iloc[i]
-            breaks.append(dict(values=[start, end]))
+            # 注意这里用 bounds，而不是 values！
+            breaks.append(dict(bounds=[start, end]))
+
+    logger.info(f"[SayuStock] 自动检测到 {len(breaks)} 个时间缺口")
 
     # fig.update_xaxes(tickformat='%Y.%m')
+
     fig.update_xaxes(
         type='date',
         tickformat=tickformat,
@@ -218,6 +226,7 @@ async def to_single_fig_kline(raw_data: Dict, sp: Optional[str] = None):
         rangeslider_visible=False,
         rangebreaks=breaks,
     )
+    # fig.update_traces(connectgaps=True)
     # fig.update_layout(width=10000)
     return fig
 
