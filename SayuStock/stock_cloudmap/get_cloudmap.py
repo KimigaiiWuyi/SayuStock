@@ -197,12 +197,26 @@ async def to_single_fig_kline(raw_data: Dict, sp: Optional[str] = None):
         font=dict(size=40),  # 设置整个图表的字体大小
     )
 
+    dates = df['日期']
+
+    # 计算时间差（相邻日期的间隔）
+    diffs = dates.diff()
+    threshold = pd.Timedelta(days=1.5)
+    breaks = []
+
+    for i in range(1, len(dates)):
+        if diffs.iloc[i] > threshold:
+            start = dates.iloc[i - 1]
+            end = dates.iloc[i]
+            breaks.append(dict(values=[start, end]))
+
     # fig.update_xaxes(tickformat='%Y.%m')
     fig.update_xaxes(
         type='date',
         tickformat=tickformat,
         range=[x_min, x_max],
         rangeslider_visible=False,
+        rangebreaks=breaks,
     )
     # fig.update_layout(width=10000)
     return fig
