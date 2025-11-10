@@ -2,15 +2,18 @@ import json
 import random
 import asyncio
 from datetime import datetime, timedelta
-from typing import Any, Dict, List, Tuple, Union, Literal, Optional
+from typing import Any, Dict, List, Tuple, Union, Literal, Optional, cast
 
+from yarl import URL
 from gsuid_core.logger import logger
+from playwright.async_api import async_playwright
 from aiohttp import (
     FormData,
     TCPConnector,
     ClientSession,
     ClientTimeout,
     ContentTypeError,
+    ServerDisconnectedError,
 )
 
 from .get_vix import get_vix_data
@@ -18,6 +21,7 @@ from .utils import async_file_cache
 from .request_utils import get_code_id
 from ..load_data import get_full_security_code
 from ..constant import (
+    UA,
     SINGLE_LINE_FIELDS1,
     SINGLE_LINE_FIELDS2,
     SINGLE_STOCK_FIELDS,
@@ -28,6 +32,8 @@ from ..constant import (
 )
 
 MENU_CACHE = {}
+DC_TOKEN = ''
+NOW_QUEUE = 0
 
 
 async def get_bar():
@@ -425,35 +431,91 @@ async def stock_request(
     _json: Optional[Dict[str, Any]] = None,
     data: Optional[FormData] = None,
 ) -> Union[Dict, int]:
+    global NOW_QUEUE
     logger.info(f'[SayuStock] 请求: {url}')
     logger.info(f'[SayuStock] Params: {params}')
 
     async with ClientSession(
         connector=TCPConnector(verify_ssl=True)
     ) as client:
-        for _ in range(2):
-            async with client.request(
-                method,
-                url=url,
-                headers=header,
-                params=params,
-                json=_json,
-                data=data,
-                timeout=ClientTimeout(total=300),
-            ) as resp:
-                try:
-                    raw_data = await resp.json()
-                except (ContentTypeError, json.decoder.JSONDecodeError):
-                    _raw_data = await resp.text()
-                    raw_data = -999
-                logger.debug(raw_data)
 
-                if resp.status != 200:
-                    logger.error(
-                        f'[SayuStock][EM] 访问 {url} 失败, 错误码: {resp.status}'
-                        f', 错误返回: {raw_data}'
-                    )
-                    return -999
-                return raw_data
+        final_url = str(URL(url).with_query(params or {}))
+        logger.info(f'[SayuStock] 最终请求URL：{final_url}')
+
+        # header['cookie'] = DC_TOKEN
+
+        while NOW_QUEUE >= 5:
+            await asyncio.sleep(random.uniform(0.4, 0.9))
+
+        for _ in range(2):
+            try:
+                NOW_QUEUE += 1
+                async with client.request(
+                    method,
+                    url=final_url,
+                    headers=header,
+                    params=params,
+                    json=_json,
+                    data=data,
+                    timeout=ClientTimeout(total=300),
+                ) as resp:
+                    try:
+                        raw_data = await resp.json()
+                    except (ContentTypeError, json.decoder.JSONDecodeError):
+                        _raw_data = await resp.text()
+                        raw_data = -999
+                    logger.debug(raw_data)
+
+                    if resp.status != 200:
+                        logger.error(
+                            f'[SayuStock][EM] 访问 {url} 失败, 错误码: {resp.status}'
+                            f', 错误返回: {raw_data}'
+                        )
+                        return -999
+                    return raw_data
+            except ServerDisconnectedError:
+                logger.warning(
+                    f'[SayuStock] 请求 {url} 失败, 尝试获取DC-Token...'
+                )
+                # header['cookie'] = await get_dc_token()
+                await asyncio.sleep(random.uniform(0.2, 0.9))
+            finally:
+                NOW_QUEUE -= 1
         else:
             return -400016
+
+
+async def get_dc_token():
+    global DC_TOKEN
+    async with async_playwright() as p:
+        # 启动浏览器（默认 Chromium）
+        browser = await p.chromium.launch(
+            headless=True,
+            args=[
+                "--disable-blink-features=AutomationControlled"
+            ],  # 禁用自动化检测
+        )
+
+        # 创建上下文和页面
+        context = await browser.new_context(
+            user_agent=UA,
+            viewport={"width": 1366, "height": 768},
+        )
+        page = await context.new_page()
+
+        try:
+            # 导航到目标页面
+            await page.goto(
+                "https://www.eastmoney.com/",
+                wait_until="networkidle",
+                timeout=20000,
+            )
+            # 获取所有 Cookie
+            cookies = await context.cookies()
+            logger.debug(f'[SayuStock] 获取DC-Cookie: {cookies}')
+            cl = [f"{cookie['name']}={cookie['value']}" for cookie in cookies]  # type: ignore # noqa: E501
+            DC_TOKEN = ';'.join(cl)
+            logger.debug(f'[SayuStock] 设置DC-Cookie: {DC_TOKEN}')
+            return DC_TOKEN
+        finally:
+            await browser.close()

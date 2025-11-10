@@ -1,5 +1,5 @@
 AL = 'zh-CN,zh;q=0.8,zh-TW;q=0.7,zh-HK;q=0.5,en-US;q=0.3,en;q=0.2'
-UA = 'Mozilla/5.0 (Windows NT 6.3; Trident/7.0; Touch; rv:11.0) like Gecko'
+UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.0.0 Safari/537.36'
 
 PREFIX_DATA = {
     '0': '深A',
@@ -65,6 +65,12 @@ request_header = {
     'User-Agent': UA,
     'Accept': '*/*',
     'Accept-Language': AL,
+    'Cookie': 'qgqp_b_id=659a53f35cc91d08833fd26098e9ce34; st_nvi=DXIDHc92MckKhvIssg8zda85c; nid=0ff5d2da99cd123247ff24b723a17e3c; nid_create_time=1762029542554; gvi=VIzYcS_d6R9H3UQkE2C7078a4; gvi_create_time=1762029542554; websitepoptg_api_time=1762781584093; fullscreengg=1; fullscreengg2=1',
+    'Dnt': '1',
+    'Host': 'push2.eastmoney.com',
+    'sec-ch-ua': '''"Chromium";v="142", "Google Chrome";v="142", "Not_A Brand";v="99"''',
+    'upgrade-insecure-requests': '1',
+    'sec-fetch-user': '?1',
 }
 
 
