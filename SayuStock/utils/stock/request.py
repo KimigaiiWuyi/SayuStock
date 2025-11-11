@@ -448,10 +448,12 @@ async def stock_request(
     logger.info(f'[SayuStock] Params: {params}')
 
     if url.startswith(
-        'https://quote.eastmoney.com/stockhotmap/api/getquotedata'
+        (
+            'https://quote.eastmoney.com/stockhotmap/api/getquotedata',
+            'https://push2his.eastmoney.com',
+            'https://quotederivates.eastmoney.com',
+        )
     ):
-        header = header_simple
-    elif url.startswith('https://quotederivates.eastmoney.com'):
         header = header_simple
 
     async with ClientSession(
