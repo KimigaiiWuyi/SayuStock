@@ -22,11 +22,13 @@ from .request_utils import get_code_id
 from ..load_data import get_full_security_code
 from ..constant import (
     UA,
+    DC_COOKIES,
     SINGLE_LINE_FIELDS1,
     SINGLE_LINE_FIELDS2,
     SINGLE_STOCK_FIELDS,
     ErroText,
     market_dict,
+    header_simple,
     request_header,
     trade_detail_dict,
 )
@@ -37,8 +39,18 @@ NOW_QUEUE = 0
 
 
 async def get_bar():
-    URL = 'https://quotederivates.eastmoney.com/datacenter/updowndistribution?mcodelist=0.399002%2C1.000002%2C0.899050&version=100&cver=10.33.6'
-    resp = await stock_request(URL)
+    URL = 'https://quotederivates.eastmoney.com/datacenter/updowndistribution'
+    PARAMS = {
+        "mcodelist": "0.399002,1.000002,0.899050",
+        "version": "100",
+        "cver": "10.36.2",
+    }
+
+    resp = await stock_request(
+        URL,
+        params=PARAMS,
+    )
+
     if isinstance(resp, int):
         return f'[SayuStock] 请求错误：{resp}'
     return resp
@@ -435,8 +447,17 @@ async def stock_request(
     logger.info(f'[SayuStock] 请求: {url}')
     logger.info(f'[SayuStock] Params: {params}')
 
+    if url.startswith(
+        'https://quote.eastmoney.com/stockhotmap/api/getquotedata'
+    ):
+        header = header_simple
+    elif url.startswith('https://quotederivates.eastmoney.com'):
+        header = header_simple
+
     async with ClientSession(
-        connector=TCPConnector(verify_ssl=True)
+        connector=TCPConnector(verify_ssl=True),
+        headers=header,
+        cookies=DC_COOKIES,
     ) as client:
 
         final_url = str(URL(url).with_query(params or {}))
@@ -444,7 +465,7 @@ async def stock_request(
 
         # header['cookie'] = DC_TOKEN
 
-        while NOW_QUEUE >= 5:
+        while NOW_QUEUE >= 6:
             await asyncio.sleep(random.uniform(0.4, 0.9))
 
         for _ in range(2):
@@ -453,7 +474,7 @@ async def stock_request(
                 async with client.request(
                     method,
                     url=final_url,
-                    headers=header,
+                    # headers=header,
                     params=params,
                     json=_json,
                     data=data,
