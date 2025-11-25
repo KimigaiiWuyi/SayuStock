@@ -45,7 +45,10 @@ async def draw_fund_info(fcode: Union[str, int]):
         if isinstance(data, str):
             continue
         bar = draw_bar(data, _code[0], percent=percent)
-        all_p += data['data']['f170']
+        if isinstance(data['data']['f170'], str):
+            all_p += 0
+        else:
+            all_p += data['data']['f170']
         img.paste(bar, (0, 400 + index * 110), bar)
 
     avg_p = all_p / len(fund_data['Datas'])
