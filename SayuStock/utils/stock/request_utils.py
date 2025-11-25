@@ -1,19 +1,41 @@
 import json
 from io import BytesIO
 from datetime import datetime, timedelta
-from typing import Dict, List, Tuple, Optional
+from typing import Dict, List, Tuple, Union, Optional
 
 import aiofiles
 from gsuid_core.logger import logger
 from PIL import Image, UnidentifiedImageError
-from aiohttp import (
-    ClientSession,
-    ClientConnectorError,
-)
+from aiohttp import ClientSession, ClientConnectorError
 
 from ..constant import PREFIX_DATA, code_id_dict
 from .utils import get_file, calculate_difference
 from ...stock_config.stock_config import STOCK_CONFIG
+
+
+async def get_fund_pos_list(fcode: Union[str, int]) -> Optional[Dict]:
+    _api = 'https://fundwebapi.eastmoney.com/FundMEApi/FundPositionList'
+    params = {
+        'pageIndex': '1',
+        'pageSize': '10',
+        'deviceid': '1234567.py.service',
+        'version': '4.3.0',
+        'product': 'Eastmoney',
+        'plat': 'Web',
+        'FCODE': str(fcode),
+    }
+    async with ClientSession() as sess:
+        try:
+            async with sess.get(_api, params=params) as res:
+                if res.status == 200:
+                    data = await res.json()
+                    logger.info(
+                        f"[SayuStock]获取{params['FCODE']}持仓数据成功"
+                    )
+                    return data
+        except ClientConnectorError:
+            logger.warning(f"[SayuStock]获取{params['FCODE']}持仓数据失败")
+    return None
 
 
 async def get_hours_from_em() -> Tuple[float, float]:
@@ -184,5 +206,4 @@ async def get_image_from_em(
         if size:
             return Image.open(stream).resize(size)
         else:
-            return Image.open(stream)
             return Image.open(stream)

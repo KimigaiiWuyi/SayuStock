@@ -6,10 +6,19 @@ from gsuid_core.logger import logger
 
 from .draw_info import draw_info_img
 from .draw_future import draw_future_img
+from .draw_fund_info import draw_fund_info
 from .draw_my_info import draw_my_stock_img
 
 sv_stock_info = SV('大盘概览')
 sv_my_stock = SV('我的自选')
+sv_fund_info = SV('基金持仓信息')
+
+
+@sv_fund_info.on_command(('基金持仓', '持仓分布'), block=True)
+async def send_fund_info(bot: Bot, ev: Event):
+    logger.info('[SayuStock] 开始执行[基金持仓信息]')
+    im = await draw_fund_info(ev.text.strip())
+    await bot.send(im)
 
 
 @sv_stock_info.on_fullmatch(('大盘概览', '大盘概况'))

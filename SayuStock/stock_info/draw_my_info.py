@@ -1,5 +1,6 @@
 import asyncio
 from pathlib import Path
+from typing import Dict, Optional
 
 from PIL import Image, ImageDraw
 from gsuid_core.models import Event
@@ -13,6 +14,65 @@ from ..utils.utils import convert_list, number_to_chinese
 from ..utils.stock.request import get_gg, get_vix, get_mtdata
 
 TEXT_PATH = Path(__file__).parent / 'texture2d'
+
+
+def draw_bar(
+    data: Dict,
+    u: str,
+    percent: Optional[str] = None,
+) -> Image.Image:
+    mark_data: dict = data['data']
+    if isinstance(mark_data['f48'], str):
+        e_money = mark_data['f48']
+    else:
+        e_money = number_to_chinese(mark_data['f48'])
+    hs = mark_data['f168']
+    if isinstance(mark_data['f170'], str):
+        p = 0
+    else:
+        p = mark_data['f170']
+
+    now_price = mark_data['f43']
+
+    b_title = f'{mark_data["f58"]}'
+    s_title = f'({u}) 换: {hs}% 额: {e_money} 价: {now_price}'
+    if p >= 0:
+        bar = Image.open(TEXT_PATH / 'myup.png')
+        p_color = (213, 102, 102)
+    else:
+        bar = Image.open(TEXT_PATH / 'mydown.png')
+        p_color = (175, 231, 170)
+    bar_draw = ImageDraw.Draw(bar)
+    bar_draw.text(
+        (82, 40),
+        b_title,
+        (255, 255, 255),
+        ss_font(32),
+        'lm',
+    )
+    bar_draw.text(
+        (82, 75),
+        s_title,
+        p_color,
+        ss_font(20),
+        'lm',
+    )
+    bar_draw.text(
+        (758, 55),
+        f'+{p}%' if p >= 0 else f'{p}%',
+        (255, 255, 255),
+        ss_font(28),
+        'mm',
+    )
+    if percent is not None:
+        bar_draw.text(
+            (613, 55),
+            percent,
+            (240, 240, 240),
+            ss_font(28),
+            'mm',
+        )
+    return bar
 
 
 async def draw_my_stock_img(ev: Event):
@@ -125,51 +185,10 @@ async def draw_my_stock_img(ev: Event):
 
         if isinstance(data, str):
             return data
-        mark_data: dict = data['data']
-        if isinstance(mark_data['f48'], str):
-            e_money = mark_data['f48']
-        else:
-            e_money = number_to_chinese(mark_data['f48'])
-        hs = mark_data['f168']
-        if isinstance(mark_data['f170'], str):
-            p = 0
-        else:
-            p = mark_data['f170']
 
-        all_p += p
+        all_p += data['data']['f170']
+        bar = draw_bar(data, u)
 
-        now_price = mark_data['f43']
-
-        b_title = f'{mark_data["f58"]}'
-        s_title = f'({u}) 换: {hs}% 额: {e_money} 价: {now_price}'
-        if p >= 0:
-            bar = Image.open(TEXT_PATH / 'myup.png')
-            p_color = (213, 102, 102)
-        else:
-            bar = Image.open(TEXT_PATH / 'mydown.png')
-            p_color = (175, 231, 170)
-        bar_draw = ImageDraw.Draw(bar)
-        bar_draw.text(
-            (82, 40),
-            b_title,
-            (255, 255, 255),
-            ss_font(32),
-            'lm',
-        )
-        bar_draw.text(
-            (82, 75),
-            s_title,
-            p_color,
-            ss_font(20),
-            'lm',
-        )
-        bar_draw.text(
-            (758, 55),
-            f'+{p}%' if p >= 0 else f'{p}%',
-            (255, 255, 255),
-            ss_font(28),
-            'mm',
-        )
         if alluid >= 18 and index >= ((alluid - 1) // 2) + 1:
             x = 900
             y = 541 + (index - (((alluid - 1) // 2) + 1)) * 110
