@@ -36,9 +36,12 @@ def draw_bar(
 
     b_title = f'{mark_data["f58"]}'
     s_title = f'({u}) 换: {hs}% 额: {e_money} 价: {now_price}'
-    if p >= 0:
+    if p > 0:
         bar = Image.open(TEXT_PATH / 'myup.png')
         p_color = (213, 102, 102)
+    elif p == 0:
+        bar = Image.open(TEXT_PATH / 'myeq.png')
+        p_color = (240, 240, 240)
     else:
         bar = Image.open(TEXT_PATH / 'mydown.png')
         p_color = (175, 231, 170)
@@ -186,7 +189,11 @@ async def draw_my_stock_img(ev: Event):
         if isinstance(data, str):
             return data
 
-        all_p += data['data']['f170']
+        if isinstance(data['data']['f170'], str):
+            all_p += 0
+        else:
+            all_p += data['data']['f170']
+
         bar = draw_bar(data, u)
 
         if alluid >= 18 and index >= ((alluid - 1) // 2) + 1:
