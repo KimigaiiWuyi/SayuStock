@@ -98,6 +98,13 @@ async def to_single_fig_kline(raw_data: Dict, sp: Optional[str] = None):
         df['日期']
     ), "日期列必须是 datetime64 类型"
 
+    # 计算成交量柱子的颜色
+    # 如果当日收盘价高于开盘价，为红色（上涨），否则为绿色（下跌）
+    volume_colors = [
+        'red' if close >= open_price else 'green'
+        for close, open_price in zip(df['收盘'], df['开盘'])
+    ]
+
     fig = go.Figure(
         data=[
             go.Candlestick(
@@ -109,6 +116,7 @@ async def to_single_fig_kline(raw_data: Dict, sp: Optional[str] = None):
                 increasing_line_color='red',
                 decreasing_line_color='green',
                 name='K线',
+                yaxis='y1',
             ),
             go.Scatter(
                 x=df['日期'],
@@ -124,6 +132,7 @@ async def to_single_fig_kline(raw_data: Dict, sp: Optional[str] = None):
                 mode='lines',
                 line=dict(color='orange', width=3),
                 name='5日均线',
+                yaxis='y1',
             ),
             go.Scatter(
                 x=df['日期'],
@@ -131,6 +140,15 @@ async def to_single_fig_kline(raw_data: Dict, sp: Optional[str] = None):
                 mode='lines',
                 line=dict(color='blue', width=3),
                 name='10日均线',
+                yaxis='y1',
+            ),
+            # 添加量能图（成交量）
+            go.Bar(
+                x=df['日期'],
+                y=df['成交量'],
+                marker_color=volume_colors,
+                name='成交量',
+                yaxis='y3',
             ),
         ]
     )
@@ -177,20 +195,32 @@ async def to_single_fig_kline(raw_data: Dict, sp: Optional[str] = None):
         xaxis2=dict(
             anchor='y2',
             matches='x',  # X轴同步
-            showticklabels=True,
+            showticklabels=False,  # 换手率和成交量的X轴标签可以隐藏，只保留主图的
+        ),
+        xaxis3=dict(
+            anchor='y3',
+            matches='x',  # X轴同步
+            showticklabels=True,  # 量能图的X轴标签保留
         ),
         yaxis=dict(
             title='价格',
-            domain=[0.3, 1],  # 主图占上方 70%
+            domain=[0.5, 1],  # 主图占上方 50%
             title_font=dict(size=40),
             tickfont=dict(size=40),
         ),
         yaxis2=dict(
             title='换手率',
-            domain=[0, 0.25],  # 换手率图放在下方
+            domain=[0.25, 0.45],  # 换手率图放在K线图下方，量能图上方
             title_font=dict(size=40),
             tickfont=dict(size=40),
             tickformat=".0%",
+        ),
+        yaxis3=dict(  # 新增y3轴用于成交量
+            title='成交量',
+            domain=[0, 0.2],  # 量能图占最下方 20%
+            title_font=dict(size=40),
+            tickfont=dict(size=40),
+            side='right',  # 可以选择放在右侧
         ),
         legend=dict(
             title=dict(
@@ -200,6 +230,9 @@ async def to_single_fig_kline(raw_data: Dict, sp: Optional[str] = None):
             )
         ),  # 设置图例标题的大小
         font=dict(size=40),  # 设置整个图表的字体大小
+        margin=dict(
+            t=100, b=100, l=100, r=100
+        ),  # 调整边距以容纳更多的子图和标签
     )
 
     dates = df['日期']
@@ -217,8 +250,6 @@ async def to_single_fig_kline(raw_data: Dict, sp: Optional[str] = None):
 
     logger.info(f"[SayuStock] 自动检测到 {len(breaks)} 个时间缺口")
 
-    # fig.update_xaxes(tickformat='%Y.%m')
-
     fig.update_xaxes(
         type='date',
         tickformat=tickformat,
@@ -226,8 +257,6 @@ async def to_single_fig_kline(raw_data: Dict, sp: Optional[str] = None):
         rangeslider_visible=False,
         rangebreaks=breaks,
     )
-    # fig.update_traces(connectgaps=True)
-    # fig.update_layout(width=10000)
     return fig
 
 
@@ -972,7 +1001,10 @@ async def render_html(
             m_list = market.split(' ')
             if len(m_list) == 1:
                 raw_data = await get_gg(
-                    m_list[0], 'single-stock', start_time, end_time
+                    m_list[0],
+                    'single-stock',
+                    start_time,
+                    end_time,
                 )
             else:
                 TASK = []
