@@ -33,6 +33,7 @@ from ..constant import (
 )
 from ..load_data import get_full_security_code
 from .request_utils import get_code_id
+from ...stock_config.stock_config import STOCK_CONFIG
 
 MENU_CACHE = {}
 DC_TOKEN = ""
@@ -445,6 +446,11 @@ async def stock_request(
     global NOW_QUEUE
     logger.info(f"[SayuStock] 请求: {url}")
     logger.info(f"[SayuStock] Params: {params}")
+
+    cookies = STOCK_CONFIG.get_config("eastmoney_cookie").data
+    if cookies:
+        logger.info(f"[SayuStock] Cookie: {cookies}")
+        header["Cookie"] = cookies
 
     if url.startswith(
         (
