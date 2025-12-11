@@ -2,6 +2,7 @@ import asyncio
 from typing import Optional
 
 import httpx
+
 from gsuid_core.logger import logger
 
 # 币种名称到 OKX API instId 的映射
@@ -21,25 +22,23 @@ async def get_all_crypto_price():
         async def fetch(crypto: str):
             data = await get_price_and_change_simple(crypto, client)
             if data:
-                price = data['price']
-                change_24h_percent = data['change_24h_percent']
+                price = data["price"]
+                change_24h_percent = data["change_24h_percent"]
                 return (
                     crypto,
                     {
-                        'f58': crypto,
-                        'f14': crypto,
-                        'f43': price,
-                        'f170': change_24h_percent,
-                        'f48': '',
+                        "f58": crypto,
+                        "f14": crypto,
+                        "f43": price,
+                        "f170": change_24h_percent,
+                        "f48": "",
                     },
                 )
             return None
 
         tasks = [fetch(crypto) for crypto in CRYPTO_MAP]
         results = await asyncio.gather(*tasks)
-        return {
-            crypto: info for item in results if item for crypto, info in [item]
-        }
+        return {crypto: info for item in results if item for crypto, info in [item]}
 
 
 async def get_price_and_change_simple(
@@ -73,18 +72,14 @@ async def get_price_and_change_simple(
             open_utc8_price = float(ticker_info.get("sodUtc8", "0"))
 
             if open_24h_price == 0:
-                change_24h_percent = float('inf')
+                change_24h_percent = float("inf")
             else:
-                change_24h_percent = (
-                    (current_price - open_24h_price) / open_24h_price
-                ) * 100
+                change_24h_percent = ((current_price - open_24h_price) / open_24h_price) * 100
 
             if open_utc8_price == 0:
-                change_utc8_daily_percent = float('inf')
+                change_utc8_daily_percent = float("inf")
             else:
-                change_utc8_daily_percent = (
-                    (current_price - open_utc8_price) / open_utc8_price
-                ) * 100
+                change_utc8_daily_percent = ((current_price - open_utc8_price) / open_utc8_price) * 100
 
             return {
                 "price": current_price,

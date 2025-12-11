@@ -1,5 +1,3 @@
-import json
-from pathlib import Path
 from decimal import Decimal
 
 SZMarket = "SA"
@@ -41,7 +39,7 @@ def get_full_security_code(code: str) -> str:
     Raises:
         ValueError: 如果证券代码不支持
     """
-    if '.' in code:
+    if "." in code:
         return code
     if code.startswith("51") or code.startswith("60") or code.startswith("68"):
         return "1." + code

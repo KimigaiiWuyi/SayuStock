@@ -1,22 +1,23 @@
 import sys
 import asyncio
+from typing import Dict, Union, Optional, cast
 from pathlib import Path
 from contextlib import contextmanager
-from typing import Dict, Union, Optional, cast
 
 import numpy as np
 import pandas as pd
-from tqdm import trange
-from gsuid_core.bot import Bot
 import plotly.graph_objects as go
+from tqdm import trange
+
+from gsuid_core.bot import Bot
 from gsuid_core.logger import logger
 
-from ..utils.constant import ErroText
-from ..utils.stock.request import get_gg
 from ..utils.image import render_image_by_pw
-from ..utils.stock.utils import async_file_cache
-from ..utils.stock.request_utils import get_code_id
+from ..utils.constant import ErroText
 from ..utils.load_data import get_full_security_code
+from ..utils.stock.utils import async_file_cache
+from ..utils.stock.request import get_gg
+from ..utils.stock.request_utils import get_code_id
 
 NOW_QUEUE = []
 
@@ -33,7 +34,7 @@ def temp_sys_path(path: str):
 
 
 base_dir = Path(__file__).parent
-kronos_dir = base_dir.parent / 'Kronos'
+kronos_dir = base_dir.parent / "Kronos"
 
 # 临时添加 Kronos 路径进行导入
 with temp_sys_path(str(kronos_dir)):
@@ -45,49 +46,49 @@ def fill_kline_by_kronos(raw_data: Dict) -> Optional[pd.DataFrame]:
     返回 None 或 pd.DataFrame（列：timestamps, open, high, low, close, volume, amount）
     """
 
-    if not raw_data.get('data') or not raw_data['data'].get('klines'):
+    if not raw_data.get("data") or not raw_data["data"].get("klines"):
         return None
 
     # 原始头（对应每个逗号分隔字段）
     headers = [
-        'date',
-        'open',
-        'close',
-        'high',
-        'low',
-        'volume',
-        'amount',
-        'amplitude',
-        'chg_percent',
-        'chg_amount',
-        'turnover_rate',
+        "date",
+        "open",
+        "close",
+        "high",
+        "low",
+        "volume",
+        "amount",
+        "amplitude",
+        "chg_percent",
+        "chg_amount",
+        "turnover_rate",
     ]
 
     # 解析数据（每行都是逗号分隔）
-    rows = [line.split(',') for line in raw_data['data']['klines']]
+    rows = [line.split(",") for line in raw_data["data"]["klines"]]
     df = pd.DataFrame(rows, columns=headers)  # type: ignore
 
     # 强制转换数值列
-    numeric_cols = ['open', 'close', 'high', 'low', 'volume', 'amount']
+    numeric_cols = ["open", "close", "high", "low", "volume", "amount"]
     # 如果某些列可能缺失，建议先过滤存在的列：
     existing_numeric_cols = [c for c in numeric_cols if c in df.columns]
     df[existing_numeric_cols] = df[existing_numeric_cols].astype(float)
 
     # 转换日期
-    df['date'] = pd.to_datetime(df['date'])
+    df["date"] = pd.to_datetime(df["date"])
 
     # 统一命名
-    df = df.rename(columns={'date': 'timestamps'})
+    df = df.rename(columns={"date": "timestamps"})
 
     # 要返回的列顺序（保证这些列在 df 中存在）
     final_cols = [
-        'timestamps',
-        'open',
-        'high',
-        'low',
-        'close',
-        'volume',
-        'amount',
+        "timestamps",
+        "open",
+        "high",
+        "low",
+        "close",
+        "volume",
+        "amount",
     ]
     final_cols = [c for c in final_cols if c in df.columns]
 
@@ -98,29 +99,29 @@ def fill_kline_by_kronos(raw_data: Dict) -> Optional[pd.DataFrame]:
 
 
 async def draw_ai_kline_with_forecast(market: str, bot: Bot):
-    logger.info(f'[SayuStock] get_single_fig_data code: {market}')
+    logger.info(f"[SayuStock] get_single_fig_data code: {market}")
 
     sec_id_data = await get_code_id(market)
     if sec_id_data is None:
-        return ErroText['notStock']
+        return ErroText["notStock"]
 
     sec_id = get_full_security_code(sec_id_data[0])
     if sec_id is None:
-        return ErroText['notStock']
+        return ErroText["notStock"]
 
     if sec_id in NOW_QUEUE:
-        return '当前股票已在预测队列中，请稍后...'
+        return "当前股票已在预测队列中，请稍后..."
 
     if NOW_QUEUE:
-        return f'当前队列中还有{len(NOW_QUEUE)}只股票在预测中，请稍后提交...'
+        return f"当前队列中还有{len(NOW_QUEUE)}只股票在预测中，请稍后提交..."
 
-    await bot.send('[SayuStock] 模型预测中，预计将会持续3分钟，请稍后...')
+    await bot.send("[SayuStock] 模型预测中，预计将会持续3分钟，请稍后...")
     NOW_QUEUE.append(sec_id)
     try:
         fig = await _draw_ai_kline_with_forecast(sec_id)
     except Exception as e:
-        logger.error(f'[SayuStock] 模型预测出现错误: {e}')
-        return f'模型预测出现错误: {e}'
+        logger.error(f"[SayuStock] 模型预测出现错误: {e}")
+        return f"模型预测出现错误: {e}"
     finally:
         NOW_QUEUE.remove(sec_id)
 
@@ -129,17 +130,17 @@ async def draw_ai_kline_with_forecast(market: str, bot: Bot):
     elif isinstance(fig, Path):
         return await render_image_by_pw(fig, 4000, 2000, 0)
     else:
-        return '出现了未知错误。'
+        return "出现了未知错误。"
 
 
 @async_file_cache(
-    market='{sec_id}',
-    sector='single-stock-ai',
-    suffix='html',
+    market="{sec_id}",
+    sector="single-stock-ai",
+    suffix="html",
     minutes=150,
 )
 async def _draw_ai_kline_with_forecast(sec_id: str):
-    raw_data = await get_gg(sec_id, 'single-stock-kline-30')
+    raw_data = await get_gg(sec_id, "single-stock-kline-30")
     if isinstance(raw_data, str):
         return raw_data
 
@@ -176,9 +177,7 @@ def generate_trading_times(
 
     # 检查 NaT / 非 Timedelta
     if pd.isna(freq_td):
-        raise ValueError(
-            "freq 是 NaT 或无效，请传入有效的 str 或 pd.Timedelta（例如 '1H' 或 pd.Timedelta(hours=1)）"
-        )
+        raise ValueError("freq 是 NaT 或无效，请传入有效的 str 或 pd.Timedelta（例如 '1H' 或 pd.Timedelta(hours=1)）")
     if not isinstance(freq_td, pd.Timedelta):
         # 例如用户传入 numpy.timedelta64 等
         try:
@@ -202,10 +201,7 @@ def generate_trading_times(
 
         # 检查是否在任一交易区间内（小时小数）
         t_float = curr.hour + curr.minute / 60.0 + curr.second / 3600.0
-        in_trade = any(
-            start_h <= t_float <= end_h
-            for (start_h, end_h) in trading_intervals
-        )
+        in_trade = any(start_h <= t_float <= end_h for (start_h, end_h) in trading_intervals)
         if not in_trade:
             continue
 
@@ -221,9 +217,7 @@ def generate_trading_times(
 
 
 def gdf(df: pd.DataFrame, raw_data: Dict):
-    tokenizer = KronosTokenizer.from_pretrained(
-        "NeoQuasar/Kronos-Tokenizer-base"
-    )
+    tokenizer = KronosTokenizer.from_pretrained("NeoQuasar/Kronos-Tokenizer-base")
     model = Kronos.from_pretrained("NeoQuasar/Kronos-mini")
     predictor = KronosPredictor(
         model,
@@ -234,12 +228,12 @@ def gdf(df: pd.DataFrame, raw_data: Dict):
 
     total_len = len(df)
     if total_len == 0:
-        return ErroText['notData']
+        return ErroText["notData"]
 
     sample_count = 5  # 预测采样次数
     max_lookback = 470  # 最大回看窗口
 
-    timestamps = pd.to_datetime(df["timestamps"], unit='ms')
+    timestamps = pd.to_datetime(df["timestamps"], unit="ms")
     df["timestamps"] = timestamps.sort_values()
 
     if len(timestamps) >= 2:
@@ -255,12 +249,12 @@ def gdf(df: pd.DataFrame, raw_data: Dict):
     inferred_freq = cast(pd.Timedelta, inferred_freq)
     freq_minutes = inferred_freq.total_seconds() / 60.0
 
-    logger.info(f'[SayuStock] 股票K线周期: {freq_minutes}')
+    logger.info(f"[SayuStock] 股票K线周期: {freq_minutes}")
 
     if freq_minutes >= 1440 - 1:
         freq_label = "1D"
     elif freq_minutes >= 60:
-        freq_label = f"{int(freq_minutes/60)}H"
+        freq_label = f"{int(freq_minutes / 60)}H"
     else:
         # 对于例如 30.0 会得到 "30min"
         freq_label = f"{int(freq_minutes)}min"
@@ -274,9 +268,7 @@ def gdf(df: pd.DataFrame, raw_data: Dict):
         pred_len = 30
 
     # 检查数据是否足够进行回测
-    if (
-        total_len < pred_len + 20
-    ):  # 至少需要 pred_len 天用于回测，以及一些（如20天）数据用于预测
+    if total_len < pred_len + 20:  # 至少需要 pred_len 天用于回测，以及一些（如20天）数据用于预测
         return "数据量不足，无法进行回测和预测"
 
     # 定义回测开始的索引
@@ -292,20 +284,14 @@ def gdf(df: pd.DataFrame, raw_data: Dict):
     backtest_input_start_index = backtest_start_index - lookback_backtest
     backtest_input_end_index = backtest_start_index
 
-    x_backtest_df = df.iloc[
-        backtest_input_start_index:backtest_input_end_index
-    ][['open', 'high', 'low', 'close', 'volume', 'amount']].reset_index(
-        drop=True
-    )
+    x_backtest_df = df.iloc[backtest_input_start_index:backtest_input_end_index][
+        ["open", "high", "low", "close", "volume", "amount"]
+    ].reset_index(drop=True)
 
-    x_backtest_ts = df.iloc[
-        backtest_input_start_index:backtest_input_end_index
-    ]['timestamps'].reset_index(drop=True)
+    x_backtest_ts = df.iloc[backtest_input_start_index:backtest_input_end_index]["timestamps"].reset_index(drop=True)
 
     # 回测的输出时间：即实际数据的最后 pred_len 天
-    y_backtest_ts = df.iloc[backtest_start_index:]['timestamps'].reset_index(
-        drop=True
-    )
+    y_backtest_ts = df.iloc[backtest_start_index:]["timestamps"].reset_index(drop=True)
 
     preds_backtest = []
     for _ in trange(sample_count, desc="Predicting backtest samples"):
@@ -318,9 +304,9 @@ def gdf(df: pd.DataFrame, raw_data: Dict):
             top_p=0.95,
             sample_count=4,
         )
-        if pred_df.index.name != 'timestamps':
+        if pred_df.index.name != "timestamps":
             pred_df = pred_df.reset_index()
-        preds_backtest.append(pred_df['close'].values)
+        preds_backtest.append(pred_df["close"].values)
 
     preds_backtest = np.stack(preds_backtest)
     mean_backtest = preds_backtest.mean(axis=0)
@@ -336,20 +322,14 @@ def gdf(df: pd.DataFrame, raw_data: Dict):
     lookback_future = min(max_lookback, total_len - 1)
     future_input_start_index = total_len - lookback_future
 
-    x_future_df = df.iloc[future_input_start_index:][
-        ['open', 'high', 'low', 'close', 'volume', 'amount']
-    ].reset_index(drop=True)
-    x_future_ts = df.iloc[future_input_start_index:]['timestamps'].reset_index(
+    x_future_df = df.iloc[future_input_start_index:][["open", "high", "low", "close", "volume", "amount"]].reset_index(
         drop=True
     )
+    x_future_ts = df.iloc[future_input_start_index:]["timestamps"].reset_index(drop=True)
 
     # 未来预测的输出时间
-    timestamps = df['timestamps']
-    freq = (
-        timestamps.iloc[-1] - timestamps.iloc[-2]
-        if len(timestamps) >= 2
-        else pd.Timedelta(days=1)
-    )
+    timestamps = df["timestamps"]
+    freq = timestamps.iloc[-1] - timestamps.iloc[-2] if len(timestamps) >= 2 else pd.Timedelta(days=1)
     last_timestamp = timestamps.iloc[-1]
     pred_times = generate_trading_times(last_timestamp, pred_len, freq)
 
@@ -364,9 +344,9 @@ def gdf(df: pd.DataFrame, raw_data: Dict):
             top_p=0.95,
             sample_count=4,
         )
-        if pred_df.index.name != 'timestamps':
+        if pred_df.index.name != "timestamps":
             pred_df = pred_df.reset_index()
-        preds_future.append(pred_df['close'].values)
+        preds_future.append(pred_df["close"].values)
 
     preds_future = np.stack(preds_future)
     mean_future = preds_future.mean(axis=0)
@@ -379,8 +359,8 @@ def gdf(df: pd.DataFrame, raw_data: Dict):
     fig = go.Figure()
 
     # 历史数据 (包含回测区的实际数据)
-    hist_t = df['timestamps']
-    hist_close = df['close']
+    hist_t = df["timestamps"]
+    hist_close = df["close"]
     fig.add_trace(
         go.Scatter(
             x=hist_t,
@@ -392,7 +372,7 @@ def gdf(df: pd.DataFrame, raw_data: Dict):
     )
 
     # --- 回测区 ---
-    backtest_t_plotting = df.iloc[backtest_start_index:]['timestamps']
+    backtest_t_plotting = df.iloc[backtest_start_index:]["timestamps"]
 
     # 回测预测均值 (绿色虚线)
     fig.add_trace(
@@ -422,9 +402,7 @@ def gdf(df: pd.DataFrame, raw_data: Dict):
 
     # 为了让历史曲线和预测曲线“连接”上，我们把历史的最后一个点加入到预测曲线的开头
     connected_future_t = pd.concat([hist_t.iloc[-1:], pd.Series(pred_times)])
-    connected_future_close = np.concatenate(
-        [[hist_close.iloc[-1]], mean_future]
-    )
+    connected_future_close = np.concatenate([[hist_close.iloc[-1]], mean_future])
 
     # 预测均值曲线 (连接的)
     fig.add_trace(
@@ -453,7 +431,7 @@ def gdf(df: pd.DataFrame, raw_data: Dict):
     # --- 5. 添加分割线和布局 ---
 
     # 分割线 1: 回测开始
-    backtest_start_time = df['timestamps'].iloc[backtest_start_index]
+    backtest_start_time = df["timestamps"].iloc[backtest_start_index]
     fig.add_shape(
         type="line",
         x0=backtest_start_time,
@@ -506,7 +484,7 @@ def gdf(df: pd.DataFrame, raw_data: Dict):
             text=f"{raw_data['data'].get('name', 'Price Forecast')} (含回测与预测)",
             font=dict(size=24),
             x=0.5,
-            xanchor='center',
+            xanchor="center",
         ),
         xaxis=dict(title="时间", title_font=dict(size=18)),
         yaxis=dict(title="价格", title_font=dict(size=18)),

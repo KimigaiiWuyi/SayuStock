@@ -2,8 +2,8 @@ from gsuid_core.subscribe import gs_subscribe
 from gsuid_core.status.plugin_status import register_status
 
 from ..utils.image import get_ICON
-from ..utils.database.models import SsBind
 from ..stock_news.__init__ import TASK_NAME
+from ..utils.database.models import SsBind
 
 
 async def get_subscribe_num():
@@ -18,9 +18,9 @@ async def get_add_num():
 
 register_status(
     get_ICON(),
-    'SayuStock',
+    "SayuStock",
     {
-        '启用订阅': get_subscribe_num,
-        '自选账户': get_add_num,
+        "启用订阅": get_subscribe_num,
+        "自选账户": get_add_num,
     },
 )

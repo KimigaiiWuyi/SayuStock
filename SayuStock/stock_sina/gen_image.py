@@ -3,6 +3,7 @@ from typing import List
 
 import aiohttp
 from PIL import Image
+
 from gsuid_core.logger import logger
 from gsuid_core.utils.image.convert import convert_img
 
@@ -10,22 +11,20 @@ from ..utils.stock.request_utils import get_code_id
 
 
 async def get_sina_pe_compare(_input: str):
-    _input = _input.replace(',', ' ')
+    _input = _input.replace(",", " ")
     _list = _input.split()
     _id_list: List[str] = []
     for i in _list:
         _id = await get_code_id(i)
         if _id is not None:
-            _id_list.append(_id[0].split('.')[1])
+            _id_list.append(_id[0].split(".")[1])
 
     img = await fetch_sina_image(_id_list, 720)
     res = await convert_img(img)
     return res
 
 
-async def fetch_sina_image(
-    stock_codes: List[str], limit: int = 720
-) -> Image.Image:
+async def fetch_sina_image(stock_codes: List[str], limit: int = 720) -> Image.Image:
     """
     异步获取新浪财经股票对比图，并返回 PIL.Image 对象。
 
@@ -36,8 +35,10 @@ async def fetch_sina_image(
     Returns:
         Image.Image: 返回的 PIL 图像对象
     """
-    stock_code_str = ','.join(stock_codes)
-    url = f"https://biz.finance.sina.com.cn/company/compare/img_syl_compare.php?stock_code={stock_code_str}&limit={limit}"
+    stock_code_str = ",".join(stock_codes)
+    url = (
+        f"https://biz.finance.sina.com.cn/company/compare/img_syl_compare.php?stock_code={stock_code_str}&limit={limit}"
+    )
 
     logger.info(f"[SayuStock][Sina]: {url}")
 

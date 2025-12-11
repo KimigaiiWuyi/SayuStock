@@ -16,14 +16,14 @@ def extract_secu_codes(input_folder: Path, output_file: Path):
     for json_file in input_folder.glob("*.json"):
         try:
             # 读取 JSON 文件内容
-            with json_file.open('r', encoding='utf-8') as f:
+            with json_file.open("r", encoding="utf-8") as f:
                 content = json.load(f)
 
             # 从数据中提取 SECUCODE
             secucodes = [
-                item.get('SECURITY_CODE')
-                for item in content.get('result', {}).get('data', [])
-                if 'SECURITY_CODE' in item
+                item.get("SECURITY_CODE")
+                for item in content.get("result", {}).get("data", [])
+                if "SECURITY_CODE" in item
             ]
 
             # 使用文件名（不带扩展名）作为 key
@@ -32,13 +32,13 @@ def extract_secu_codes(input_folder: Path, output_file: Path):
             print(f"Error processing {json_file.name}: {e}")
 
     # 将结果写入新的 JSON 文件
-    with output_file.open('w', encoding='utf-8') as f:
+    with output_file.open("w", encoding="utf-8") as f:
         json.dump(result, f, ensure_ascii=False, indent=4)
 
     print(f"Data has been extracted and saved to {output_file}")
 
 
 extract_secu_codes(
-    Path(__file__).parent / 'em_data',
-    Path(__file__).parents[1] / 'utils' / 'output.json',
+    Path(__file__).parent / "em_data",
+    Path(__file__).parents[1] / "utils" / "output.json",
 )

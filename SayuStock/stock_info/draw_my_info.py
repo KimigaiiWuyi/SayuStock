@@ -1,19 +1,20 @@
 import asyncio
-from pathlib import Path
 from typing import Dict, Optional
+from pathlib import Path
 
 from PIL import Image, ImageDraw
+
 from gsuid_core.models import Event
-from gsuid_core.utils.image.convert import convert_img
 from gsuid_core.utils.fonts.fonts import core_font as ss_font
+from gsuid_core.utils.image.convert import convert_img
 
 from ..utils.image import get_footer
-from ..utils.database.models import SsBind
-from ..stock_info.draw_info import DIFF_MAP
 from ..utils.utils import convert_list, number_to_chinese
 from ..utils.stock.request import get_gg, get_vix, get_mtdata
+from ..stock_info.draw_info import DIFF_MAP
+from ..utils.database.models import SsBind
 
-TEXT_PATH = Path(__file__).parent / 'texture2d'
+TEXT_PATH = Path(__file__).parent / "texture2d"
 
 
 def draw_bar(
@@ -21,29 +22,29 @@ def draw_bar(
     u: str,
     percent: Optional[str] = None,
 ) -> Image.Image:
-    mark_data: dict = data['data']
-    if isinstance(mark_data['f48'], str):
-        e_money = mark_data['f48']
+    mark_data: dict = data["data"]
+    if isinstance(mark_data["f48"], str):
+        e_money = mark_data["f48"]
     else:
-        e_money = number_to_chinese(mark_data['f48'])
-    hs = mark_data['f168']
-    if isinstance(mark_data['f170'], str):
+        e_money = number_to_chinese(mark_data["f48"])
+    hs = mark_data["f168"]
+    if isinstance(mark_data["f170"], str):
         p = 0
     else:
-        p = mark_data['f170']
+        p = mark_data["f170"]
 
-    now_price = mark_data['f43']
+    now_price = mark_data["f43"]
 
-    b_title = f'{mark_data["f58"]}'
-    s_title = f'({u}) 换: {hs}% 额: {e_money} 价: {now_price}'
+    b_title = f"{mark_data['f58']}"
+    s_title = f"({u}) 换: {hs}% 额: {e_money} 价: {now_price}"
     if p > 0:
-        bar = Image.open(TEXT_PATH / 'myup.png')
+        bar = Image.open(TEXT_PATH / "myup.png")
         p_color = (213, 102, 102)
     elif p == 0:
-        bar = Image.open(TEXT_PATH / 'myeq.png')
+        bar = Image.open(TEXT_PATH / "myeq.png")
         p_color = (240, 240, 240)
     else:
-        bar = Image.open(TEXT_PATH / 'mydown.png')
+        bar = Image.open(TEXT_PATH / "mydown.png")
         p_color = (175, 231, 170)
     bar_draw = ImageDraw.Draw(bar)
     bar_draw.text(
@@ -51,21 +52,21 @@ def draw_bar(
         b_title,
         (255, 255, 255),
         ss_font(32),
-        'lm',
+        "lm",
     )
     bar_draw.text(
         (82, 75),
         s_title,
         p_color,
         ss_font(20),
-        'lm',
+        "lm",
     )
     bar_draw.text(
         (758, 55),
-        f'+{p}%' if p >= 0 else f'{p}%',
+        f"+{p}%" if p >= 0 else f"{p}%",
         (255, 255, 255),
         ss_font(28),
-        'mm',
+        "mm",
     )
     if percent is not None:
         bar_draw.text(
@@ -73,7 +74,7 @@ def draw_bar(
             percent,
             (240, 240, 240),
             ss_font(28),
-            'mm',
+            "mm",
         )
     return bar
 
@@ -83,11 +84,11 @@ async def draw_my_stock_img(ev: Event):
     uid = await SsBind.get_uid_list_by_game(user_id, ev.bot_id)
 
     if not uid:
-        return '您还未添加自选呢~请输入 添加自选 查看帮助!'
+        return "您还未添加自选呢~请输入 添加自选 查看帮助!"
 
     uid = convert_list(uid)
-    data_zs = await get_mtdata('主要指数', pz=100)
-    data_hy = await get_mtdata('行业板块')
+    data_zs = await get_mtdata("主要指数", pz=100)
+    data_hy = await get_mtdata("行业板块")
 
     if isinstance(data_zs, str):
         return data_zs
@@ -95,34 +96,30 @@ async def draw_my_stock_img(ev: Event):
         return data_hy
 
     img = Image.new(
-        'RGBA',
+        "RGBA",
         (
             900 if len(uid) < 18 else 1800,
-            (
-                541 + len(uid) * 110 + 60
-                if len(uid) < 18
-                else 541 + (((len(uid) - 1) // 2) + 1) * 110 + 60
-            ),
+            (541 + len(uid) * 110 + 60 if len(uid) < 18 else 541 + (((len(uid) - 1) // 2) + 1) * 110 + 60),
         ),
         (7, 9, 27),
     )
     zyzs = (
         [
-            '上证指数',
-            '深证成指',
-            '中证A500',
-            '中证2000',
+            "上证指数",
+            "深证成指",
+            "中证A500",
+            "中证2000",
         ]
         if len(uid) < 18
         else [
-            '上证指数',
-            '深证成指',
-            '创业板指',
-            '上证50',
-            '沪深300',
-            '中证A500',
-            '中证2000',
-            '国债指数',
+            "上证指数",
+            "深证成指",
+            "创业板指",
+            "上证50",
+            "沪深300",
+            "中证A500",
+            "中证2000",
+            "国债指数",
         ]
     )
 
@@ -130,11 +127,11 @@ async def draw_my_stock_img(ev: Event):
     n = 0
     x0 = 50 if len(uid) < 18 else 100
     for zs_name in zyzs:
-        for zs_diff in data_zs['data']['diff']:
-            if zs_name != zs_diff['f14']:
+        for zs_diff in data_zs["data"]["diff"]:
+            if zs_name != zs_diff["f14"]:
                 continue
-            diff = zs_diff['f3']
-            zs_img = Image.new('RGBA', (200, 140))
+            diff = zs_diff["f3"]
+            zs_img = Image.new("RGBA", (200, 140))
             zs_draw = ImageDraw.Draw(zs_img)
             if diff >= 0:
                 zsc = (140, 18, 22, 55)
@@ -147,26 +144,26 @@ async def draw_my_stock_img(ev: Event):
 
             zs_draw.text(
                 (100, 99),
-                f'{zs_diff["f14"]}',
+                f"{zs_diff['f14']}",
                 (255, 255, 255),
                 ss_font(24),
-                'mm',
+                "mm",
             )
 
             zs_draw.text(
                 (100, 38),
-                f'{zs_diff["f2"]}',
+                f"{zs_diff['f2']}",
                 zsc2,
                 ss_font(30),
-                'mm',
+                "mm",
             )
 
             zs_draw.text(
                 (100, 70),
-                f'{"+" if diff >= 0 else ""}{diff}%',
+                f"{'+' if diff >= 0 else ''}{diff}%",
                 zsc2,
                 ss_font(30),
-                'mm',
+                "mm",
             )
             img.paste(
                 zs_img,
@@ -181,18 +178,18 @@ async def draw_my_stock_img(ev: Event):
     async def sg(img: Image.Image, index: int, u: str, alluid: int):
         nonlocal all_p
 
-        if u.startswith('VIX.'):
+        if u.startswith("VIX."):
             data = await get_vix(u[4:])
         else:
-            data = await get_gg(u, 'single-stock')
+            data = await get_gg(u, "single-stock")
 
         if isinstance(data, str):
             return data
 
-        if isinstance(data['data']['f170'], str):
+        if isinstance(data["data"]["f170"], str):
             all_p += 0
         else:
-            all_p += data['data']['f170']
+            all_p += data["data"]["f170"]
 
         bar = draw_bar(data, u)
 
@@ -217,14 +214,14 @@ async def draw_my_stock_img(ev: Event):
     else:
         title_num = 11
 
-    title = Image.open(TEXT_PATH / f'title{title_num}.png')
+    title = Image.open(TEXT_PATH / f"title{title_num}.png")
     img.paste(
         title,
         (25 + 450 if len(uid) >= 18 else 25, -31),
         title,
     )
 
-    bar5 = Image.open(TEXT_PATH / 'bar5.png')
+    bar5 = Image.open(TEXT_PATH / "bar5.png")
     img.paste(
         bar5,
         (25 + 450 if len(uid) >= 18 else 25, 443),

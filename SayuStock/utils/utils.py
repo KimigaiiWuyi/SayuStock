@@ -4,7 +4,7 @@ from .constant import VIX_LIST
 
 
 def get_vix_name(code: str):
-    code = code.replace(' ', '').upper()
+    code = code.replace(" ", "").upper()
     for vix in VIX_LIST:
         if code == vix:
             return VIX_LIST[vix]
@@ -13,8 +13,8 @@ def get_vix_name(code: str):
 def convert_list(input_list: List[str]) -> List[str]:
     result = []
     for item in input_list:
-        if '.' not in item and result:  # 当前项不含点且结果列表不为空
-            result[-1] += '_' + item  # 合并到前一项
+        if "." not in item and result:  # 当前项不含点且结果列表不为空
+            result[-1] += "_" + item  # 合并到前一项
         else:
             result.append(item)  # 正常添加项
     input_list = result
@@ -23,8 +23,8 @@ def convert_list(input_list: List[str]) -> List[str]:
 
 def int_to_percentage(value: Union[int, str, float]) -> str:
     if isinstance(value, str):
-        return '-%'
-    sign = '+' if value >= 0 else ''
+        return "-%"
+    sign = "+" if value >= 0 else ""
     return f"{sign}{value:.2f}%"
 
 

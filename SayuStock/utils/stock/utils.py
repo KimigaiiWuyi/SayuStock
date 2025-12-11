@@ -1,12 +1,13 @@
 import json
 import inspect
 import functools
-from datetime import datetime, timedelta
 from typing import Any, List, Tuple, Callable, Optional, Coroutine
+from datetime import datetime, timedelta
 
 import aiofiles
-from gsuid_core.logger import logger
 from plotly.graph_objects import Figure
+
+from gsuid_core.logger import logger
 
 from ..resource_path import DATA_PATH
 from ...stock_config.stock_config import STOCK_CONFIG
@@ -39,29 +40,24 @@ def async_file_cache(**get_file_args: Any) -> Callable:
                 # 获取所有参数的字典
                 func_args_dict = bound_args.arguments
             except TypeError as e:
-                logger.warning(
-                    f"🏷️ [SayuStock] 参数绑定失败: {e}。将跳过缓存。"
-                )
+                logger.warning(f"🏷️ [SayuStock] 参数绑定失败: {e}。将跳过缓存。")
                 return await func(*args, **kwargs)
 
             # 2. 根据函数参数动态生成 get_file 的参数
             minutes = 0
             resolved_get_file_args = {}
             for key, value in get_file_args.items():
-                if key == 'minutes':
+                if key == "minutes":
                     minutes = int(value)
                     continue
 
                 if isinstance(value, str):
                     # 格式化字符串，将 {arg_name} 替换为实际参数值
                     try:
-                        resolved_get_file_args[key] = value.format(
-                            **func_args_dict
-                        )
+                        resolved_get_file_args[key] = value.format(**func_args_dict)
                     except KeyError as e:
                         raise ValueError(
-                            f"装饰器参数 '{key}=\"{value}\"' 中的占位符 {e} "
-                            f"在函数 {func.__name__} 的参数中未找到。"
+                            f"装饰器参数 '{key}=\"{value}\"' 中的占位符 {e} 在函数 {func.__name__} 的参数中未找到。"
                         ) from e
                 else:
                     resolved_get_file_args[key] = value
@@ -74,41 +70,25 @@ def async_file_cache(**get_file_args: Any) -> Callable:
                 try:
                     # 检查文件的修改时间是否在一分钟以内
                     if minutes == 0:
-                        minutes: int = STOCK_CONFIG.get_config(
-                            'mapcloud_refresh_minutes'
-                        ).data
+                        minutes: int = STOCK_CONFIG.get_config("mapcloud_refresh_minutes").data
 
-                    file_mod_time = datetime.fromtimestamp(
-                        file_path.stat().st_mtime
-                    )
-                    if datetime.now() - file_mod_time < timedelta(
-                        minutes=minutes
-                    ):
-                        logger.info(
-                            f"[SayuStock] json文件在{minutes}分钟内，直接返回文件数据。"
-                        )
+                    file_mod_time = datetime.fromtimestamp(file_path.stat().st_mtime)
+                    if datetime.now() - file_mod_time < timedelta(minutes=minutes):
+                        logger.info(f"[SayuStock] json文件在{minutes}分钟内，直接返回文件数据。")
 
-                        if file_path.suffix == '.html':
+                        if file_path.suffix == ".html":
                             return file_path
 
-                        async with aiofiles.open(
-                            file_path, mode='r', encoding='utf-8'
-                        ) as f:
-                            logger.success(
-                                f"✅ [SayuStock] 缓存命中！正在从 {file_path} 读取..."
-                            )
+                        async with aiofiles.open(file_path, mode="r", encoding="utf-8") as f:
+                            logger.success(f"✅ [SayuStock] 缓存命中！正在从 {file_path} 读取...")
                             content = await f.read()
                             return json.loads(content)
 
                 except (json.JSONDecodeError, IOError) as e:
-                    logger.warning(
-                        f"🚨 [SayuStock] 读取或解析缓存文件失败: {e}。将重新执行函数。"
-                    )
+                    logger.warning(f"🚨 [SayuStock] 读取或解析缓存文件失败: {e}。将重新执行函数。")
 
             # 5. 如果文件不存在，执行原函数
-            logger.info(
-                f"🚧 [SayuStock] 缓存未命中。正在执行函数 {func.__name__}..."
-            )
+            logger.info(f"🚧 [SayuStock] 缓存未命中。正在执行函数 {func.__name__}...")
             result = await func(*args, **kwargs)
             if isinstance(result, (int, str)):
                 return result
@@ -117,20 +97,14 @@ def async_file_cache(**get_file_args: Any) -> Callable:
                 result.write_html(file_path)
                 return file_path
 
-            result['file_name'] = file_path.name
+            result["file_name"] = file_path.name
 
             # 6. 将结果异步写入文件
             try:
-                serialized_result = json.dumps(
-                    result, indent=4, ensure_ascii=False
-                )
-                async with aiofiles.open(
-                    file_path, mode='w', encoding='utf-8'
-                ) as f:
+                serialized_result = json.dumps(result, indent=4, ensure_ascii=False)
+                async with aiofiles.open(file_path, mode="w", encoding="utf-8") as f:
                     await f.write(serialized_result)
-                    logger.success(
-                        f"✅ [SayuStock] 结果已成功缓存至 {file_path}"
-                    )
+                    logger.success(f"✅ [SayuStock] 结果已成功缓存至 {file_path}")
             except (TypeError, IOError) as e:
                 logger.warning(f"🚨 [SayuStock] 缓存结果失败: {e}")
 
@@ -147,7 +121,7 @@ def get_file(
     sector: Optional[str] = None,
     sp: Optional[str] = None,
 ):
-    a = f'{market}_{sector}_{sp}_data'
+    a = f"{market}_{sector}_{sp}_data"
     a = a[:254]
     return DATA_PATH / f"{a}.{suffix}"
 
@@ -157,9 +131,7 @@ def get_adjusted_date():
     target_time = now.replace(hour=9, minute=30, second=0, microsecond=0)
     # 判断当前时间是否在当天的9:30之前
     if now < target_time:
-        adjusted_date = now.replace(
-            hour=0, minute=0, second=0, microsecond=0
-        ) - timedelta(days=1)
+        adjusted_date = now.replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(days=1)
     else:
         adjusted_date = now
     return adjusted_date
@@ -171,7 +143,7 @@ def calculate_difference(data: List[str]) -> Tuple[int, int]:
 
     date_dict = {}
     for item in data:
-        item_part = item.split(',')
+        item_part = item.split(",")
         date_day = datetime.strptime(item_part[0], "%Y-%m-%d %H:%M")
         if date_day.day not in date_dict:
             date_dict[date_day.day] = []
