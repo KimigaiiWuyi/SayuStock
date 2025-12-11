@@ -448,6 +448,7 @@ async def stock_request(
 
     if url.startswith(
         (
+            "https://quote.eastmoney.com/center/api/sidemenu_new.json",
             "https://quote.eastmoney.com/stockhotmap/api/getquotedata",
             "https://push2his.eastmoney.com",
             "https://quotederivates.eastmoney.com",
