@@ -17,6 +17,7 @@ from .utils import fill_kline
 from .get_compare import to_compare_fig
 from ..utils.image import render_image_by_pw
 from ..utils.utils import get_vix_name, int_to_percentage, number_to_chinese
+from ..utils.get_OKX import analyze_market_target, get_crypto_trend_as_json
 from ..utils.constant import ErroText, bk_dict, market_dict
 from ..utils.time_range import get_trading_minutes
 from ..utils.stock.utils import get_file
@@ -263,8 +264,6 @@ async def to_single_fig(raw_data: Dict):
     total_amount = number_to_chinese(raw["f48"]) if isinstance(raw["f48"], float) else 0
 
     code_id = raw_data.get("file_name")
-    if code_id:
-        code_id = code_id.split("_")[0]
     # 遍历TIME_RANGE如果存在没有数据的时间则插入空数据
     full_data = []
     existing_times = set(item["datetime"] for item in price_histroy)
@@ -956,12 +955,18 @@ async def render_html(
         if m is None:
             m_list = market.split(" ")
             if len(m_list) == 1:
-                raw_data = await get_gg(
-                    m_list[0],
-                    "single-stock",
-                    start_time,
-                    end_time,
-                )
+                _type, formatted_code = analyze_market_target(m_list[0])
+                if _type == "crypto":
+                    raw_data = await get_crypto_trend_as_json(
+                        formatted_code,
+                    )
+                else:
+                    raw_data = await get_gg(
+                        m_list[0],
+                        "single-stock",
+                        start_time,
+                        end_time,
+                    )
             else:
                 TASK = []
                 for m in m_list:

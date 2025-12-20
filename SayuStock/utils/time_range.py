@@ -20,6 +20,7 @@ class Market(Enum):
     SPOT = auto()  # 现货
     TLM = auto()  # TLM
     COMMODITY_SPOT = auto()  # 商品现货
+    CRYPTO = auto()  # 加密货币
 
 
 def is_us_daylight_saving() -> bool:
@@ -78,6 +79,9 @@ MARKET_SESSIONS: Dict[Market, List[Tuple[str, str]]] = {
     Market.COMMODITY_SPOT: [  # 商品现货
         ("06:00", "05:15") if is_us_daylight_saving() else ("07:00", "06:15"),
     ],
+    Market.CRYPTO: [  # 加密货币
+        ("00:00", "23:59"),
+    ],
 }
 
 
@@ -85,6 +89,12 @@ def _parse_em_code(code: str) -> Market:
     """
     解析东方财富代码，返回其所属的市场枚举类型。
     """
+    print(code)
+    if "crypto" in code:
+        return Market.CRYPTO
+
+    code = code.split("_")[0]
+
     if not isinstance(code, str) or not code:
         return Market.UNKNOWN
 
@@ -182,6 +192,7 @@ def get_trading_minutes(code: Optional[str] = None) -> List[str]:
     if market == Market.UNKNOWN:
         market = Market.A_SHARE
 
+    print(market)
     sessions = MARKET_SESSIONS.get(market, MARKET_SESSIONS[Market.A_SHARE])
 
     return _generate_time_array(sessions)
