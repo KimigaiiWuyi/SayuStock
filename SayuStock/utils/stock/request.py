@@ -19,6 +19,7 @@ from gsuid_core.logger import logger
 
 from .utils import async_file_cache
 from .get_vix import get_vix_data
+from ..get_OKX import analyze_market_target, get_crypto_trend_as_json, get_crypto_history_kline_as_json
 from ..constant import (
     UA,
     DC_COOKIES,
@@ -167,16 +168,24 @@ async def get_gg(
 ):
     logger.info(f"[SayuStock] get_single_fig_data code: {market}")
 
-    sec_id_data = await get_code_id(market)
-    if sec_id_data is None:
-        return ErroText["notStock"]
+    _type, formatted_code = analyze_market_target(market)
 
-    sec_id = get_full_security_code(sec_id_data[0])
-    if sec_id is None:
-        return ErroText["notStock"]
+    if _type == "crypto":
+        pass
+    else:
+        sec_id_data = await get_code_id(market)
+        if sec_id_data is None:
+            return ErroText["notStock"]
+
+        sec_id = get_full_security_code(sec_id_data[0])
+        if sec_id is None:
+            return ErroText["notStock"]
 
     if sector == "single-stock":
-        result = await _get_gg(sec_id, sec_id_data[2])
+        if _type == "crypto":
+            result = await get_crypto_trend_as_json(formatted_code)
+        else:
+            result = await _get_gg(sec_id, sec_id_data[2])
     elif sector.startswith("single-stock-kline"):
         kline_code = sector.split("-")[-1]
         if kline_code == "100":
@@ -215,13 +224,21 @@ async def get_gg(
         st_f = start_time.strftime("%Y%m%d") if start_time else ""
         et_f = end_time.strftime("%Y%m%d") if end_time else ""
 
-        result = await _get_gg_kline(
-            sec_id,
-            sec_id_data[2],
-            kline_code,
-            st_f,
-            et_f,
-        )
+        if _type == "crypto":
+            result = await get_crypto_history_kline_as_json(
+                market,
+                str(kline_code),
+                st_f,
+                et_f,
+            )
+        else:
+            result = await _get_gg_kline(
+                sec_id,
+                sec_id_data[2],
+                kline_code,
+                st_f,
+                et_f,
+            )
     else:
         result = {}
 

@@ -89,7 +89,6 @@ def _parse_em_code(code: str) -> Market:
     """
     解析东方财富代码，返回其所属的市场枚举类型。
     """
-    print(code)
     if "crypto" in code:
         return Market.CRYPTO
 
@@ -192,7 +191,6 @@ def get_trading_minutes(code: Optional[str] = None) -> List[str]:
     if market == Market.UNKNOWN:
         market = Market.A_SHARE
 
-    print(market)
     sessions = MARKET_SESSIONS.get(market, MARKET_SESSIONS[Market.A_SHARE])
 
     return _generate_time_array(sessions)

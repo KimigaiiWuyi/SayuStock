@@ -1,14 +1,64 @@
 import re
+import math
 import asyncio
 import datetime
 import traceback
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Union, Optional
 
 import httpx
 
 from gsuid_core.logger import logger
 
 from .stock.utils import async_file_cache
+
+FREQ_MAP = {
+    # 日线
+    "101": "1D",
+    "d": "1D",
+    "day": "1D",
+    "1d": "1D",
+    # 周线
+    "102": "1W",
+    "w": "1W",
+    "week": "1W",
+    "1w": "1W",
+    # 月线
+    "103": "1M",
+    "m": "1M",
+    "month": "1M",
+    "1m": "1M",
+    # 季线 (OKX支持 3M)
+    "104": "3M",
+    "q": "3M",
+    "quarter": "3M",
+    "3m": "3M",
+    # 半年线 (OKX支持 6M)
+    "105": "6M",
+    "h": "6M",
+    "half": "6M",
+    "6m": "6M",
+    # 年线 (OKX支持 1Y)
+    "106": "1Y",
+    "y": "1Y",
+    "year": "1Y",
+    "1y": "1Y",
+}
+FREQ_TO_SECONDS = {
+    "1m": 60,
+    "3m": 180,
+    "5m": 300,
+    "15m": 900,
+    "30m": 1800,
+    "1H": 3600,
+    "2H": 7200,
+    "4H": 14400,
+    "1D": 86400,
+    "1W": 604800,
+    "1M": 2629746,  # 约30.44天
+    "3M": 7889238,  # 约91.3天
+    "6M": 15778476,  # 约182.6天
+    "1Y": 31556952,  # 约365.24天
+}
 
 # 币种名称到 OKX API instId 的映射
 CRYPTO_MAP = {
@@ -319,6 +369,222 @@ async def get_crypto_trend_as_json(
         logger.error(f"Crypto Error: {e}")
         logger.error(traceback.format_exc())
         return {"rc": 1, "msg": f"Error: {str(e)}", "data": {}, "trends": [], "file_name": "error.json"}
+
+    finally:
+        if should_close_client:
+            await client.aclose()
+
+
+@async_file_cache(
+    market="{crypto}",
+    sector="single-stock-kline-crypto-{freq}",
+    suffix="json",
+    sp="{start_time}-{end_time}",
+)
+async def get_crypto_history_kline_as_json(
+    crypto: str = "BTC-USDT",
+    freq: Union[str, int] = "101",
+    start_time: str = "",
+    end_time: str = "",
+    client: Optional[httpx.AsyncClient] = None,
+    proxy: Optional[str] = None,
+) -> Dict[str, Any]:
+    """
+    获取OKX多周期K线数据，自动根据 start_time 和 end_time 计算需要的 K线数量(count)。
+    """
+
+    # --- 1. ID 修正 ---
+    inst_id = crypto.strip().upper()
+    if inst_id in ["BTC", "ETH", "SOL", "DOGE", "PEPE"]:
+        inst_id = f"{inst_id}-USDT"
+    if inst_id.endswith("-USD"):
+        inst_id = inst_id.replace("-USD", "-USDT")
+
+    # --- 2. 频率与时间处理 ---
+    # 获取 OKX 格式的 bar (如 "1D", "1W")
+    bar_interval = FREQ_MAP.get(str(freq).lower(), "1D")
+
+    # 默认时间处理
+    now_dt = datetime.datetime.now()
+    if not end_time:
+        end_time = now_dt.strftime("%Y-%m-%dT%H:%M:%SZ")
+    if not start_time:
+        # 默认取前365天 (保证日线图数据充足)
+        start_time = (now_dt - datetime.timedelta(days=365)).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    # --- 3. 核心：计算 Count ---
+    try:
+        # 尝试解析多种时间格式，兼容 ISO 和 普通 YYYY-MM-DD
+        try:
+            dt_end = datetime.datetime.fromisoformat(end_time.replace("Z", "+00:00"))
+            dt_start = datetime.datetime.fromisoformat(start_time.replace("Z", "+00:00"))
+        except ValueError:
+            # 兼容简单的 "2023-01-01" 格式
+            dt_end = datetime.datetime.strptime(end_time, "%Y-%m-%d")
+            dt_start = datetime.datetime.strptime(start_time, "%Y-%m-%d")
+
+        # 计算时间差 (秒)
+        time_diff = (dt_end - dt_start).total_seconds()
+        if time_diff < 0:
+            time_diff = 0
+
+        # 获取单根K线的秒数，默认为日线(86400)
+        interval_seconds = FREQ_TO_SECONDS.get(bar_interval, 86400)
+
+        # 计算基础数量 = 总时间 / 单根K线时间
+        base_count = math.ceil(time_diff / interval_seconds)
+
+        # 增加冗余数量 (Buffer)
+        # 1. 防止首尾时间戳对齐误差
+        # 2. 确保均线(MA)计算有足够的历史数据 (通常 MA60 需要前60条)
+        # 3. 如果是高频(日线以下)，多加点；如果是年线，少加点
+        buffer = 60
+
+        count = base_count + buffer
+
+        # 限制最小和最大值
+        if count < 10:
+            count = 10  # 至少取10条
+        if count > 1440:
+            count = 1440  # 限制最大条数，防止请求过多
+
+        logger.info(f"Time Range: {dt_start} -> {dt_end} | Interval: {bar_interval} | Calculated Count: {count}")
+
+    except Exception as e:
+        logger.error(f"Calculate count failed: {e}, using default 300")
+        count = 300
+
+    # API 地址
+    url = "https://www.okx.com/api/v5/market/history-candles"
+
+    # --- 4. 客户端初始化 ---
+    should_close_client = False
+    if client is None:
+        mounts = (
+            {
+                "http://": httpx.HTTPTransport(proxy=proxy),
+                "https://": httpx.HTTPTransport(proxy=proxy),
+            }
+            if proxy
+            else None
+        )
+        client = httpx.AsyncClient(mounts=mounts, timeout=15.0)
+        should_close_client = True
+
+    all_candles = []
+
+    try:
+        logger.info(f"正在获取 {inst_id} K线数据 (Freq: {bar_interval}, Count: {count})...")
+
+        # --- 5. 循环分页获取 ---
+        after = ""
+        limit = 100
+
+        # 这是一个简单的处理：如果 end_time 是很久以前，OKX 默认返回的是"最新"的数据。
+        # 如果需要获取特定历史区间的K线，需要在此处设置初始的 after 参数。
+        # 但 OKX 的 history-candles 如果不传 after，默认返回从“现在”开始往前的。
+        # 这里假设大部分场景 end_time 接近“现在”。
+
+        max_loops = (count // 100) + 2
+
+        for _ in range(max_loops):
+            params = {"instId": inst_id, "bar": bar_interval, "limit": limit}
+            if after:
+                params["after"] = after
+
+            # 发送请求
+            response = await client.get(url, params=params)
+
+            # 降级重试逻辑
+            if response.status_code != 200:
+                url = "https://www.okx.com/api/v5/market/candles"
+                response = await client.get(url, params=params)
+                if response.status_code != 200:
+                    break
+
+            res_json = response.json()
+            if res_json.get("code") != "0":
+                break
+
+            data = res_json.get("data", [])
+            if not data:
+                break
+
+            all_candles.extend(data)
+            after = data[-1][0]
+
+            if len(all_candles) >= count:
+                break
+
+        if not all_candles:
+            raise Exception(f"未获取到 {inst_id} 的 {bar_interval} K线数据")
+
+        # --- 6. 数据处理 ---
+        # 截取
+        final_candles = all_candles[:count]
+        # 反转为 旧->新
+        final_candles.sort(key=lambda x: int(x[0]))
+
+        klines_strings = []
+        pre_close = float(final_candles[0][1])
+
+        for candle in final_candles:
+            ts = int(candle[0])
+            o = float(candle[1])
+            h = float(candle[2])
+            l = float(candle[3])
+            c = float(candle[4])
+            vol = float(candle[5])
+            amount = float(candle[7])
+
+            date_str = datetime.datetime.fromtimestamp(ts / 1000).strftime("%Y-%m-%d")
+
+            change_amt = c - pre_close
+            change_pct = (change_amt / pre_close * 100) if pre_close != 0 else 0
+            amplitude = ((h - l) / pre_close * 100) if pre_close != 0 else 0
+
+            rate_factor = 1.0
+            if bar_interval in ["1W", "1M", "3M"]:
+                rate_factor = 3.0
+            turnover_rate = 0
+
+            line_str = (
+                f"{date_str},{o},{c},{h},{l},"
+                f"{int(vol)},{amount:.2f},{amplitude:.2f},"
+                f"{change_pct:.2f},{change_amt:.2f},{turnover_rate}"
+            )
+            klines_strings.append(line_str)
+            pre_close = c
+
+        # --- 7. 构建响应 ---
+        result_json = {
+            "rc": 0,
+            "rt": 17,
+            "svr": 181214693,
+            "lt": 1,
+            "full": 0,
+            "dlmkts": "",
+            "data": {
+                "code": inst_id,
+                "market": 1,
+                "name": f"{inst_id} ({bar_interval})",
+                "decimal": 2,
+                "dktotal": len(klines_strings),
+                "preKPrice": float(final_candles[0][4]),
+                "prePrice": float(final_candles[-2][4]) if len(final_candles) > 1 else pre_close,
+                "qtMiscType": 7,
+                "version": 0,
+                "klines": klines_strings,
+            },
+            "file_name": f"{inst_id}_kline_{freq}_data.json",
+        }
+
+        return result_json
+
+    except Exception as e:
+        logger.error(f"Crypto Kline Error: {e}")
+        logger.error(traceback.format_exc())
+        return {"rc": 1, "msg": f"Error: {str(e)}", "data": {"klines": []}, "file_name": "error.json"}
 
     finally:
         if should_close_client:
