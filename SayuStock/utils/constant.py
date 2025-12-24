@@ -99,7 +99,7 @@ request_header = {
     "nid_create_time=1762029542554; gvi=VIzYcS_d6R9H3UQkE2C7078a4; gvi_create_time=1762029542554; "
     "websitepoptg_api_time=1762781584093; fullscreengg=1; fullscreengg2=1",
     "Dnt": "1",
-    "Host": "push2.eastmoney.com",
+    # "Host": "push2.eastmoney.com",
     "sec-ch-ua": '''"Chromium";v="142", "Google Chrome";v="142", "Not_A Brand";v="99"''',
     "upgrade-insecure-requests": "1",
     "sec-fetch-user": "?1",

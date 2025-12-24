@@ -167,7 +167,15 @@ async def get_all_crypto_price():
                 )
             return None
 
-        tasks = [fetch(crypto) for crypto in CRYPTO_MAP]
+        tasks = [
+            fetch(crypto)
+            for crypto in [
+                "BTC",
+                "ETH",
+                "SOL",
+                "XRP",
+            ]
+        ]
         results = await asyncio.gather(*tasks)
         return {crypto: info for item in results if item for crypto, info in [item]}
 
