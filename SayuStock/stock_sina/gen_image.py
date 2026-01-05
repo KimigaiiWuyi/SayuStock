@@ -42,9 +42,9 @@ async def fetch_sina_image(stock_codes: List[str], limit: int = 720, _type: str 
     stock_code_str = ",".join(stock_codes)
 
     if _type == "pb":
-        _tool = "img_syl_compare"
-    else:
         _tool = "img_sjl_compare"
+    else:
+        _tool = "img_syl_compare"
 
     url = f"https://biz.finance.sina.com.cn/company/compare/{_tool}.php?stock_code={stock_code_str}&limit={limit}"
 
