@@ -17,7 +17,7 @@ from playwright.async_api import async_playwright
 
 from gsuid_core.logger import logger
 
-from .utils import async_file_cache
+from .utils import async_file_cache, calculate_difference
 from .get_vix import get_vix_data
 from ..get_OKX import analyze_market_target, get_crypto_trend_as_json, get_crypto_history_kline_as_json
 from ..constant import (
@@ -39,6 +39,31 @@ from ...stock_config.stock_config import STOCK_CONFIG
 MENU_CACHE = {}
 DC_TOKEN = ""
 NOW_QUEUE = 0
+
+
+async def get_hours_from_em() -> Tuple[float, float]:
+    URL = "https://push2his.eastmoney.com/api/qt/stock/trends2/get"  # noqa: E501
+    y = 0
+    ya = 0
+    for mk in ["1.000001", "0.399001"]:
+        params = {
+            "fields1": "f1,f2,f3,f4,f5,f6,f7,f8,f9,f10,f11,f12,f13",
+            "fields2": "f51,f52,f53,f54,f55,f56,f57,f58",
+            "ndays": "2",
+            "secid": mk,
+        }
+        data = await stock_request(
+            URL,
+            "GET",
+            params=params,
+        )
+        if isinstance(data, int):
+            logger.warning(f"[SayuStock] 获取{mk}数据失败, 错误码: {data}")
+            continue
+        ya0, y0 = calculate_difference(data["data"]["trends"])
+        y += y0
+        ya += ya0
+    return ya, y
 
 
 async def get_bar():
@@ -473,7 +498,7 @@ async def stock_request(
         (
             "https://quote.eastmoney.com/center/api/sidemenu_new.json",
             "https://quote.eastmoney.com/stockhotmap/api/getquotedata",
-            "https://push2his.eastmoney.com",
+            # "https://push2his.eastmoney.com",
             "https://quotederivates.eastmoney.com",
         )
     ):

@@ -1,5 +1,5 @@
 AL = "zh-CN,zh;q=0.8,zh-TW;q=0.7,zh-HK;q=0.5,en-US;q=0.3,en;q=0.2"
-UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.0.0 Safari/537.36"
+UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36"
 
 PREFIX_DATA = {
     "0": "深A",
@@ -73,9 +73,7 @@ header_simple = {
     "Sec-Fetch-Site": "none",
     "Sec-Fetch-User": "?1",
     "Upgrade-Insecure-Requests": "1",
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
-    " AppleWebKit/537.36 (KHTML, like Gecko) "
-    "Chrome/142.0.0.0 Safari/537.36",
+    "User-Agent": UA,
     "sec-ch-ua": '"Chromium";v="142", "Google Chrome";v="142", "Not_A Brand";v="99"',
     "sec-ch-ua-mobile": "?0",
     "sec-ch-ua-platform": '"Windows"',
@@ -99,7 +97,7 @@ request_header = {
     "nid_create_time=1762029542554; gvi=VIzYcS_d6R9H3UQkE2C7078a4; gvi_create_time=1762029542554; "
     "websitepoptg_api_time=1762781584093; fullscreengg=1; fullscreengg2=1",
     "Dnt": "1",
-    # "Host": "push2.eastmoney.com",
+    # "Host": "push2his.eastmoney.com",
     "sec-ch-ua": '''"Chromium";v="142", "Google Chrome";v="142", "Not_A Brand";v="99"''',
     "upgrade-insecure-requests": "1",
     "sec-fetch-user": "?1",

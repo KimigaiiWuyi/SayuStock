@@ -9,7 +9,7 @@ from aiohttp import ClientSession, ClientConnectorError
 
 from gsuid_core.logger import logger
 
-from .utils import get_file, calculate_difference
+from .utils import get_file
 from ..constant import PREFIX_DATA, code_id_dict
 from ...stock_config.stock_config import STOCK_CONFIG
 
@@ -35,25 +35,6 @@ async def get_fund_pos_list(fcode: Union[str, int]) -> Optional[Dict]:
         except ClientConnectorError:
             logger.warning(f"[SayuStock]获取{params['FCODE']}持仓数据失败")
     return None
-
-
-async def get_hours_from_em() -> Tuple[float, float]:
-    URL = "https://push2his.eastmoney.com/api/qt/stock/trends2/get?fields1=f1,f2,f3,f4,f5,f6,f7,f8,f9,f10,f11,f12,f13&fields2=f51,f52,f53,f54,f55,f56,f57,f58&ndays=2"  # noqa: E501
-    y = 0
-    ya = 0
-    for mk in ["1.000001", "0.399001"]:
-        url = URL + "&secid=" + mk
-        async with ClientSession() as sess:
-            try:
-                async with sess.get(url) as res:
-                    if res.status == 200:
-                        data = await res.json()
-                        ya0, y0 = calculate_difference(data["data"]["trends"])
-                        y += y0
-                        ya += ya0
-            except ClientConnectorError:
-                logger.warning(f"[SayuStock]获取{mk}数据失败")
-    return ya, y
 
 
 async def get_code_id(code: str, priority: Optional[str] = None) -> Optional[Tuple[str, str, str]]:

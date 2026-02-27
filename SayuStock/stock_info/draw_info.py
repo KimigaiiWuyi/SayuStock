@@ -10,8 +10,8 @@ from gsuid_core.utils.image.convert import convert_img
 
 from ..utils.image import get_footer
 from ..utils.utils import number_to_chinese
-from ..utils.stock.request import get_gg, get_bar, get_mtdata
-from ..utils.stock.request_utils import get_hours_from_em, get_image_from_em
+from ..utils.stock.request import get_gg, get_bar, get_mtdata, get_hours_from_em
+from ..utils.stock.request_utils import get_image_from_em
 
 TEXT_PATH = Path(__file__).parent / "texture2d"
 DIFF_MAP = {
