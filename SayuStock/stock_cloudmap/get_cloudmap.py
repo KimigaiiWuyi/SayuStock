@@ -3,6 +3,7 @@ import asyncio
 from typing import Dict, List, Union, Optional
 from pathlib import Path
 from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
 from collections import defaultdict
 
 import numpy as np
@@ -258,6 +259,10 @@ async def to_single_fig(raw_data: Dict):
     price_histroy = raw_data["trends"]
     stock_name = raw["f58"]
     new_price = raw["f43"]
+    latest_trade_date = raw.get("latest_trade_date")
+    is_non_today_data = bool(raw.get("is_non_today_data"))
+    market_closed_notice = raw.get("market_closed_notice")
+    today_cn = datetime.now(ZoneInfo("Asia/Shanghai")).strftime("%Y-%m-%d")
     custom_info = int_to_percentage(gained)
     turnover_rate = raw["f168"]
     total_amount = number_to_chinese(raw["f48"]) if isinstance(raw["f48"], float) else 0
@@ -409,8 +414,11 @@ async def to_single_fig(raw_data: Dict):
                 tick_values.append(price)
                 tick_texts.append(f"{i}%")
 
-    title_str1 = f"{stock_name}  最新价：{new_price}"
+    data_date_display = latest_trade_date if latest_trade_date else today_cn
+    title_str1 = f"{stock_name}  数据日期：{data_date_display}  最新价：{new_price}"
     title_str = f"<b>【{title_str1}】 开盘价：{open_price} 涨跌幅：<span style='color:{'red' if gained >= 0 else 'green'};'>{custom_info}</span> 换手率 {turnover_rate}% 成交额 {total_amount}</b>"  # noqa: E501
+    if is_non_today_data and market_closed_notice:
+        title_str += f"<br><span style='color:#ffd166;'>{market_closed_notice}</span>"
 
     # --- 更新整体布局和坐标轴 ---
     fig.update_layout(

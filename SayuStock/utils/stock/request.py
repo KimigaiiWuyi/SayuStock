@@ -3,6 +3,7 @@ import random
 import asyncio
 from typing import Any, Dict, List, Tuple, Union, Literal, Optional
 from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
 
 from yarl import URL
 from aiohttp import (
@@ -169,10 +170,13 @@ async def get_single_fig_data(secid: str):
         # "2024-12-31 14:05,15.63,15.62,15.63,15.61,3300,5154770.00,15.672"
         parts = item.split(",")
         # 原始时间格式为'2024-12-31 14:05'
-        datetime = parts[0].split(" ") if len(parts[0]) > 0 else ["", ""]
+        dt_parts = parts[0].split(" ") if len(parts[0]) > 0 else ["", ""]
+        trade_date = dt_parts[0] if len(dt_parts) > 0 else ""
+        trade_time = dt_parts[1] if len(dt_parts) > 1 else ""
         stock_data.append(
             {
-                "datetime": datetime[1],
+                "datetime": trade_time,
+                "date": trade_date,
                 "price": float(parts[1]),
                 "open": float(parts[2]),
                 "high": float(parts[3]),
@@ -303,6 +307,15 @@ async def _get_gg(sec_id: str, sec_type: str):
         if isinstance(trends, str):
             return resp
         resp["trends"] = trends
+        latest_trade_date = trends[-1].get("date") if trends else None
+        today_cn = datetime.now(ZoneInfo("Asia/Shanghai")).strftime("%Y-%m-%d")
+        if isinstance(latest_trade_date, str) and latest_trade_date:
+            resp["data"]["latest_trade_date"] = latest_trade_date
+            resp["data"]["is_non_today_data"] = latest_trade_date != today_cn
+            if latest_trade_date != today_cn:
+                resp["data"]["market_closed_notice"] = (
+                    f"⚠ 今日（{today_cn}）休市，当前展示的是 {latest_trade_date} 的数据。"
+                )
 
     resp["data"]["f58"] = f"{resp['data']['f58']} ({sec_type})"
 
