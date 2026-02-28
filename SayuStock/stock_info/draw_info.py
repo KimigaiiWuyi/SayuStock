@@ -366,37 +366,7 @@ async def draw_info_img(is_save: bool = False):
     web_em_img = invert_colors(web_em_img)
     img.paste(web_em_img, (882, 32), web_em_img)
 
-    time_color = (186, 26, 27, 100) if sz_diff >= 0 else (18, 199, 30, 100)
-    img_draw.rectangle((1395, 62, 1655, 229), time_color)
-
-    now = datetime.now()
-    weekday = now.strftime("星期" + "一二三四五六日"[now.weekday()])
-    time = now.strftime("%H:%M")
-    date = now.strftime("%Y.%m.%d")
-
-    img_draw.text(
-        (1524, 145),
-        f"{time}",
-        (255, 255, 255),
-        ss_font(58),
-        "mm",
-    )
-    img_draw.text(
-        (1524, 95),
-        f"{weekday}",
-        (255, 255, 255),
-        ss_font(36),
-        "mm",
-    )
-    img_draw.text(
-        (1524, 197),
-        f"{date}",
-        (255, 255, 255),
-        ss_font(36),
-        "mm",
-    )
-
-    all_f6, f6diff = await get_hours_from_em()
+    all_f6, f6diff, is_trading_day = await get_hours_from_em()
     all_f6_str = number_to_chinese(all_f6)
 
     if f6diff > 0:
@@ -406,20 +376,28 @@ async def draw_info_img(is_save: bool = False):
         f6diff_str = f"缩量: {number_to_chinese(abs(f6diff))}"
         fcolor = (18, 199, 30, 100)
 
-    img_draw.text(
-        (1529, 263),
-        f"成交额: {all_f6_str}",
-        time_color,
-        ss_font(34),
-        "mm",
-    )
-    img_draw.text(
-        (1529, 305),
-        f6diff_str,
-        fcolor,
-        ss_font(34),
-        "mm",
-    )
+    time_color = (186, 26, 27, 100) if sz_diff >= 0 else (18, 199, 30, 100)
+
+    now = datetime.now()
+    weekday = now.strftime("星期" + "一二三四五六日"[now.weekday()])
+    time = now.strftime("%H:%M")
+    date = now.strftime("%Y.%m.%d")
+
+    if not is_trading_day:
+        img_draw.rectangle((1395, 62, 1655, 229), (60, 60, 60, 180))
+        img_draw.text((1524, 95), f"{weekday}", (160, 160, 160), ss_font(36), "mm")
+        img_draw.text((1524, 145), "休  市", (255, 200, 0), ss_font(58), "mm")
+        img_draw.text((1524, 197), f"{date}", (160, 160, 160), ss_font(36), "mm")
+        vol_label = f"成交额(上日): {all_f6_str}"
+    else:
+        img_draw.rectangle((1395, 62, 1655, 229), time_color)
+        img_draw.text((1524, 95), f"{weekday}", (255, 255, 255), ss_font(36), "mm")
+        img_draw.text((1524, 145), f"{time}", (255, 255, 255), ss_font(58), "mm")
+        img_draw.text((1524, 197), f"{date}", (255, 255, 255), ss_font(36), "mm")
+        vol_label = f"成交额: {all_f6_str}"
+
+    img_draw.text((1529, 263), vol_label, time_color, ss_font(28), "mm")
+    img_draw.text((1529, 305), f6diff_str, fcolor, ss_font(34), "mm")
 
     for i in DIFF_MAP:
         if qz_diff >= i:
