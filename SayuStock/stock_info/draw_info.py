@@ -366,7 +366,7 @@ async def draw_info_img(is_save: bool = False):
     web_em_img = invert_colors(web_em_img)
     img.paste(web_em_img, (882, 32), web_em_img)
 
-    all_f6, f6diff, is_trading_day = await get_hours_from_em()
+    all_f6, f6diff, last_trade_date = await get_hours_from_em()
     all_f6_str = number_to_chinese(all_f6)
 
     if f6diff > 0:
@@ -383,12 +383,15 @@ async def draw_info_img(is_save: bool = False):
     time = now.strftime("%H:%M")
     date = now.strftime("%Y.%m.%d")
 
-    if not is_trading_day:
+    if last_trade_date is not None:
+        today_date = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        days_ago = (today_date - last_trade_date).days
+        days_label = {1: "上日", 2: "前日", 3: "三日前"}.get(days_ago, f"{days_ago}日前")
         img_draw.rectangle((1395, 62, 1655, 229), (60, 60, 60, 180))
         img_draw.text((1524, 95), f"{weekday}", (160, 160, 160), ss_font(36), "mm")
         img_draw.text((1524, 145), "休  市", (255, 200, 0), ss_font(58), "mm")
         img_draw.text((1524, 197), f"{date}", (160, 160, 160), ss_font(36), "mm")
-        vol_label = f"成交额(上日): {all_f6_str}"
+        vol_label = f"成交额({days_label}): {all_f6_str}"
     else:
         img_draw.rectangle((1395, 62, 1655, 229), time_color)
         img_draw.text((1524, 95), f"{weekday}", (255, 255, 255), ss_font(36), "mm")

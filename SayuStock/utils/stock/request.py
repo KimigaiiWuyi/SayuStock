@@ -41,11 +41,11 @@ DC_TOKEN = ""
 NOW_QUEUE = 0
 
 
-async def get_hours_from_em() -> Tuple[float, float, bool]:
+async def get_hours_from_em() -> Tuple[float, float, Optional[datetime]]:
     URL = "https://push2his.eastmoney.com/api/qt/stock/trends2/get"  # noqa: E501
     y = 0
     ya = 0
-    is_trading_day = True
+    last_trade_date: Optional[datetime] = None
     for mk in ["1.000001", "0.399001"]:
         params = {
             "fields1": "f1,f2,f3,f4,f5,f6,f7,f8,f9,f10,f11,f12,f13",
@@ -61,11 +61,11 @@ async def get_hours_from_em() -> Tuple[float, float, bool]:
         if isinstance(data, int):
             logger.warning(f"[SayuStock] 获取{mk}数据失败, 错误码: {data}")
             continue
-        ya0, y0, is_td = calculate_difference(data["data"]["trends"])
+        ya0, y0, ltd = calculate_difference(data["data"]["trends"])
         y += y0
         ya += ya0
-        is_trading_day = is_td
-    return ya, y, is_trading_day
+        last_trade_date = ltd
+    return ya, y, last_trade_date
 
 
 async def get_bar():

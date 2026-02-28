@@ -137,10 +137,10 @@ def get_adjusted_date():
     return adjusted_date
 
 
-def calculate_difference(data: List[str]) -> Tuple[int, int, bool]:
+def calculate_difference(data: List[str]) -> Tuple[int, int, Optional[datetime]]:
     # 获取今天的日期
     today = get_adjusted_date()
-    real_today_day = today.day
+    real_today = today.replace(hour=0, minute=0, second=0, microsecond=0)
 
     date_dict = {}
     for item in data:
@@ -157,7 +157,7 @@ def calculate_difference(data: List[str]) -> Tuple[int, int, bool]:
         else:
             break
     else:
-        return 0, 0, False
+        return 0, 0, None
 
     logger.info(f"[SayuStock]今天交易日: {today}")
     all_today_data = sum(date_dict[today.day])
@@ -165,4 +165,6 @@ def calculate_difference(data: List[str]) -> Tuple[int, int, bool]:
     del date_dict[today.day]
 
     all_yestoday_data = sum(list(date_dict.values())[0][:all_today_len])
-    return all_today_data, all_today_data - all_yestoday_data, is_trading_day
+    # 返回实际交易日期，若是今天则返回None表示正常交易日
+    actual_date = None if is_trading_day else today.replace(hour=0, minute=0, second=0, microsecond=0)
+    return all_today_data, all_today_data - all_yestoday_data, actual_date
