@@ -1,0 +1,215 @@
+from typing import Dict, Optional
+from pathlib import Path
+
+from PIL import Image, ImageDraw
+
+from gsuid_core.pool import run_in_thread_pool
+from gsuid_core.utils.fonts.fonts import core_font as ss_font
+from gsuid_core.utils.image.convert import convert_img_sync
+
+from ..utils.image import get_footer
+from ..utils.utils import number_to_chinese
+from ..stock_info.draw_info import DIFF_MAP
+
+TEXT_PATH = Path(__file__).parent / "texture2d"
+
+
+def draw_bar(
+    data: Dict,
+    u: str,
+    percent: Optional[str] = None,
+) -> Image.Image:
+    mark_data: dict = data["data"]
+    if isinstance(mark_data["f48"], str):
+        e_money = mark_data["f48"]
+    else:
+        e_money = number_to_chinese(mark_data["f48"])
+    hs = mark_data["f168"]
+    if isinstance(mark_data["f170"], str):
+        p = 0
+    else:
+        p = mark_data["f170"]
+
+    now_price = mark_data["f43"]
+
+    b_title = f"{mark_data['f58']}"
+    s_title = f"({u}) 换: {hs}% 额: {e_money} 价: {now_price}"
+    if p > 0:
+        bar = Image.open(TEXT_PATH / "myup.png")
+        p_color = (213, 102, 102)
+    elif p == 0:
+        bar = Image.open(TEXT_PATH / "myeq.png")
+        p_color = (240, 240, 240)
+    else:
+        bar = Image.open(TEXT_PATH / "mydown.png")
+        p_color = (175, 231, 170)
+    bar_draw = ImageDraw.Draw(bar)
+    bar_draw.text(
+        (82, 40),
+        b_title,
+        (255, 255, 255),
+        ss_font(32),
+        "lm",
+    )
+    bar_draw.text(
+        (82, 75),
+        s_title,
+        p_color,
+        ss_font(20),
+        "lm",
+    )
+    bar_draw.text(
+        (758, 55),
+        f"+{p}%" if p >= 0 else f"{p}%",
+        (255, 255, 255),
+        ss_font(28),
+        "mm",
+    )
+    if percent is not None:
+        bar_draw.text(
+            (613, 55),
+            percent,
+            (240, 240, 240),
+            ss_font(28),
+            "mm",
+        )
+    return bar
+
+
+@run_in_thread_pool
+def _draw_stock_pil(uid, data_zs, stock_data_list):
+    """
+    同步绘图函数，负责生成 PIL Image 对象
+    """
+    img = Image.new(
+        "RGBA",
+        (
+            900 if len(uid) < 18 else 1800,
+            (541 + len(uid) * 110 + 60 if len(uid) < 18 else 541 + (((len(uid) - 1) // 2) + 1) * 110 + 60),
+        ),
+        (7, 9, 27),
+    )
+    zyzs = (
+        [
+            "上证指数",
+            "深证成指",
+            "中证A500",
+            "中证2000",
+        ]
+        if len(uid) < 18
+        else [
+            "上证指数",
+            "深证成指",
+            "创业板指",
+            "上证50",
+            "沪深300",
+            "中证A500",
+            "中证2000",
+            "国债指数",
+        ]
+    )
+
+    # 主要指数
+    n = 0
+    x0 = 50 if len(uid) < 18 else 100
+    for zs_name in zyzs:
+        for zs_diff in data_zs["data"]["diff"]:
+            if zs_name != zs_diff["f14"]:
+                continue
+            diff = zs_diff["f3"]
+            zs_img = Image.new("RGBA", (200, 140))
+            zs_draw = ImageDraw.Draw(zs_img)
+            if diff >= 0:
+                zsc = (140, 18, 22, 55)
+                zsc2 = (206, 34, 30)
+            else:
+                zsc = (59, 140, 18, 55)
+                zsc2 = (36, 206, 30)
+
+            zs_draw.rounded_rectangle((15, 13, 185, 127), 0, zsc)
+
+            zs_draw.text(
+                (100, 99),
+                f"{zs_diff['f14']}",
+                (255, 255, 255),
+                ss_font(24),
+                "mm",
+            )
+
+            zs_draw.text(
+                (100, 38),
+                f"{zs_diff['f2']}",
+                zsc2,
+                ss_font(30),
+                "mm",
+            )
+
+            zs_draw.text(
+                (100, 70),
+                f"{'+' if diff >= 0 else ''}{diff}%",
+                zsc2,
+                ss_font(30),
+                "mm",
+            )
+            img.paste(
+                zs_img,
+                (x0 + 200 * n, 308 + 140 * 0),
+                zs_img,
+            )
+            n += 1
+
+    all_p = 0
+    alluid = len(uid)
+
+    # 绘制个股 Bar
+    for index, (u, data) in enumerate(zip(uid, stock_data_list)):
+        # 如果获取数据返回的是字符串（错误信息），跳过绘制
+        if isinstance(data, str):
+            continue
+
+        if isinstance(data["data"]["f170"], str):
+            all_p += 0
+        else:
+            all_p += data["data"]["f170"]
+
+        bar = draw_bar(data, u)
+
+        if alluid >= 18 and index >= ((alluid - 1) // 2) + 1:
+            x = 900
+            y = 541 + (index - (((alluid - 1) // 2) + 1)) * 110
+        else:
+            x = 0
+            y = 541 + index * 110
+
+        img.paste(bar, (x, y), bar)
+
+    avg_p = all_p / len(uid)
+    for i in DIFF_MAP:
+        if avg_p >= i:
+            title_num = DIFF_MAP[i]
+            break
+    else:
+        title_num = 11
+
+    title = Image.open(TEXT_PATH / f"title{title_num}.png")
+    img.paste(
+        title,
+        (25 + 450 if len(uid) >= 18 else 25, -31),
+        title,
+    )
+
+    bar5 = Image.open(TEXT_PATH / "bar5.png")
+    img.paste(
+        bar5,
+        (25 + 450 if len(uid) >= 18 else 25, 443),
+        bar5,
+    )
+
+    footer = get_footer()
+    img.paste(
+        footer,
+        (25 + 450 if len(uid) >= 18 else 25, img.size[1] - 55),
+        footer,
+    )
+    res = convert_img_sync(img)
+    return res
