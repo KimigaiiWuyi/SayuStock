@@ -1,10 +1,8 @@
 from typing import Optional
 
 from sqlmodel import Field
-from fastapi_amis_admin.amis.components import PageSchema
 
-from gsuid_core.webconsole import site
-from gsuid_core.webconsole.mount_app import GsAdminModel
+from gsuid_core.webconsole.mount_app import PageSchema, GsAdminModel, site
 from gsuid_core.utils.database.base_models import Bind, Type, T_Bind
 
 from ..utils import convert_list
