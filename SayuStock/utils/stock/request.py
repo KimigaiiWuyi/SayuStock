@@ -444,7 +444,7 @@ async def get_hotmap():
         return f"[SayuStock] 错误代码: {resp}"
 
     bk: List[str] = []
-    for i in resp["bk"]:
+    for i in resp["data"]:
         assert isinstance(i, str)
         data = i.split("|")
         bk.append(data[0])
