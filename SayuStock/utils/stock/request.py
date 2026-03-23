@@ -29,6 +29,7 @@ from ..constant import (
     ErroText,
     market_dict,
     header_simple,
+    chinese_stocks,
     request_header,
     trade_detail_dict,
 )
@@ -464,14 +465,22 @@ async def get_hotmap():
         if "|" in i:
             data = i.split("|")
             diff = {
-                "f2": float(data[15]) / 100 if data[15] != "-" else 0,
-                "f3": float(data[6]) / 100 if data[6] != "-" else 0,
-                "f6": float(data[13]) if data[13] != "-" else 0,
-                "f12": data[3],
-                "f14": data[1],
-                "f20": float(data[17]) * 100000 if data[17] != "-" else 0,
-                "f100": bk[int(data[0])],
-                "dd": data[4][1:-1].split(","),
+                # 最新
+                "f2": float(data[12]) / 100 if data[12] != "-" else 0,
+                # 涨幅
+                "f3": float(data[3]) / 100 if data[3] != "-" else 0,
+                # 成交额
+                "f6": float(data[10]) if data[10] != "-" else 0,
+                # 代码
+                "f12": data[1],
+                # 名称
+                "f14": chinese_stocks.get(data[1], {"name": data[1]})["name"],
+                # 市值
+                "f20": float(data[13]) * 100000 if data[13] != "-" else 0,
+                # 所属板块
+                "f100": chinese_stocks.get(data[1], {"industry_l1": data[1]})["industry_l1"],
+                # 不知道是啥, 先注释
+                # "dd": data[4][1:-1].split(","),
             }
             result["data"]["diff"].append(diff)
 

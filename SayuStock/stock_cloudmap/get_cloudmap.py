@@ -757,9 +757,11 @@ async def to_fig(
             num_to_extract = num_items
         else:
             if num_items <= 40:
-                fit = 0.4  # 总数40以内，计划显示50%
+                fit = 0.6  # 总数40以内，计划显示50%
             elif num_items <= 100:
-                fit = 0.3  # 40到100之间，计划显示40%
+                fit = 0.4  # 40到100之间，计划显示40%
+            elif num_items <= 200:
+                fit = 0.3  # 100到200之间，计划显示30%
             else:
                 fit = 0.2  # 超过100，计划显示30%
 

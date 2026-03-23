@@ -11,6 +11,7 @@ class Market(Enum):
     A_SHARE = auto()
     HK_STOCK = auto()
     US_STOCK = auto()
+    US_FUTURE = auto()  # 美国期货（如 nq、es）
     CN_FUTURE_DAY = auto()  # 中国日盘期货（通用）
     CN_FUTURE_NIGHT = auto()  # 中国夜盘期货（通用，如金属、能源）
     SG_FUTURE = auto()  # 新加坡期货（如A50）
@@ -57,6 +58,9 @@ MARKET_SESSIONS: Dict[Market, List[Tuple[str, str]]] = {
         # 注意：不同期货品种的夜盘时间有差异，这里仅为通用示例
         # 实际应用中可能需要根据具体合约代码（如 'rb', 'ag'）进一步细化
     ],
+    Market.US_FUTURE: [  # 美国期货如 nq（纳斯达克）、es（标普500）等
+        ("18:00", "17:00"),
+    ],
     Market.SG_FUTURE: [  # 例如富时中国A50指数期货 (CN)
         ("09:00", "16:30"),
         ("17:00", "05:15"),
@@ -102,8 +106,32 @@ def _parse_em_code(code: str) -> Market:
     if re.fullmatch(r"^[a-zA-Z]{1,2}\d{4}$", code):
         # 简化处理：假设字母开头的都是期货。可根据首字母进一步细分日夜盘。
         # 例如，'rb', 'ag', 'au', 'cu' 等通常有夜盘
-        if code.lower().startswith(("rb", "ag", "au", "cu", "zn", "al", "pb", "ni", "sn", "sc", "lu")):
+        if code.lower().startswith(
+            (
+                "rb",
+                "ag",
+                "au",
+                "cu",
+                "zn",
+                "al",
+                "pb",
+                "ni",
+                "sn",
+                "sc",
+                "lu",
+            )
+        ):
             return Market.CN_FUTURE_NIGHT
+        # 美国期货：nq（纳斯达克）、es（标普500）、ym（道琼斯）等
+        if code.lower().startswith(
+            (
+                "nq",
+                "es",
+                "ym",
+                "rty",
+            )
+        ):
+            return Market.US_FUTURE
         return Market.CN_FUTURE_DAY
 
     # 新加坡A50指数期货

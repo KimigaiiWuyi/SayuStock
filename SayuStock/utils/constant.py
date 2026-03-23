@@ -1,3 +1,19 @@
+import json
+from typing import TypedDict
+from pathlib import Path
+
+
+class StockInfo(TypedDict):
+    name: str
+    industry_l1: str
+    industry_l2: str
+
+
+chinese_stocks_path = Path(__file__).parent / "chinese_stocks.json"
+
+with open(chinese_stocks_path, "r", encoding="utf-8") as f:
+    chinese_stocks: dict[str, StockInfo] = json.load(f)
+
 AL = "zh-CN,zh;q=0.8,zh-TW;q=0.7,zh-HK;q=0.5,en-US;q=0.3,en;q=0.2"
 UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36"
 
