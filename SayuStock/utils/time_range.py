@@ -143,6 +143,8 @@ def _parse_em_code(code: str) -> Market:
         prefix, main_code = code.split(".", 1)
         if prefix in ["118"]:
             return Market.SPOT
+        if prefix in ["103"]:
+            return Market.US_FUTURE
         if prefix in ["122"]:
             return Market.COMMODITY_SPOT
         if prefix in ["101", "102", "171"]:
