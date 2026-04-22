@@ -534,7 +534,7 @@ async def stock_request(
                 async with client.request(
                     method,
                     url=final_url,
-                    # headers=header,
+                    headers=header,
                     params=params,
                     json=_json,
                     data=data,
