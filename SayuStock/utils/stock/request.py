@@ -515,50 +515,76 @@ async def stock_request(
     ):
         header = header_simple
 
+    urls = [url]
+    if "push2.eastmoney.com" in url:
+        urls.append(
+            url.replace(
+                "push2.eastmoney.com",
+                "push2delay.eastmoney.com",
+                1,
+            )
+        )
+
     async with ClientSession(
         connector=TCPConnector(verify_ssl=True),
         headers=header,
         cookies=DC_COOKIES,
     ) as client:
-        final_url = str(URL(url).with_query(params or {}))
-        logger.info(f"[SayuStock] 最终请求URL：{final_url}")
+        for req_url in urls:
+            final_url = str(URL(req_url).with_query(params or {}))
+            logger.info(f"[SayuStock] 最终请求URL：{final_url}")
 
-        # header['cookie'] = DC_TOKEN
+            # header['cookie'] = DC_TOKEN
 
-        while NOW_QUEUE >= 6:
-            await asyncio.sleep(random.uniform(0.4, 0.9))
+            while NOW_QUEUE >= 6:
+                await asyncio.sleep(random.uniform(0.4, 0.9))
 
-        for _ in range(2):
-            try:
-                NOW_QUEUE += 1
-                async with client.request(
-                    method,
-                    url=final_url,
-                    headers=header,
-                    params=params,
-                    json=_json,
-                    data=data,
-                    timeout=ClientTimeout(total=300),
-                ) as resp:
-                    try:
-                        raw_data = await resp.json()
-                    except (ContentTypeError, json.decoder.JSONDecodeError):
-                        _raw_data = await resp.text()
-                        raw_data = -999
-                    logger.debug(raw_data)
+            for _ in range(2):
+                try:
+                    NOW_QUEUE += 1
+                    async with client.request(
+                        method,
+                        url=final_url,
+                        headers=header,
+                        params=params,
+                        json=_json,
+                        data=data,
+                        timeout=ClientTimeout(total=300),
+                    ) as resp:
+                        try:
+                            raw_data = await resp.json()
+                        except (ContentTypeError, json.decoder.JSONDecodeError):
+                            _raw_data = await resp.text()
+                            raw_data = -999
+                        logger.debug(raw_data)
 
-                    if resp.status != 200:
-                        logger.error(f"[SayuStock][EM] 访问 {url} 失败, 错误码: {resp.status}, 错误返回: {raw_data}")
-                        return -999
-                    return raw_data
-            except ServerDisconnectedError:
-                logger.warning(f"[SayuStock] 请求 {url} 失败, 尝试获取DC-Token...")
-                # header['cookie'] = await get_dc_token()
-                await asyncio.sleep(random.uniform(0.2, 0.9))
-            finally:
-                NOW_QUEUE -= 1
-        else:
-            return -400016
+                        if resp.status != 200:
+                            logger.error(
+                                f"[SayuStock][EM] 访问 {req_url} 失败, "
+                                f"错误码: {resp.status}, 错误返回: {raw_data}"
+                            )
+                            if req_url != urls[-1]:
+                                break
+                            return -999
+                        if isinstance(raw_data, int):
+                            if req_url != urls[-1]:
+                                break
+                            return raw_data
+                        return raw_data
+                except ServerDisconnectedError:
+                    logger.warning(
+                        f"[SayuStock] 请求 {req_url} 失败, 尝试获取DC-Token..."
+                    )
+                    # header['cookie'] = await get_dc_token()
+                    await asyncio.sleep(random.uniform(0.2, 0.9))
+                finally:
+                    NOW_QUEUE -= 1
+            else:
+                if req_url == urls[-1]:
+                    return -400016
+                logger.warning(
+                    f"[SayuStock] 请求 {req_url} 失败, 尝试切换到备用域名..."
+                )
 
 
 async def get_dc_token():
