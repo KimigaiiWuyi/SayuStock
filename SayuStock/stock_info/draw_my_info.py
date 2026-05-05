@@ -4,9 +4,11 @@ from pathlib import Path
 
 from PIL import Image, ImageDraw
 
+from gsuid_core.logger import logger
 from gsuid_core.models import Event
 from gsuid_core.utils.fonts.fonts import core_font as ss_font
 from gsuid_core.utils.image.convert import convert_img
+from gsuid_core.ai_core.trigger_bridge import ai_return
 
 from ..utils.image import get_footer
 from ..utils.utils import convert_list, number_to_chinese
@@ -173,6 +175,7 @@ async def draw_my_stock_img(ev: Event):
             n += 1
 
     all_p = 0
+    stock_details = []  # 收集每只股票的详细数据
     TASK = []
 
     async def sg(img: Image.Image, index: int, u: str, alluid: int):
@@ -190,6 +193,19 @@ async def draw_my_stock_img(ev: Event):
             all_p += 0
         else:
             all_p += data["data"]["f170"]
+
+        # 收集股票详细数据用于 ai_return
+        d = data.get("data", {})
+        stock_details.append(
+            {
+                "code": u,
+                "name": d.get("f58", "N/A"),
+                "price": d.get("f43", "N/A"),
+                "change": d.get("f170", 0),
+                "turnover": d.get("f168", "N/A"),
+                "amount": d.get("f48", "N/A"),
+            }
+        )
 
         bar = draw_bar(data, u)
 
@@ -236,4 +252,43 @@ async def draw_my_stock_img(ev: Event):
     )
 
     res = await convert_img(img)
+
+    # AI 注入：提取自选股行情文本数据
+    _ai_return_my_stock(uid, all_p, stock_details)
+
     return res
+
+
+def _ai_return_my_stock(uid_list, all_p, stock_details=None):
+    """从自选股数据中提取文本信息，通过 ai_return 返回给 AI 分析"""
+    try:
+        avg_p = all_p / len(uid_list) if uid_list else 0
+        result = f"【我的自选】共 {len(uid_list)} 只，平均涨跌幅: {avg_p:+.2f}%\n"
+
+        if stock_details:
+            # 按涨跌幅排序
+            sorted_details = sorted(
+                stock_details,
+                key=lambda x: x.get("change", 0) if isinstance(x.get("change", 0), (int, float)) else 0,
+                reverse=True,
+            )
+            result += "\n个股行情:\n"
+            for s in sorted_details:
+                change = s.get("change", 0)
+                sign = "+" if isinstance(change, (int, float)) and change >= 0 else ""
+                amount = s.get("amount", "N/A")
+                if isinstance(amount, (int, float)):
+                    from ..utils.utils import number_to_chinese
+
+                    amount = number_to_chinese(amount)
+                result += (
+                    f"  {s['name']}({s['code']}): "
+                    f"最新价 {s['price']}  {sign}{change}%  "
+                    f"换手率 {s['turnover']}%  成交额 {amount}\n"
+                )
+        else:
+            result += f"自选代码: {', '.join(uid_list[:10])}"
+
+        ai_return(result)
+    except Exception as e:
+        logger.warning(f"[SayuStock] ai_return 自选股数据提取失败: {e}")

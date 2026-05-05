@@ -18,7 +18,19 @@ sv_stock_subscribe = SV("订阅新闻", pm=2, area="GROUP")
 TASK_NAME = "雪球新闻订阅"
 
 
-@sv_stock_subscribe.on_fullmatch(("订阅雪球新闻", "订阅雪球热点"))
+@sv_stock_subscribe.on_fullmatch(
+    ("订阅雪球新闻", "订阅雪球热点"),
+    to_ai="""订阅雪球7x24小时财经新闻推送
+
+    当用户说"订阅新闻"、"开启新闻推送"、"订阅雪球热点"、
+    "帮我订阅财经新闻"、"开启新闻提醒"时调用。
+    订阅后会自动推送最新的雪球财经新闻。
+    无需参数，留空即可。
+
+    Args:
+        text: 无需参数，留空即可
+    """,
+)
 async def send_add_subscribe_info(bot: Bot, ev: Event):
     logger.info("✅ [SayuStock] 开始执行[订阅新闻]")
     new = await get_news()
@@ -35,7 +47,18 @@ async def send_add_subscribe_info(bot: Bot, ev: Event):
     await bot.send("✅ [SayuStock] 订阅雪球新闻成功！")
 
 
-@sv_stock_subscribe.on_fullmatch(("取消订阅雪球新闻", "取消订阅雪球热点"))
+@sv_stock_subscribe.on_fullmatch(
+    ("取消订阅雪球新闻", "取消订阅雪球热点"),
+    to_ai="""取消订阅雪球财经新闻推送
+
+    当用户说"取消订阅新闻"、"关闭新闻推送"、"取消雪球热点"、
+    "不要再推送新闻了"、"关闭新闻提醒"时调用。
+    无需参数，留空即可。
+
+    Args:
+        text: 无需参数，留空即可
+    """,
+)
 async def send_delete_subscribe_info(bot: Bot, ev: Event):
     logger.info("✅ [SayuStock] 开始执行[取消订阅新闻]")
     await gs_subscribe.delete_subscribe("session", TASK_NAME, ev)

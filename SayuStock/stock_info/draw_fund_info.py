@@ -2,8 +2,10 @@ from typing import Union
 
 from PIL import Image, ImageDraw
 
+from gsuid_core.logger import logger
 from gsuid_core.utils.fonts.fonts import core_font as ss_font
 from gsuid_core.utils.image.convert import convert_img
+from gsuid_core.ai_core.trigger_bridge import ai_return
 
 from ..utils.image import get_footer
 from .draw_my_info import DIFF_MAP, TEXT_PATH, draw_bar
@@ -75,4 +77,30 @@ async def draw_fund_info(fcode: Union[str, int]):
     )
 
     res = await convert_img(img)
+
+    # AI 注入：提取基金持仓文本数据
+    _ai_return_fund_info(_code, fund_data, all_p)
+
     return res
+
+
+def _ai_return_fund_info(code_info, fund_data, all_p):
+    """从基金持仓数据中提取文本信息，通过 ai_return 返回给 AI 分析"""
+    try:
+        fund_name = code_info[1]
+        fund_code = code_info[0]
+        holdings = fund_data.get("Datas", [])
+        avg_p = all_p / len(holdings) if holdings else 0
+
+        result = f"【{fund_name}({fund_code}) 持仓信息】\n"
+        result += f"持仓数量: {len(holdings)} 只，平均涨跌幅: {avg_p:+.2f}%\n\n"
+        result += "重仓股:\n"
+        for d in holdings[:10]:
+            name = d.get("ShareName", "N/A")
+            code = d.get("ShareCode", "N/A")
+            proportion = d.get("ShareProportion", "N/A")
+            result += f"  {name}({code}): 占比 {proportion}%\n"
+
+        ai_return(result)
+    except Exception as e:
+        logger.warning(f"[SayuStock] ai_return 基金持仓数据提取失败: {e}")

@@ -47,28 +47,71 @@ async def delete_all_data():
     logger.success("[SayuStock] [删除全部缓存数据] 执行完成！")
 
 
-@sv_stock_cloudmap.on_command(("大盘云图"))
+@sv_stock_cloudmap.on_command(
+    ("大盘云图"),
+    to_ai="""查看A股大盘行业板块涨跌分布云图
+
+    当用户询问大盘行情、今日市场整体表现、行业板块涨跌分布、大盘热力图、
+    "帮我看看大盘"、"今天市场怎么样"、"行业板块涨跌"时调用。
+
+    Args:
+        text: 可选的板块筛选条件，留空显示全部行业板块的大盘云图。
+              例如 "" 或 "医药" 或 "科技"
+    """,
+)
 async def send_cloudmap_img(bot: Bot, ev: Event):
     logger.info("开始执行[大盘云图]")
     im = await render_image("大盘云图", ev.text.strip())
     await bot.send(im)
 
 
-@sv_stock_cloudmap.on_command(("板块云图", "行业云图", "行业板块"))
+@sv_stock_cloudmap.on_command(
+    ("板块云图", "行业云图", "行业板块"),
+    to_ai="""查看行业板块涨跌分布云图
+
+    当用户询问某个行业板块行情、行业板块云图、"帮我看看半导体板块"、
+    "新能源板块怎么样"、"行业板块涨跌"时调用。
+
+    Args:
+        text: 行业板块名称，例如 "半导体"、"新能源"、"医药"、"白酒"
+    """,
+)
 async def send_typemap_img(bot: Bot, ev: Event):
     logger.info("开始执行[板块云图]")
     im = await render_image("行业云图", ev.text.strip())
     await bot.send(im)
 
 
-@sv_stock_cloudmap.on_command(("概念云图", "概念板块云图", "概念板块"))
+@sv_stock_cloudmap.on_command(
+    ("概念云图", "概念板块云图", "概念板块"),
+    to_ai="""查看概念板块涨跌分布云图
+
+    当用户询问某个概念板块行情、概念板块云图、"帮我看看人工智能概念"、
+    "华为欧拉概念怎么样"、"概念板块涨跌"时调用。
+    注意：不指定概念名称时会提示需要后跟概念类型。
+
+    Args:
+        text: 概念板块名称，例如 "华为欧拉"、"人工智能"、"机器人"、"芯片"
+    """,
+)
 async def send_gn_img(bot: Bot, ev: Event):
     logger.info("开始执行[概念云图]")
     im = await render_image("概念云图", ev.text.strip())
     await bot.send(im)
 
 
-@sv_stock_cloudmap.on_fullmatch(("我的个股"))
+@sv_stock_cloudmap.on_fullmatch(
+    ("我的个股"),
+    to_ai="""查看自选股当日分时行情图
+
+    当用户询问"我的股票"、"自选股今天怎么样"、"帮我看看我的持仓走势"、
+    "我的个股表现"时调用。自动读取当前用户的自选股列表，最多显示5只。
+    无需参数，留空即可。
+
+    Args:
+        text: 无需参数，留空即可
+    """,
+)
 async def send_my_stock_img(bot: Bot, ev: Event):
     logger.info("开始执行[我的个股数据]")
     user_id = ev.at if ev.at else ev.user_id
@@ -89,7 +132,24 @@ async def send_my_stock_img(bot: Bot, ev: Event):
     await bot.send(im)
 
 
-@sv_stock_cloudmap.on_command(("个股"))
+@sv_stock_cloudmap.on_command(
+    ("个股"),
+    to_ai='''查询股票/ETF的K线图或分时图
+
+    当用户询问某只股票/ETF今天走势、分时图、日K、周K、月K时调用。
+    例如"帮我看看证券ETF"、"贵州茅台日K"、"白酒ETF周K"。
+    支持同时查询多只股票的分时图。
+
+    Args:
+        text: 查询内容，格式为 "[周期前缀] 股票名称或代码"
+              - 无前缀：默认显示分时图，例如 "证券ETF"
+              - "日k": 日K线，例如 "日k 证券ETF"
+              - "周k": 周K线，例如 "周k 白酒ETF"
+              - "月k"/"季k"/"年k": 对应周期K线
+              - 多个标的以空格分隔，例如 "证券ETF 白酒ETF"
+              - VIX指数：例如 "300vix"（仅支持分时，不支持K线）
+    ''',
+)
 async def send_stock_img(bot: Bot, ev: Event):
     logger.info("开始执行[个股数据]")
     content = ev.text.strip().lower()
@@ -116,7 +176,23 @@ async def send_stock_img(bot: Bot, ev: Event):
     await bot.send(im)
 
 
-@sv_stock_compare.on_command(("对比个股", "个股对比"), block=True)
+@sv_stock_compare.on_command(
+    ("对比个股", "个股对比"),
+    block=True,
+    to_ai="""对比多只股票/ETF的涨跌幅走势
+
+    当用户想要对比几只股票走势、比较不同ETF表现、"帮我对比白酒和医药"、
+    "证券ETF和沪深300谁涨得多"时调用。不指定标的则对比用户自选列表。
+
+    Args:
+        text: 查询内容，格式为 "[时间范围] 股票名称或代码1 股票名称或代码2 ..."
+              - 时间范围可选："年初至今"、"最近一年"、"最近一月"
+              - 也可指定具体日期如 "2024.01.01~2024.12.31"
+              - 无时间范围默认显示当日分时对比
+              - 多个标的以空格分隔，例如 "白酒ETF 医药ETF 证券ETF"
+              - 不指定标的则对比用户自选列表
+    """,
+)
 async def send_compare_img(bot: Bot, ev: Event):
     logger.info("开始执行[对比个股]")
     txt = ev.text.strip().replace("个股", "").replace("，", ",").replace(",", " ").replace("  ", " ").strip()

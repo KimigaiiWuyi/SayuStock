@@ -5,8 +5,10 @@ from datetime import datetime
 
 from PIL import Image, ImageOps, ImageDraw
 
+from gsuid_core.logger import logger
 from gsuid_core.utils.fonts.fonts import core_font as ss_font
 from gsuid_core.utils.image.convert import convert_img
+from gsuid_core.ai_core.trigger_bridge import ai_return
 
 from ..utils.image import get_footer
 from ..utils.utils import number_to_chinese
@@ -244,6 +246,9 @@ async def draw_info_img(is_save: bool = False):
         + diff_bar["-5~-10"]
         + diff_bar["-10+"]
     )
+    # AI 注入：提取大盘概览文本数据
+    _ai_return_market_overview(data_zs, data_hy_z, data_hy_f, up_value, down_value, diff_bar)
+
     h0 = 90
     h = 1060 + 20 * h0
     img = Image.new("RGBA", (1700, h), (7, 9, 27))
@@ -485,3 +490,61 @@ async def draw_bar(sd: List[dict], img: Image.Image, start: int, y: int, h: int 
             (start, y + h * hindex),
             hy_img,
         )
+
+
+def _ai_return_market_overview(data_zs, data_hy_z, data_hy_f, up_value, down_value, diff_bar):
+    """从大盘概览数据中提取文本信息，通过 ai_return 返回给 AI 分析"""
+    try:
+        result = "【A股大盘概览】\n"
+
+        # 主要指数
+        zyzs = [
+            "上证指数",
+            "中证全指",
+            "创业板指",
+            "科创综指",
+            "沪深300",
+            "中证500",
+            "中证1000",
+            "中证2000",
+            "中证A500",
+            "北证50",
+            "黄金9999",
+            "三十债主连",
+        ]
+        result += "【主要指数】\n"
+        for zs_name in zyzs:
+            for zs_diff in data_zs["data"]["diff"]:
+                diff_name = zs_diff["f14"].split("(")[0].strip()
+                if zs_name != diff_name:
+                    continue
+                price = zs_diff.get("f2", "N/A")
+                diff = zs_diff.get("f3", 0)
+                result += f"  {zs_name}: {price} ({'+' if diff >= 0 else ''}{diff}%)\n"
+                break
+
+        # 涨跌分布
+        result += f"\n【涨跌分布】上涨 {up_value} 家  下跌 {down_value} 家\n"
+        for label, count in diff_bar.items():
+            if count > 0:
+                result += f"  {label}: {count}\n"
+
+        # 领涨行业板块
+        result += "\n【领涨行业板块】\n"
+        for hy in data_hy_z[:5]:
+            name = hy.get("f14", "N/A")
+            diff = hy.get("f3", 0)
+            leader = hy.get("f128", "N/A")
+            result += f"  {name}: {'+' if diff >= 0 else ''}{diff}% (领涨: {leader})\n"
+
+        # 领跌行业板块
+        result += "\n【领跌行业板块】\n"
+        for hy in data_hy_f[:5]:
+            name = hy.get("f14", "N/A")
+            diff = hy.get("f3", 0)
+            leader = hy.get("f207", "N/A")
+            result += f"  {name}: {'+' if diff >= 0 else ''}{diff}% (领跌: {leader})\n"
+
+        ai_return(result)
+    except Exception as e:
+        logger.warning(f"[SayuStock] ai_return 大盘概览数据提取失败: {e}")

@@ -5,7 +5,9 @@ from pathlib import Path
 
 from PIL import Image
 
+from gsuid_core.logger import logger
 from gsuid_core.utils.image.convert import convert_img
+from gsuid_core.ai_core.trigger_bridge import ai_return
 
 from .draw_info import draw_block
 from .get_jp_data import get_jpy
@@ -110,4 +112,74 @@ async def draw_future_img():
     footer = get_footer()
     img.paste(footer, (75, 2135), footer)
     res = await convert_img(img)
+
+    # AI 注入：提取全天候板块文本数据
+    _ai_return_all_weather(data_gz, data2, data3, data4, data5)
+
     return res
+
+
+def _ai_return_all_weather(data_gz, data_commodity, data_bond, data_whsc, data_crypto):
+    """从全天候板块数据中提取文本信息，通过 ai_return 返回给 AI 分析"""
+    try:
+        result = "【全天候板块】\n"
+
+        # 全球股市指数
+        result += "\n【全球股市】\n"
+        for name, code in i_code.items():
+            if not code:
+                continue
+            for item in data_gz:
+                item_name = item.get("f14", "")
+                if item_name and name in item_name:
+                    price = item.get("f2", "N/A")
+                    change = item.get("f3", "N/A")
+                    sign = "+" if isinstance(change, (int, float)) and change >= 0 else ""
+                    result += f"  {name}: {price} ({sign}{change}%)\n"
+                    break
+
+        # 大宗商品
+        result += "\n【大宗商品】\n"
+        if data_commodity:
+            items = data_commodity.values() if isinstance(data_commodity, dict) else data_commodity
+            for name, code in commodity.items():
+                if not code:
+                    continue
+                for item in items:
+                    item_name = item.get("f58", item.get("f14", ""))
+                    if item_name and name in item_name:
+                        price = item.get("f43", item.get("f2", "N/A"))
+                        change = item.get("f170", item.get("f3", "N/A"))
+                        sign = "+" if isinstance(change, (int, float)) and change >= 0 else ""
+                        result += f"  {name}: {price} ({sign}{change}%)\n"
+                        break
+
+        # 国债收益率
+        result += "\n【国债收益率】\n"
+        if data_bond:
+            items = data_bond.values() if isinstance(data_bond, dict) else data_bond
+            for name, code in bond.items():
+                if not code:
+                    continue
+                for item in items:
+                    item_name = item.get("f58", item.get("f14", ""))
+                    if item_name and name in item_name:
+                        price = item.get("f43", item.get("f2", "N/A"))
+                        change = item.get("f170", item.get("f3", "N/A"))
+                        sign = "+" if isinstance(change, (int, float)) and change >= 0 else ""
+                        result += f"  {name}: {price}% ({sign}{change}%)\n"
+                        break
+
+        # 加密货币
+        result += "\n【加密货币】\n"
+        if data_crypto:
+            for name, d in data_crypto.items():
+                price = d.get("f43", "N/A")
+                change = d.get("f170", "N/A")
+                result += (
+                    f"  {name}: ${price} ({'+' if isinstance(change, (int, float)) and change >= 0 else ''}{change}%)\n"
+                )
+
+        ai_return(result)
+    except Exception as e:
+        logger.warning(f"[SayuStock] ai_return 全天候板块数据提取失败: {e}")

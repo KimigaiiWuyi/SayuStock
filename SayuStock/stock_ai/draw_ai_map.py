@@ -11,6 +11,7 @@ from tqdm import trange
 
 from gsuid_core.bot import Bot
 from gsuid_core.logger import logger
+from gsuid_core.ai_core.trigger_bridge import ai_return
 
 from ..utils.image import render_image_by_pw
 from ..utils.constant import ErroText
@@ -148,8 +149,40 @@ async def _draw_ai_kline_with_forecast(sec_id: str):
     if df is None or df.empty:
         return "无有效K线数据"
 
+    # AI 注入：提取K线数据文本
+    _ai_return_kronos_data(raw_data, df)
+
     fig = await asyncio.to_thread(gdf, df, raw_data)
     return fig
+
+
+def _ai_return_kronos_data(raw_data, df):
+    """从Kronos预测数据中提取文本信息，通过 ai_return 返回给 AI 分析"""
+    try:
+        d = raw_data.get("data", {})
+        name = d.get("name", "N/A")
+        klines = d.get("klines", [])
+
+        result = f"【{name} AI预测基础数据】\n"
+        result += "数据周期: 30分钟K线\n"
+        result += f"数据条数: {len(klines)}\n"
+
+        if klines:
+            # 最近一条K线
+            last = klines[-1].split(",")
+            if len(last) >= 11:
+                result += f"最新K线: {last[0]} 开:{last[1]} 收:{last[2]} 高:{last[3]} 低:{last[4]} 涨跌幅:{last[8]}%\n"
+
+            # 最近5条K线趋势
+            result += "\n最近5条K线:\n"
+            for line in klines[-5:]:
+                values = line.split(",")
+                if len(values) >= 11:
+                    result += f"  {values[0]} 收:{values[2]} ({values[8]}%)\n"
+
+        ai_return(result)
+    except Exception as e:
+        logger.warning(f"[SayuStock] ai_return Kronos数据提取失败: {e}")
 
 
 def generate_trading_times(

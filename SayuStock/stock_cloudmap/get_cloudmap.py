@@ -12,6 +12,7 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
 from gsuid_core.logger import logger
+from gsuid_core.ai_core.trigger_bridge import ai_return
 
 from .utils import fill_kline
 from .get_compare import to_compare_fig
@@ -39,7 +40,7 @@ async def to_single_fig_kline(raw_data: Dict, sp: Optional[str] = None):
     df = df.dropna(subset=["日期"]).reset_index(drop=True)
 
     # 为频率判断用一个单独的已排序 Series（不改变后续绘图所用 df 顺序，除非你想按时间绘图）
-    sorted_dates = df["日期"].sort_values(ignore_index=True)
+    sorted_dates = df["日期"].sort_values(ascending=True).reset_index(drop=True)
 
     # 计算相邻差值并取中位数（更鲁棒，能抵抗周末/节假日带来的长间隔）
     deltas = sorted_dates.diff().dropna()
@@ -47,13 +48,8 @@ async def to_single_fig_kline(raw_data: Dict, sp: Optional[str] = None):
         # 退回到日线
         median_delta = pd.Timedelta(days=1)
     else:
-        median_delta = deltas.dt.total_seconds().median()  # float seconds
-
-    # 把 median_delta 统一为 Timedelta 便于后续判断与日志
-    if isinstance(median_delta, (int, float)):
-        median_delta = pd.Timedelta(seconds=float(median_delta))
-    elif not isinstance(median_delta, pd.Timedelta):
-        median_delta = pd.to_timedelta(median_delta)
+        median_seconds = deltas.dt.total_seconds().median()  # float seconds
+        median_delta = pd.Timedelta(seconds=float(median_seconds))
 
     # debug 打印（运行一次看输出）
     logger.info(f"[SayuStock] median delta: {median_delta}")
@@ -229,10 +225,10 @@ async def to_single_fig_kline(raw_data: Dict, sp: Optional[str] = None):
 
     dates = df["日期"]
     diffs = dates.diff()
-    threshold = median_delta * 1.5  # 根据推断的周期自动放宽
+    threshold = pd.Timedelta(seconds=median_delta.total_seconds() * 1.5)  # 根据推断的周期自动放宽
     breaks = []
     for i in range(1, len(dates)):
-        if diffs.iloc[i] > threshold:
+        if pd.notna(diffs.iloc[i]) and diffs.iloc[i] > threshold:
             start = dates.iloc[i - 1]
             end = dates.iloc[i]
             # 注意这里用 bounds，而不是 values！
@@ -993,14 +989,18 @@ async def render_html(
     if sector == "single-stock":
         if raw_datas:
             fig = await to_multi_fig(raw_datas)
+            _ai_return_single_stock(raw_datas, is_multi=True)
         else:
             fig = await to_single_fig(raw_data)
+            _ai_return_single_stock(raw_data)
     # 个股对比
     elif sector == "compare-stock":
         fig = await to_compare_fig(raw_datas)
+        _ai_return_compare_stock(raw_datas)
     # 个股 日k 年k
     elif sector and sector.startswith("single-stock-kline"):
         fig = await to_single_fig_kline(raw_data)
+        _ai_return_kline(raw_data, sector)
     # 大盘云图
     else:
         fig = await to_fig(
@@ -1009,12 +1009,166 @@ async def render_html(
             sector,
             2 if market == "大盘云图" else 1,
         )
+        _ai_return_cloudmap(raw_data, market, sector)
     if isinstance(fig, str):
         return fig
 
     # fig.show()
     fig.write_html(file)
     return file
+
+
+def _ai_return_single_stock(raw_data, is_multi: bool = False):
+    """从个股数据中提取文本信息，通过 ai_return 返回给 AI 分析"""
+    try:
+        if is_multi:
+            # 多股分时对比
+            parts = []
+            for rd in raw_data:
+                if isinstance(rd, str):
+                    continue
+                d = rd.get("data", {})
+                name = d.get("f58", "N/A")
+                price = d.get("f43", "N/A")
+                change = d.get("f170", "N/A")
+                turnover = d.get("f168", "N/A")
+                open_price = d.get("f60", "N/A")
+                high = d.get("f44", "N/A")
+                low = d.get("f45", "N/A")
+                amount = d.get("f48", "N/A")
+                parts.append(
+                    f"【{name}】最新价: {price}  涨跌幅: {change}%  "
+                    f"开盘: {open_price}  最高: {high}  最低: {low}  "
+                    f"换手率: {turnover}%  成交额: {amount}"
+                )
+            if parts:
+                ai_return("【多股分时行情对比】\n" + "\n".join(parts))
+        else:
+            d = raw_data.get("data", {})
+            name = d.get("f58", "N/A")
+            price = d.get("f43", "N/A")
+            change = d.get("f170", "N/A")
+            turnover = d.get("f168", "N/A")
+            open_price = d.get("f60", "N/A")
+            high = d.get("f44", "N/A")
+            low = d.get("f45", "N/A")
+            amount = d.get("f48", "N/A")
+            result = (
+                f"【{name} 分时行情】\n"
+                f"最新价: {price}  涨跌幅: {change}%\n"
+                f"开盘价: {open_price}  最高价: {high}  最低价: {low}\n"
+                f"换手率: {turnover}%  成交额: {amount}"
+            )
+            ai_return(result)
+    except Exception as e:
+        logger.warning(f"[SayuStock] ai_return 分时数据提取失败: {e}")
+
+
+def _ai_return_kline(raw_data, sector: str):
+    """从K线数据中提取文本信息，通过 ai_return 返回给 AI 分析"""
+    try:
+        d = raw_data.get("data", {})
+        name = d.get("name", "N/A")
+        klines = d.get("klines", [])
+        if not klines:
+            return
+
+        # 从 sector 推断周期名称
+        period_map = {
+            "5": "5分钟",
+            "15": "15分钟",
+            "30": "30分钟",
+            "60": "60分钟",
+            "100": "K线",
+            "101": "日K",
+            "102": "周K",
+            "103": "月K",
+            "104": "季K",
+            "105": "半年K",
+            "106": "年K",
+        }
+        code = sector.replace("single-stock-kline-", "")
+        period_name = period_map.get(code, "K线")
+
+        result = f"【{name} {period_name}数据】\n"
+        result += "日期        开盘    收盘    最高    最低    涨跌幅\n"
+        for line in klines[-10:]:
+            values = line.split(",")
+            if len(values) >= 11:
+                date = values[0]
+                open_p = values[1]
+                close_p = values[2]
+                high = values[3]
+                low = values[4]
+                change = values[8]
+                result += f"{date} {open_p:>8} {close_p:>8} {high:>8} {low:>8} {change:>8}%\n"
+        ai_return(result)
+    except Exception as e:
+        logger.warning(f"[SayuStock] ai_return K线数据提取失败: {e}")
+
+
+def _ai_return_compare_stock(raw_datas):
+    """从对比个股数据中提取文本信息，通过 ai_return 返回给 AI 分析"""
+    try:
+        parts = []
+        for rd in raw_datas:
+            if isinstance(rd, str):
+                continue
+            d = rd.get("data", {})
+            name = d.get("name", d.get("f58", "N/A"))
+            klines = d.get("klines", [])
+            if klines:
+                last = klines[-1].split(",")
+                if len(last) >= 11:
+                    parts.append(f"{name}: 收盘 {last[2]}  涨跌幅 {last[8]}%")
+        if parts:
+            ai_return("【个股对比数据】\n" + "\n".join(parts))
+    except Exception as e:
+        logger.warning(f"[SayuStock] ai_return 对比数据提取失败: {e}")
+
+
+def _ai_return_cloudmap(raw_data, market: str, sector: Optional[str] = None):
+    """从大盘云图/板块云图/概念云图数据中提取文本信息，通过 ai_return 返回给 AI 分析"""
+    try:
+        diff = raw_data.get("data", {}).get("diff", [])
+        if not diff:
+            return
+
+        # 按涨跌幅排序
+        valid_items = [item for item in diff if item.get("f3") != "-" and item.get("f14")]
+        valid_items.sort(key=lambda x: float(x.get("f3", 0)), reverse=True)
+
+        title = market if market else "板块云图"
+        if sector and market not in ("大盘云图",):
+            title = f"{market} - {sector}"
+
+        result = f"【{title}】\n"
+
+        # 领涨前5
+        result += "领涨:\n"
+        for item in valid_items[:5]:
+            name = item.get("f14", "N/A")
+            change = item.get("f3", "N/A")
+            category = item.get("f100", "")
+            result += f"  {name}({category}): {change}%\n"
+
+        # 领跌前5
+        result += "领跌:\n"
+        for item in valid_items[-5:]:
+            name = item.get("f14", "N/A")
+            change = item.get("f3", "N/A")
+            category = item.get("f100", "")
+            result += f"  {name}({category}): {change}%\n"
+
+        # 涨跌统计
+        up_count = sum(1 for item in valid_items if float(item.get("f3", 0)) > 0)
+        down_count = sum(1 for item in valid_items if float(item.get("f3", 0)) < 0)
+        flat_count = len(valid_items) - up_count - down_count
+        result += f"统计: 上涨 {up_count} 家, 下跌 {down_count} 家, 平盘 {flat_count} 家"
+
+        ai_return(result)
+    except Exception as e:
+        logger.warning(f"[SayuStock] ai_return 云图数据提取失败: {e}")
 
 
 async def render_image(
