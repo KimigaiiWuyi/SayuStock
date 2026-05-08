@@ -496,6 +496,9 @@ async def to_multi_fig(raw_data_list: List[Dict]):
 
     # First pass to process data
     for raw_data in raw_data_list:
+        if not isinstance(raw_data, dict):
+            continue
+
         raw = raw_data["data"]
         open_price = raw.get("f60")
         if not isinstance(open_price, (int, float)) or open_price == 0:
@@ -930,6 +933,9 @@ async def render_html(
         )
     elif sector == "compare-stock":
         markets = market.split(" ")
+        if " " in markets:
+            markets.remove(" ")
+
         raw_datas: List[Dict] = []
         for m in markets:
             if m == "A500":
