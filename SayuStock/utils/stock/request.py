@@ -11,6 +11,7 @@ from aiohttp import (
     ClientSession,
     ClientTimeout,
     ContentTypeError,
+    ClientConnectorError,
     ServerDisconnectedError,
 )
 from playwright.async_api import async_playwright
@@ -560,8 +561,7 @@ async def stock_request(
 
                         if resp.status != 200:
                             logger.error(
-                                f"[SayuStock][EM] 访问 {req_url} 失败, "
-                                f"错误码: {resp.status}, 错误返回: {raw_data}"
+                                f"[SayuStock][EM] 访问 {req_url} 失败, 错误码: {resp.status}, 错误返回: {raw_data}"
                             )
                             if req_url != urls[-1]:
                                 break
@@ -572,19 +572,17 @@ async def stock_request(
                             return raw_data
                         return raw_data
                 except ServerDisconnectedError:
-                    logger.warning(
-                        f"[SayuStock] 请求 {req_url} 失败, 尝试获取DC-Token..."
-                    )
+                    logger.warning(f"[SayuStock] 请求 {req_url} 失败, 尝试获取DC-Token...")
                     # header['cookie'] = await get_dc_token()
                     await asyncio.sleep(random.uniform(0.2, 0.9))
+                except ClientConnectorError as e:
+                    logger.error(f"[SayuStock] 请求 {req_url} 连接失败: {e}")
                 finally:
                     NOW_QUEUE -= 1
             else:
                 if req_url == urls[-1]:
                     return -400016
-                logger.warning(
-                    f"[SayuStock] 请求 {req_url} 失败, 尝试切换到备用域名..."
-                )
+                logger.warning(f"[SayuStock] 请求 {req_url} 失败, 尝试切换到备用域名...")
 
 
 async def get_dc_token():
