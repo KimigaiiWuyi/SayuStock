@@ -583,6 +583,7 @@ async def stock_request(
                 if req_url == urls[-1]:
                     return -400016
                 logger.warning(f"[SayuStock] 请求 {req_url} 失败, 尝试切换到备用域名...")
+    return -400016
 
 
 async def get_dc_token():
