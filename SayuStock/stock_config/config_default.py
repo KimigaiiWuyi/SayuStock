@@ -21,6 +21,12 @@ CONFIG_DEFAULT: Dict[str, GSC] = {
         3,
         options=[1, 2, 3, 4, 5, 10, 30, 60],
     ),
+    "stock_cache_retention_days": GsIntConfig(
+        "股票缓存保留天数",
+        "每日定时任务只会清理超过该天数的缓存文件，不再每天清空缓存目录",
+        7,
+        options=[1, 3, 7, 15, 30],
+    ),
     "eastmoney_cookie": GsStrConfig(
         "东财Cookie",
         "东财Cookie",

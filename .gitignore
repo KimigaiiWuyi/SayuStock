@@ -674,3 +674,6 @@ all_image
 testnb2/
 
 em_data
+
+examples
+uv.lock

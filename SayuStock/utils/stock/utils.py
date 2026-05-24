@@ -97,7 +97,8 @@ def async_file_cache(**get_file_args: Any) -> Callable:
                 result.write_html(file_path)
                 return file_path
 
-            result["file_name"] = file_path.name
+            if isinstance(result, dict):
+                result["file_name"] = file_path.name
 
             # 6. 将结果异步写入文件
             try:
@@ -140,7 +141,6 @@ def get_adjusted_date():
 def calculate_difference(data: List[str]) -> Tuple[int, int, Optional[datetime]]:
     # 获取今天的日期
     today = get_adjusted_date()
-    real_today = today.replace(hour=0, minute=0, second=0, microsecond=0)
 
     date_dict = {}
     for item in data:

@@ -43,6 +43,7 @@ ErroText = {
     "notData": "❌不存在该板块或市场, 暂无数据...",
     "notStock": "❌不存在该股票，暂无数据...",
     "notOpen": "❌该股票未开盘，暂无数据...",
+    "notMarket": "❌请后跟股票代码使用, 例如：个股 证券ETF",
 }
 
 VIX_LIST = {

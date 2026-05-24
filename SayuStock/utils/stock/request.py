@@ -1,46 +1,16 @@
-import json
-import random
 import asyncio
-from typing import Any, Dict, List, Tuple, Union, Literal, Optional
+from typing import Any, Dict, List, Tuple, Union, Optional
 from datetime import datetime, timedelta
-
-from yarl import URL
-from aiohttp import (
-    FormData,
-    TCPConnector,
-    ClientSession,
-    ClientTimeout,
-    ContentTypeError,
-    ClientConnectorError,
-    ServerDisconnectedError,
-)
-from playwright.async_api import async_playwright
 
 from gsuid_core.logger import logger
 
 from .utils import async_file_cache, calculate_difference
 from .get_vix import get_vix_data
 from ..get_OKX import analyze_market_target, get_crypto_trend_as_json, get_crypto_history_kline_as_json
-from ..constant import (
-    UA,
-    DC_COOKIES,
-    SINGLE_LINE_FIELDS1,
-    SINGLE_LINE_FIELDS2,
-    SINGLE_STOCK_FIELDS,
-    ErroText,
-    market_dict,
-    header_simple,
-    chinese_stocks,
-    request_header,
-    trade_detail_dict,
-)
+from ..constant import ErroText
+from ..eastmoney import EASTMONEY_REQUESTER
 from ..load_data import get_full_security_code
 from .request_utils import get_code_id
-from ...stock_config.stock_config import STOCK_CONFIG
-
-MENU_CACHE = {}
-DC_TOKEN = ""
-NOW_QUEUE = 0
 
 
 async def get_hours_from_em() -> Tuple[float, float, Optional[datetime]]:
@@ -55,7 +25,7 @@ async def get_hours_from_em() -> Tuple[float, float, Optional[datetime]]:
             "ndays": "2",
             "secid": mk,
         }
-        data = await stock_request(
+        data = await EASTMONEY_REQUESTER.stock_request(
             URL,
             "GET",
             params=params,
@@ -78,7 +48,7 @@ async def get_bar():
         "cver": "10.36.2",
     }
 
-    resp = await stock_request(
+    resp = await EASTMONEY_REQUESTER.stock_request(
         URL,
         params=PARAMS,
     )
@@ -88,37 +58,16 @@ async def get_bar():
     return resp
 
 
-async def get_menu(mode: int = 3) -> Dict:
+async def get_menu(mode: int = 3) -> Dict[str, str]:
+    """获取东方财富板块菜单。
+
+    Args:
+        mode: `2` 为行业板块，`3` 为概念板块。
+
+    Returns:
+        板块名称到板块代码的映射。
     """
-    mode = 2 为行业板块
-    mode = 3 为概念板块
-    """
-    now = datetime.now().strftime("%Y%m%d")
-    if now in MENU_CACHE:
-        return MENU_CACHE[now][mode]
-
-    URL = "https://quote.eastmoney.com/center/api/sidemenu_new.json"
-    data = await stock_request(URL)
-    if isinstance(data, int):
-        raise Exception(f"[SayuStock] 请求错误：{data}")
-
-    hyr = {}
-    gnr = {}
-    for i in data["bklist"]:
-        if i["type"] == 2:
-            hyr[i["name"]] = i["code"]
-        elif i["type"] == 3:
-            gnr[i["name"]] = i["code"]
-
-    MENU_CACHE[now] = {2: hyr, 3: gnr}
-
-    if len(MENU_CACHE) > 1:
-        # 删除旧项，保留最新的
-        keys_to_remove = list(MENU_CACHE.keys())[:-1]
-        for key in keys_to_remove:
-            del MENU_CACHE[key]
-
-    return MENU_CACHE[now][mode]
+    return await EASTMONEY_REQUESTER.get_menu(mode)
 
 
 @async_file_cache(market="vix_market", sector="{vix_name}", suffix="json")
@@ -151,42 +100,9 @@ async def get_vix(vix_name: str):
     return resp
 
 
-async def get_single_fig_data(secid: str):
-    params = []
-    url = "https://push2.eastmoney.com/api/qt/stock/trends2/get"
-    fields1 = ",".join(SINGLE_LINE_FIELDS1)
-    fields2 = ",".join(SINGLE_LINE_FIELDS2)
-    params.append(("fields1", fields1))
-    params.append(("fields2", fields2))
-    params.append(("secid", secid))
-    resp = await stock_request(url, params=params)
-
-    if isinstance(resp, int):
-        return f"[SayuStock] 请求错误, 错误码: {resp}！"
-    if resp["data"] is None:
-        return ErroText["notStock"]
-
-    stock_line_data: list[str] = resp["data"]["trends"]
-    stock_data: list[Dict[str, Union[str, float, int]]] = []
-    for item in stock_line_data:
-        # 原始数据格式
-        # "2024-12-31 14:05,15.63,15.62,15.63,15.61,3300,5154770.00,15.672"
-        parts = item.split(",")
-        # 原始时间格式为'2024-12-31 14:05'
-        datetime = parts[0].split(" ") if len(parts[0]) > 0 else ["", ""]
-        stock_data.append(
-            {
-                "datetime": datetime[1],
-                "price": float(parts[1]),
-                "open": float(parts[2]),
-                "high": float(parts[3]),
-                "low": float(parts[4]),
-                "amount": int(parts[5]),
-                "money": float(parts[6]),
-                "avg_price": float(parts[7]),
-            }
-        )
-    return stock_data
+async def get_single_fig_data(secid: str) -> Union[List[Dict[str, Union[str, float, int]]], str]:
+    """获取个股当日分时走势。"""
+    return await EASTMONEY_REQUESTER.get_stock_trends(secid)
 
 
 async def get_gg(
@@ -274,347 +190,49 @@ async def get_gg(
     return result
 
 
-# 个股
-@async_file_cache(market="{sec_id}", sector="single-stock", suffix="json")
-async def _get_gg(sec_id: str, sec_type: str):
-    params = [
-        ("pz", "200"),
-        ("po", "1"),
-        ("np", "1"),
-        ("fltt", "2"),
-        ("invt", "2"),
-        ("fid", "f3"),
-        ("pn", "1"),
-    ]
-
-    fields = ",".join(SINGLE_STOCK_FIELDS)
-    url = "https://push2.eastmoney.com/api/qt/stock/get"
+async def _get_gg(sec_id: str, sec_type: str) -> Union[Dict[str, Any], str]:
+    """获取个股实时盘口并合并当日分时。"""
     logger.info(f"[SayuStock] get_single_fig_data secid: {sec_id}")
-    params.append(("secid", sec_id))
-    params.append(("fields", fields))
-
-    resp = await stock_request(url, "GET", params=params)
-    if isinstance(resp, int):
-        return f"[SayuStock] 请求错误, 错误码: {resp}！"
-
-    # 处理获取个股数据错误
-    if resp["data"] is None:
-        return ErroText["notStock"]
-
-    secid = next((value for key, value in params if key == "secid"), None)
-    if secid:
-        trends = await get_single_fig_data(secid)
-        if isinstance(trends, str):
-            return resp
-        resp["trends"] = trends
-
-    resp["data"]["f58"] = f"{resp['data']['f58']} ({sec_type})"
-
-    return resp
+    return await EASTMONEY_REQUESTER.get_single_stock(sec_id, sec_type)
 
 
-# 个股 日K
-@async_file_cache(
-    market="{sec_id}",
-    sector="single-stock-kline-{kline_code}",
-    suffix="json",
-    sp="{start_time}-{end_time}",
-)
 async def _get_gg_kline(
     sec_id: str,
     sec_type: str,
     kline_code: Union[str, int],
     start_time: str,
     end_time: str,
-):
-    url = "https://push2his.eastmoney.com/api/qt/stock/kline/get"
+) -> Union[Dict[str, Any], str]:
+    """获取个股历史 K 线。"""
     logger.info(f"[SayuStock] get_single_fig_data secid: {sec_id}")
-    params = [
-        ("fields1", "f1,f2,f3,f4,f5,f6,f7,f8,f9,f10,f11,f12,f13"),
-        ("fields2", "f51,f52,f53,f54,f55,f56,f57,f58,f59,f60,f61"),
-        ("rtntype", "6"),
-        ("klt", kline_code),
-        ("fqt", "1"),
-        ("secid", sec_id),
-        ("beg", start_time),
-        ("end", end_time),
-    ]
-
-    resp = await stock_request(url, "GET", params=params)
-    if isinstance(resp, int):
-        return f"[SayuStock] 请求错误, 错误码: {resp}！"
-
-    if resp["data"] is None:
-        return ErroText["notStock"]
-
-    resp["data"]["name"] = f"{resp['data']['name']} ({sec_type})"
-
-    return resp
+    return await EASTMONEY_REQUESTER.get_stock_kline(sec_id, sec_type, kline_code, start_time, end_time)
 
 
-# 大盘云图等批量性
-@async_file_cache(
-    market="{market}",
-    sector="{po}",
-    suffix="json",
-    sp="{is_loop}-{pz}",
-)
 async def get_mtdata(
     market: str,
     is_loop: bool = False,
-    po: int = 1,  # 0为倒序，1为正序
+    po: int = 1,
     pz: int = 20,
-):
-    params = [
-        ("pz", str(pz)),
-        ("po", str(po)),
-        ("np", "1"),
-        ("fltt", "2"),
-        ("invt", "2"),
-        ("fid", "f3"),
-        ("pn", "1"),
-    ]
-
-    url = "http://push2.eastmoney.com/api/qt/clist/get"
-    if market in market_dict:
-        fs = market_dict[market]
-    else:
-        fs = market
-
-    fields = ",".join(trade_detail_dict.keys())
-    if fs.startswith(("bk", "BK")):
-        fs = f"b:{fs}"
-    params.append(("fs", fs))
-    params.append(("fields", fields))
-
-    resp = await stock_request(url, "GET", params=params)
-    if isinstance(resp, int):
-        return f"[SayuStock] 错误代码: {resp}"
-
-    if is_loop and resp["data"] and len(resp["data"]["diff"]) >= 100:
-        stop_event = asyncio.Event()
-        pn = 2
-        TASK = []
-        params.remove(("pn", "1"))
-        params.remove(("pz", "100"))
-        params.append(("pz", str(len(resp["data"]["diff"]))))
-
-        while not stop_event.is_set():
-            for _ in range(10):
-                _params = params.copy()
-                _params.append(("pn", str(pn)))
-                TASK.append(_get_data(resp, url, _params, stop_event))
-                pn += 1
-            await asyncio.gather(*TASK)
-            TASK.clear()
-
-        await asyncio.gather(*TASK)
-
-    return resp
+) -> Union[Dict[str, Any], str]:
+    """获取行情列表/板块成分列表。"""
+    return await EASTMONEY_REQUESTER.get_market_list(market, is_loop, po, pz)
 
 
 async def _get_data(
-    resp: Dict,
+    resp: Dict[str, Any],
     url: str,
     params: List[tuple],
     stop_event: asyncio.Event,
-):
-    if stop_event.is_set():
-        return None
-    await asyncio.sleep(random.uniform(0.4, 0.9))
-    resp2 = await stock_request(url, params=params)
-    if isinstance(resp2, int):
-        return stop_event.set()
-
-    if "code" not in resp2 and resp2["data"]:
-        resp["data"]["diff"].extend(resp2["data"]["diff"])
-        if len(resp2["data"]["diff"]) < 100:
-            stop_event.set()
-    else:
-        stop_event.set()
+) -> None:
+    """兼容旧内部分页函数，实际分页逻辑已迁移到请求类。"""
+    await EASTMONEY_REQUESTER._append_market_page(resp, url, params, stop_event)
 
 
-@async_file_cache(
-    market="大盘云图",
-    sector="大盘云图",
-    suffix="json",
-)
-async def get_hotmap():
-    URL = "https://quote.eastmoney.com/stockhotmap/api/getquotedata"
-    resp = await stock_request(URL)
-    if isinstance(resp, int):
-        return f"[SayuStock] 错误代码: {resp}"
-
-    bk: List[str] = []
-    for i in resp["data"]:
-        assert isinstance(i, str)
-        data = i.split("|")
-        bk.append(data[0])
-
-    result = {
-        "rc": 0,
-        "rt": 6,
-        "svr": 180606397,
-        "lt": 1,
-        "full": 1,
-        "dlmkts": "",
-        "data": {"total": 0, "diff": []},
-    }
-
-    for i in resp["data"]:
-        assert isinstance(i, str)
-        if "|" in i:
-            data = i.split("|")
-            diff = {
-                # 最新
-                "f2": float(data[12]) / 100 if data[12] != "-" else 0,
-                # 涨幅
-                "f3": float(data[3]) / 100 if data[3] != "-" else 0,
-                # 成交额
-                "f6": float(data[10]) if data[10] != "-" else 0,
-                # 代码
-                "f12": data[1],
-                # 名称
-                "f14": chinese_stocks.get(data[1], {"name": data[1]})["name"],
-                # 市值
-                "f20": float(data[13]) * 100000 if data[13] != "-" else 0,
-                # 所属板块
-                "f100": chinese_stocks.get(data[1], {"industry_l1": data[1]})["industry_l1"],
-                # 不知道是啥, 先注释
-                # "dd": data[4][1:-1].split(","),
-            }
-            result["data"]["diff"].append(diff)
-
-    result["data"]["total"] = len(result["data"]["diff"])
-    return result
+async def get_hotmap() -> Union[Dict[str, Any], str]:
+    """获取东方财富股票热力图原始数据并转换为云图结构。"""
+    return await EASTMONEY_REQUESTER.get_hotmap()
 
 
-async def stock_request(
-    url: str,
-    method: Literal["GET", "POST"] = "GET",
-    header: Dict[str, str] = request_header,
-    params: Union[Dict[str, Any], List[Tuple[str, Any]], None] = None,
-    _json: Optional[Dict[str, Any]] = None,
-    data: Optional[FormData] = None,
-) -> Union[Dict, int]:
-    global NOW_QUEUE
-    logger.info(f"[SayuStock] 请求: {url}")
-    logger.info(f"[SayuStock] Params: {params}")
-
-    cookies = STOCK_CONFIG.get_config("eastmoney_cookie").data
-    if cookies:
-        logger.info(f"[SayuStock] Cookie: {cookies}")
-        header["Cookie"] = cookies
-
-    if url.startswith(
-        (
-            "https://quote.eastmoney.com/center/api/sidemenu_new.json",
-            "https://quote.eastmoney.com/stockhotmap/api/getquotedata",
-            # "https://push2his.eastmoney.com",
-            "https://quotederivates.eastmoney.com",
-        )
-    ):
-        header = header_simple
-
-    urls = [url]
-    if "push2.eastmoney.com" in url:
-        urls.append(
-            url.replace(
-                "push2.eastmoney.com",
-                "push2delay.eastmoney.com",
-                1,
-            )
-        )
-
-    async with ClientSession(
-        connector=TCPConnector(verify_ssl=True),
-        headers=header,
-        cookies=DC_COOKIES,
-    ) as client:
-        for req_url in urls:
-            final_url = str(URL(req_url).with_query(params or {}))
-            logger.info(f"[SayuStock] 最终请求URL：{final_url}")
-
-            # header['cookie'] = DC_TOKEN
-
-            while NOW_QUEUE >= 6:
-                await asyncio.sleep(random.uniform(0.4, 0.9))
-
-            for _ in range(2):
-                try:
-                    NOW_QUEUE += 1
-                    async with client.request(
-                        method,
-                        url=final_url,
-                        headers=header,
-                        params=params,
-                        json=_json,
-                        data=data,
-                        timeout=ClientTimeout(total=300),
-                    ) as resp:
-                        try:
-                            raw_data = await resp.json()
-                        except (ContentTypeError, json.decoder.JSONDecodeError):
-                            _raw_data = await resp.text()
-                            raw_data = -999
-                        logger.debug(raw_data)
-
-                        if resp.status != 200:
-                            logger.error(
-                                f"[SayuStock][EM] 访问 {req_url} 失败, 错误码: {resp.status}, 错误返回: {raw_data}"
-                            )
-                            if req_url != urls[-1]:
-                                break
-                            return -999
-                        if isinstance(raw_data, int):
-                            if req_url != urls[-1]:
-                                break
-                            return raw_data
-                        return raw_data
-                except ServerDisconnectedError:
-                    logger.warning(f"[SayuStock] 请求 {req_url} 失败, 尝试获取DC-Token...")
-                    # header['cookie'] = await get_dc_token()
-                    await asyncio.sleep(random.uniform(0.2, 0.9))
-                except ClientConnectorError as e:
-                    logger.error(f"[SayuStock] 请求 {req_url} 连接失败: {e}")
-                finally:
-                    NOW_QUEUE -= 1
-            else:
-                if req_url == urls[-1]:
-                    return -400016
-                logger.warning(f"[SayuStock] 请求 {req_url} 失败, 尝试切换到备用域名...")
-    return -400016
-
-
-async def get_dc_token():
-    global DC_TOKEN
-    async with async_playwright() as p:
-        # 启动浏览器（默认 Chromium）
-        browser = await p.chromium.launch(
-            headless=True,
-            args=["--disable-blink-features=AutomationControlled"],  # 禁用自动化检测
-        )
-
-        # 创建上下文和页面
-        context = await browser.new_context(
-            user_agent=UA,
-            viewport={"width": 1366, "height": 768},
-        )
-        page = await context.new_page()
-
-        try:
-            # 导航到目标页面
-            await page.goto(
-                "https://www.eastmoney.com/",
-                wait_until="networkidle",
-                timeout=20000,
-            )
-            # 获取所有 Cookie
-            cookies = await context.cookies()
-            logger.debug(f"[SayuStock] 获取DC-Cookie: {cookies}")
-            cl = [f"{cookie['name']}={cookie['value']}" for cookie in cookies]  # type: ignore # noqa: E501
-            DC_TOKEN = ";".join(cl)
-            logger.debug(f"[SayuStock] 设置DC-Cookie: {DC_TOKEN}")
-            return DC_TOKEN
-        finally:
-            await browser.close()
+async def stock_request(*args: Any, **kwargs: Any) -> Union[Dict[str, Any], int]:
+    """兼容旧导入路径的东方财富请求工厂。"""
+    return await EASTMONEY_REQUESTER.stock_request(*args, **kwargs)
