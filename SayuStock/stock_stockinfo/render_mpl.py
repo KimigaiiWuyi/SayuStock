@@ -1047,6 +1047,8 @@ def draw_compare_chart(raw_datas: list[JsonDict]) -> DrawResult:
                 )
                 ax.add_artist(label_artist)
             ax.set_xlim(-1, x_right + 7)
+            _apply_month_ticks(ax, prices.index)
+            ax.tick_params(axis="x", rotation=20, labelbottom=True)
         legend = ax.get_legend()
         if legend is not None:
             legend.get_frame().set_facecolor(BG_COLOR)
