@@ -24,6 +24,7 @@ from matplotlib.ticker import FuncFormatter  # noqa: E402
 from matplotlib.patches import Rectangle  # noqa: E402
 from mplchart.indicators import CMF, RSI, SMA, MACD, BBANDS  # noqa: E402
 from mplchart.primitives import Pane, HLine, Price, Volume, BarPlot, LinePlot, Candlesticks  # noqa: E402
+from matplotlib.offsetbox import HPacker, TextArea, AnnotationBbox  # noqa: E402
 
 from gsuid_core.logger import logger as _logger
 from gsuid_core.utils.fonts.fonts import FONT_ORIGIN_PATH
@@ -342,9 +343,13 @@ def draw_single_kline_chart(raw_data: JsonDict, sp: str | None = None) -> DrawRe
         return ErroText["notData"]
     prices = cast(pd.DataFrame, prices.sort_index())
 
+    raw_info = _as_dict(raw_data["data"])
+    raw_title_name = str(_dict_value(raw_info, "name", "")).strip()
+    kline_title = f"{raw_title_name} {kline.freq_label}" if raw_title_name else kline.title
+
     chart = Chart(
         prices,
-        title=kline.title,
+        title=kline_title,
         figsize=(25.5, 17.0),
         bgcolor=BG_COLOR,
         raw_dates=False,
@@ -524,7 +529,7 @@ def draw_single_kline_chart(raw_data: JsonDict, sp: str | None = None) -> DrawRe
                 text.set_color(FG_COLOR)
 
     if axes:
-        axes[0].set_title(kline.title, color=FG_COLOR, fontsize=24, fontweight="bold", pad=24)
+        axes[0].set_title(kline_title, color=FG_COLOR, fontsize=24, fontweight="bold", pad=24)
     fig.text(0.016, 0.005, "数据来源：东方财富 | SayuStock", color=FG_COLOR, fontsize=9, alpha=0.65)
     fig.subplots_adjust(left=0.045, right=0.988, top=0.885, bottom=0.10, hspace=0.055)
     return _fig_to_image(fig)
@@ -785,6 +790,56 @@ def draw_multi_stock_chart(raw_data_list: list[JsonDict]) -> DrawResult:
             ax.set_ylabel("涨跌幅")
             ax.tick_params(labelbottom=False)
             ax.grid(True, axis="y", color=GRID_COLOR, alpha=0.42, linewidth=0.8)
+            x_right = max(len(prices) - 1, 0)
+            label_offsets: dict[int, int] = {}
+            for stock_index, col_name in enumerate(price_columns):
+                series = cast(pd.Series, prices[col_name]).dropna()
+                if series.empty:
+                    continue
+                last_timestamp = series.index[-1]
+                last_positions = np.flatnonzero(prices.index == last_timestamp)
+                last_position = int(last_positions[-1]) if len(last_positions) > 0 else len(prices) - 1
+                last_value = float(series.iloc[-1])
+                bucket = int(round(last_value * 2))
+                offset_count = label_offsets.get(bucket, 0)
+                label_offsets[bucket] = offset_count + 1
+                y_offset = (offset_count - 1) * 13 if offset_count > 0 else 0
+                ax.scatter(
+                    [last_position],
+                    [last_value],
+                    color=stock_colors[stock_index],
+                    edgecolor=BG_COLOR,
+                    s=34,
+                    zorder=5,
+                )
+                name_area = TextArea(
+                    stock_labels[stock_index],
+                    textprops={"color": stock_colors[stock_index], "fontsize": 11, "fontweight": "bold"},
+                )
+                pct_area = TextArea(
+                    f" {last_value:+.2f}%",
+                    textprops={
+                        "color": UP_COLOR if last_value >= 0 else DOWN_COLOR,
+                        "fontsize": 11,
+                        "fontweight": "bold",
+                    },
+                )
+                label_box = HPacker(children=[name_area, pct_area], align="center", pad=0, sep=1)
+                label_artist = AnnotationBbox(
+                    label_box,
+                    (last_position, last_value),
+                    xybox=(10, y_offset),
+                    xycoords="data",
+                    boxcoords="offset points",
+                    box_alignment=(0, 0.5),
+                    frameon=True,
+                    pad=0.25,
+                    bboxprops={"facecolor": BG_COLOR, "edgecolor": stock_colors[stock_index], "alpha": 0.70},
+                    arrowprops={"arrowstyle": "-", "color": stock_colors[stock_index], "alpha": 0.75, "linewidth": 0.8},
+                    zorder=6,
+                )
+                ax.add_artist(label_artist)
+            ax.set_xlim(-1, x_right + 7)
             legend = ax.get_legend()
             if legend is not None:
                 for text, label in zip(legend.get_texts(), stock_labels, strict=False):
@@ -853,7 +908,7 @@ def draw_multi_stock_chart(raw_data_list: list[JsonDict]) -> DrawResult:
             pad=24,
         )
     fig.text(0.016, 0.005, "数据来源：东方财富 | SayuStock", color=FG_COLOR, fontsize=9, alpha=0.65)
-    fig.subplots_adjust(left=0.045, right=0.988, top=0.855, bottom=0.10, hspace=0.04)
+    fig.subplots_adjust(left=0.045, right=0.965, top=0.855, bottom=0.10, hspace=0.04)
     return _fig_to_image(fig)
 
 
