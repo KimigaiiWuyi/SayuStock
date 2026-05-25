@@ -996,6 +996,57 @@ def draw_compare_chart(raw_datas: list[JsonDict]) -> DrawResult:
             ax.set_axisbelow(False)
             for line in ax.lines:
                 line.set_zorder(3)
+            x_right = max(len(prices) - 1, 0)
+            label_offsets: dict[int, int] = {}
+            for compare_index, column_name in enumerate(compare_columns):
+                series = cast(pd.Series, prices[column_name]).dropna()
+                if series.empty:
+                    continue
+                last_timestamp = series.index[-1]
+                last_positions = np.flatnonzero(prices.index == last_timestamp)
+                last_position = int(last_positions[-1]) if len(last_positions) > 0 else len(prices) - 1
+                last_value = float(series.iloc[-1])
+                stock_color = MPL_COLORS[compare_index % len(MPL_COLORS)]
+                bucket = int(round(last_value * 2))
+                offset_count = label_offsets.get(bucket, 0)
+                label_offsets[bucket] = offset_count + 1
+                y_offset = (offset_count - 1) * 13 if offset_count > 0 else 0
+                ax.scatter(
+                    [last_position],
+                    [last_value],
+                    color=stock_color,
+                    edgecolor=BG_COLOR,
+                    s=34,
+                    zorder=5,
+                )
+                name_area = TextArea(
+                    compare_labels[compare_index],
+                    textprops={"color": stock_color, "fontsize": 11, "fontweight": "bold"},
+                )
+                pct_area = TextArea(
+                    f" {last_value:+.2f}%",
+                    textprops={
+                        "color": UP_COLOR if last_value >= 0 else DOWN_COLOR,
+                        "fontsize": 11,
+                        "fontweight": "bold",
+                    },
+                )
+                label_box = HPacker(children=[name_area, pct_area], align="center", pad=0, sep=1)
+                label_artist = AnnotationBbox(
+                    label_box,
+                    (last_position, last_value),
+                    xybox=(10, y_offset),
+                    xycoords="data",
+                    boxcoords="offset points",
+                    box_alignment=(0, 0.5),
+                    frameon=True,
+                    pad=0.25,
+                    bboxprops={"facecolor": BG_COLOR, "edgecolor": stock_color, "alpha": 0.70},
+                    arrowprops={"arrowstyle": "-", "color": stock_color, "alpha": 0.75, "linewidth": 0.8},
+                    zorder=6,
+                )
+                ax.add_artist(label_artist)
+            ax.set_xlim(-1, x_right + 7)
         legend = ax.get_legend()
         if legend is not None:
             legend.get_frame().set_facecolor(BG_COLOR)
@@ -1006,7 +1057,7 @@ def draw_compare_chart(raw_datas: list[JsonDict]) -> DrawResult:
     if axes:
         axes[0].set_title("对比图", fontsize=24, fontweight="bold", color=FG_COLOR, pad=24)
     fig.text(0.016, 0.005, "数据来源：东方财富 | SayuStock", color=FG_COLOR, fontsize=9, alpha=0.65)
-    fig.subplots_adjust(left=0.045, right=0.988, top=0.875, bottom=0.10)
+    fig.subplots_adjust(left=0.045, right=0.965, top=0.875, bottom=0.10)
     return _fig_to_image(fig)
 
 
