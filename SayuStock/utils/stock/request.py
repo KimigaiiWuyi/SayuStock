@@ -137,17 +137,17 @@ async def get_gg(
             kline_code = 101
             out_day = 50
         elif kline_code == "101":
-            out_day = 260
+            out_day = 400
         elif kline_code == "102":
-            out_day = 800
+            out_day = 1000
         elif kline_code == "103":
-            out_day = 2000
+            out_day = 3000
         elif kline_code == "104":
-            out_day = 4000
+            out_day = 5000
         elif kline_code == "105":
-            out_day = 6000
+            out_day = 7000
         elif kline_code == "106":
-            out_day = 10000
+            out_day = 13000
         elif kline_code == "111":
             kline_code = 101
             out_day = 365

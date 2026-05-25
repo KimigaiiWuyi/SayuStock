@@ -291,7 +291,7 @@ def _apply_intraday_kline_ticks(ax: Axes, index: pd.Index) -> None:
 
 
 def _axes_top_to_bottom(fig: Figure) -> list[Axes]:
-    axes = [ax for ax in fig.axes if isinstance(ax, Axes)]
+    axes = [ax for ax in fig.axes if isinstance(ax, Axes) and ax.get_label() not in {"root", "twinx"}]
     return sorted(axes, key=lambda item: item.get_position().y0, reverse=True)
 
 
@@ -453,7 +453,6 @@ def draw_single_stock_chart(raw_data: JsonDict) -> DrawResult:
         Price("close", width=2.2, color="white"),
         HLine(0, color="#f1c40f", linestyle="-."),
         Pane("below", height_ratio=0.28),
-        BarPlot(lambda frame: frame["volume"], color="#4aa3ff", alpha=0.72, width=0.82, label="量能"),
     )
     chart.add_legends()
 
@@ -479,33 +478,47 @@ def draw_single_stock_chart(raw_data: JsonDict) -> DrawResult:
             ax.set_yticklabels([f"{value}%" for value in tick_values])
             ax.tick_params(labelbottom=False)
         else:
+            ax.clear()
+            _style_axis(ax)
             ax.set_ylabel("量能")
+            ax.tick_params(axis="x", rotation=20)
             ax.tick_params(labelbottom=True)
             ax.yaxis.set_major_formatter(FuncFormatter(_format_money_axis))
             _apply_intraday_10min_ticks(ax, prices.index)
             bar_colors = [str(value) for value in prices["bar_color"]]
+            for line in list(ax.lines):
+                line.remove()
+            for collection in list(ax.collections):
+                collection.remove()
+            for container in list(ax.containers):
+                container.remove()
             for patch in list(ax.patches):
                 patch.remove()
             volume_values = np.asarray(prices["volume"], dtype=float)
             max_height = float(np.nanmax(volume_values)) if len(volume_values) > 0 else 0.0
             if max_height > 0:
-                ax.set_ylim(0, max_height * 1.08)
+                volume_top = max_height * 1.18
+                ax.set_ylim(0, volume_top)
+                ax.set_ybound(0, volume_top)
                 ax.margins(y=0.0)
+                ax.set_autoscale_on(False)
                 bars = ax.bar(
                     np.arange(len(volume_values)),
-                    volume_values,
+                    np.minimum(volume_values, volume_top),
                     color=bar_colors,
                     edgecolor=bar_colors,
                     alpha=0.72,
                     width=0.82,
                     label="量能",
                     clip_on=True,
-                    zorder=2,
+                    zorder=1,
                 )
                 for bar in bars:
                     bar.set_clip_on(True)
+                    bar.set_clip_box(ax.bbox)
                     bar.set_clip_path(ax.patch)
-                ax.set_autoscale_on(False)
+                ax.set_ylim(0, volume_top)
+                ax.set_ybound(0, volume_top)
         legend = ax.get_legend()
         if legend is not None:
             legend.get_frame().set_facecolor(BG_COLOR)
@@ -532,25 +545,49 @@ def draw_multi_stock_chart(raw_data_list: list[JsonDict]) -> DrawResult:
         return data
     multi = cast(MultiStockRenderData, data)
 
-    base_df = multi.stocks[0].df
-    datetimes = _datetime_series(base_df["dt"])
-    valid_mask = datetimes.notna()
+    stock_frames: list[pd.DataFrame] = []
+    all_datetimes: list[pd.Timestamp] = []
+    for stock in multi.stocks:
+        item = cast(MultiStockItem, stock)
+        item_datetimes = _datetime_series(item.df["dt"])
+        item_valid_time = item_datetimes.notna()
+        item_frame = pd.DataFrame(
+            {
+                "percentage_change": np.asarray(_numeric_series(item.df["percentage_change"])[item_valid_time]),
+                "money": np.asarray(_numeric_series(item.df["money"], fill_value=0)[item_valid_time]),
+            },
+            index=pd.DatetimeIndex(np.asarray(item_datetimes[item_valid_time]), name="date"),
+        )
+        item_frame = cast(pd.DataFrame, item_frame.sort_index())
+        stock_frames.append(item_frame)
+        all_datetimes.extend(cast(list[pd.Timestamp], item_frame.index.to_list()))
+
+    if not all_datetimes:
+        return ErroText["notData"]
+
+    full_index = pd.DatetimeIndex(sorted(set(all_datetimes)), name="date")
     price_columns: dict[str, NDArray[np.float64]] = {}
     volume_columns: dict[str, NDArray[np.float64]] = {}
     stock_labels: list[str] = []
     stock_colors: list[str] = []
-    volume_total = pd.Series(0.0, index=base_df.index)
+    volume_total = pd.Series(0.0, index=full_index)
+    has_valid_price = False
     for stock_index, stock in enumerate(multi.stocks):
         item = cast(MultiStockItem, stock)
+        item_frame = stock_frames[stock_index].reindex(full_index)
         col_name = f"stock_{stock_index}"
         vol_name = f"vol_{stock_index}"
-        item_change = cast(pd.Series, _numeric_series(item.df["percentage_change"])[valid_mask])
-        item_volume = np.asarray(_numeric_series(item.df["money"], fill_value=0)[valid_mask])
+        item_change = cast(pd.Series, item_frame["percentage_change"])
+        item_volume_series = cast(pd.Series, item_frame["money"]).fillna(0)
+        has_valid_price = has_valid_price or bool(item_change.notna().any())
         price_columns[col_name] = np.asarray(item_change, dtype=float)
-        volume_columns[vol_name] = item_volume
+        volume_columns[vol_name] = np.asarray(item_volume_series, dtype=float)
         stock_labels.append(item.name)
         stock_colors.append(MPL_COLORS[stock_index % len(MPL_COLORS)])
-        volume_total = cast(pd.Series, volume_total.add(_numeric_series(item.df["money"], fill_value=0), fill_value=0))
+        volume_total = cast(pd.Series, volume_total.add(item_volume_series, fill_value=0))
+
+    if not has_valid_price:
+        return ErroText["notData"]
 
     first_col = next(iter(price_columns))
     base_close = price_columns[first_col]
@@ -560,15 +597,12 @@ def draw_multi_stock_chart(raw_data_list: list[JsonDict]) -> DrawResult:
             "high": base_close,
             "low": base_close,
             "close": base_close,
-            "volume": np.asarray(volume_total[valid_mask]),
+            "volume": np.asarray(volume_total, dtype=float),
             **price_columns,
             **volume_columns,
         },
-        index=pd.DatetimeIndex(np.asarray(datetimes[valid_mask]), name="date"),
+        index=full_index,
     )
-    prices = cast(pd.DataFrame, prices.dropna(subset=["open", "high", "low", "close"]))
-    if prices.empty:
-        return ErroText["notData"]
     prices = cast(pd.DataFrame, prices.sort_index())
     stock_volumes: list[NDArray[np.float64]] = []
     for stock_index in range(len(multi.stocks)):
@@ -595,7 +629,6 @@ def draw_multi_stock_chart(raw_data_list: list[JsonDict]) -> DrawResult:
     chart.plot(
         *plot_items,
         Pane("below", height_ratio=0.35),
-        BarPlot(lambda frame: frame["volume"], color=AXIS_COLOR, alpha=0.18, width=0.82, label="成交额"),
     )
     chart.add_legends()
 
@@ -629,29 +662,50 @@ def draw_multi_stock_chart(raw_data_list: list[JsonDict]) -> DrawResult:
                 legend.get_frame().set_facecolor(BG_COLOR)
                 legend.get_frame().set_edgecolor(GRID_COLOR)
         else:
+            ax.clear()
+            _style_axis(ax)
             ax.set_ylabel("成交额")
+            ax.tick_params(axis="x", rotation=20)
             ax.yaxis.set_major_formatter(FuncFormatter(_format_money_axis))
             _apply_intraday_10min_ticks(ax, prices.index)
             ax.tick_params(labelbottom=True)
+            for line in list(ax.lines):
+                line.remove()
+            for collection in list(ax.collections):
+                collection.remove()
+            for container in list(ax.containers):
+                container.remove()
             for patch in list(ax.patches):
                 patch.remove()
             sorted_indices = sorted(range(len(multi.stocks)), key=lambda i: multi.stocks[i].total_volume)
             num_bars = len(prices)
             x_positions = np.arange(num_bars)
             cumulative_bottom = np.zeros(num_bars)
+            max_cumulative = float(np.nansum(stock_volumes, axis=0).max()) if stock_volumes else 0.0
+            volume_top = max(max_cumulative * 1.18, 1.0)
+            ax.set_ylim(0, volume_top)
+            ax.set_ybound(0, volume_top)
+            ax.margins(y=0.0)
+            ax.set_autoscale_on(False)
             for vol_idx in sorted_indices:
-                ax.bar(
+                bars = ax.bar(
                     x_positions,
-                    stock_volumes[vol_idx],
-                    bottom=cumulative_bottom,
+                    np.minimum(stock_volumes[vol_idx], volume_top),
+                    bottom=np.minimum(cumulative_bottom, volume_top),
                     color=stock_colors[vol_idx],
                     alpha=0.72,
                     width=0.82,
                     label=stock_labels[vol_idx],
+                    clip_on=True,
+                    zorder=1,
                 )
+                for bar in bars:
+                    bar.set_clip_on(True)
+                    bar.set_clip_box(ax.bbox)
+                    bar.set_clip_path(ax.patch)
                 cumulative_bottom = cumulative_bottom + stock_volumes[vol_idx]
-            max_cumulative = float(cumulative_bottom.max()) if len(cumulative_bottom) > 0 else 1.0
-            ax.set_ylim(0, max_cumulative * 1.08)
+            ax.set_ylim(0, volume_top)
+            ax.set_ybound(0, volume_top)
             volume_legend = ax.get_legend()
             if volume_legend is not None:
                 volume_legend.get_frame().set_facecolor(BG_COLOR)

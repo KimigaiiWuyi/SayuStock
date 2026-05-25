@@ -354,7 +354,6 @@ def build_single_stock_render_data(raw_data: RawDict) -> SingleStockRenderData |
 def build_multi_stock_render_data(raw_data_list: List[RawDict]) -> MultiStockRenderData | DataResult:
     max_fluctuation = 0.0
     processed_stocks: list[MultiStockItem] = []
-    time_array: list[str] | None = None
 
     for raw_data in raw_data_list:
         if not isinstance(raw_data, dict):
@@ -366,8 +365,7 @@ def build_multi_stock_render_data(raw_data_list: List[RawDict]) -> MultiStockRen
             logger.warning(f"[SayuStock] Skipping {stock_name} due to invalid open price: {raw.get('f60')}.")
             continue
         code_id = str(raw_data.get("file_name", "")).split("_")[0]
-        if time_array is None:
-            time_array = get_trading_minutes(code_id)
+        time_array = get_trading_minutes(code_id)
 
         existing_map = {_trend_minute_key(item["datetime"]): item for item in raw_data["trends"]}
         full_data = [existing_map.get(time, {"datetime": time, "price": None, "money": 0}) for time in time_array]
