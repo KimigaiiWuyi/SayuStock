@@ -351,6 +351,7 @@ def draw_single_kline_chart(raw_data: JsonDict, sp: str | None = None) -> DrawRe
         EMA(12),
         EMA(26),
         BBANDS(20, 2.0),
+        BBANDS(60, 2.0),
         Pane("below", height_ratio=0.24),
         LinePlot(lambda frame: frame["turnover"], label="换手率", color="#d77cff", width=1.5),
         Pane("below", height_ratio=0.18),
@@ -413,23 +414,24 @@ def draw_single_stock_chart(raw_data: JsonDict) -> DrawResult:
 
     datetimes = _datetime_series(df["dt"])
     percent_series = _numeric_series(df["percentage_change"])
-    valid_mask = datetimes.notna() & percent_series.notna()
-    valid_percents = np.asarray(percent_series[valid_mask])
-    valid_bar_colors = np.asarray(_mpl_bar_colors(stock.bar_colors), dtype=object)[np.asarray(valid_mask)]
+    valid_time_mask = datetimes.notna()
+    valid_data_mask = valid_time_mask & percent_series.notna()
+    if not bool(valid_data_mask.any()):
+        return ErroText["notData"]
+
+    valid_percents = np.asarray(percent_series[valid_time_mask])
+    valid_bar_colors = np.asarray(_mpl_bar_colors(stock.bar_colors), dtype=object)[np.asarray(valid_time_mask)]
     prices = pd.DataFrame(
         {
             "open": valid_percents,
             "high": valid_percents,
             "low": valid_percents,
             "close": valid_percents,
-            "volume": np.asarray(_numeric_series(df["money"], fill_value=0)[valid_mask]),
+            "volume": np.asarray(_numeric_series(df["money"], fill_value=0)[valid_time_mask]),
             "bar_color": valid_bar_colors,
         },
-        index=pd.DatetimeIndex(np.asarray(datetimes[valid_mask]), name="date"),
+        index=pd.DatetimeIndex(np.asarray(datetimes[valid_time_mask]), name="date"),
     )
-    prices = cast(pd.DataFrame, prices.dropna(subset=["open", "high", "low", "close"]))
-    if prices.empty:
-        return ErroText["notData"]
     prices = cast(pd.DataFrame, prices.sort_index())
 
     title_color = UP_COLOR if stock.gained >= 0 else DOWN_COLOR
