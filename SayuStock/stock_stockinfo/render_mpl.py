@@ -16,15 +16,17 @@ from numpy.typing import NDArray
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt  # noqa: E402
+from matplotlib import font_manager  # noqa: E402
 from mplchart.chart import Chart  # noqa: E402
 from matplotlib.axes import Axes  # noqa: E402
 from matplotlib.figure import Figure  # noqa: E402
 from matplotlib.ticker import FuncFormatter  # noqa: E402
 from matplotlib.patches import Rectangle  # noqa: E402
-from mplchart.indicators import EMA, SMA, MACD, BBANDS  # noqa: E402
+from mplchart.indicators import CMF, RSI, SMA, MACD, BBANDS  # noqa: E402
 from mplchart.primitives import Pane, HLine, Price, Volume, BarPlot, LinePlot, Candlesticks  # noqa: E402
 
 from gsuid_core.logger import logger as _logger
+from gsuid_core.utils.fonts.fonts import FONT_ORIGIN_PATH
 from gsuid_core.utils.image.convert import convert_img as _convert_img
 from gsuid_core.ai_core.trigger_bridge import ai_return as _ai_return
 
@@ -82,7 +84,13 @@ MPL_COLORS = ["#1f77b4", "#ff7f0e", "#2ca02c", "#d62728", "#9467bd", "#17becf", 
 
 
 def _setup_mpl() -> None:
-    plt.rcParams["font.sans-serif"] = FONT_CANDIDATES
+    font_candidates = FONT_CANDIDATES
+    if FONT_ORIGIN_PATH.exists():
+        font_manager.fontManager.addfont(str(FONT_ORIGIN_PATH))
+        core_font_name = font_manager.FontProperties(fname=str(FONT_ORIGIN_PATH)).get_name()
+        font_candidates = [core_font_name, *FONT_CANDIDATES]
+    plt.rcParams["font.sans-serif"] = font_candidates
+    plt.rcParams["font.family"] = "sans-serif"
     plt.rcParams["axes.unicode_minus"] = False
     plt.rcParams["figure.facecolor"] = BG_COLOR
     plt.rcParams["axes.facecolor"] = BG_COLOR
@@ -197,6 +205,10 @@ def _format_money_axis(value: float, _pos: object = None) -> str:
 
 def _format_percent_axis(value: float, _pos: object = None) -> str:
     return f"{value:.0f}%"
+
+
+def _format_precise_percent_axis(value: float, _pos: object = None) -> str:
+    return f"{value:.2f}%"
 
 
 def _style_axis(ax: Axes, *, grid: bool = True) -> None:
@@ -333,7 +345,7 @@ def draw_single_kline_chart(raw_data: JsonDict, sp: str | None = None) -> DrawRe
     chart = Chart(
         prices,
         title=kline.title,
-        figsize=(25.5, 15.5),
+        figsize=(25.5, 17.0),
         bgcolor=BG_COLOR,
         raw_dates=False,
         color_scheme={
@@ -348,12 +360,17 @@ def draw_single_kline_chart(raw_data: JsonDict, sp: str | None = None) -> DrawRe
         Candlesticks(width=0.78, alpha=0.95, colorup=UP_COLOR, colordn=DOWN_COLOR),
         Volume(width=0.76, alpha=0.42, colorup=UP_COLOR, colordn=DOWN_COLOR),
         SMA(60),
-        EMA(12),
-        EMA(26),
+        SMA(5),
+        # EMA(12),
+        SMA(10),
         BBANDS(20, 2.0),
         BBANDS(60, 2.0),
-        Pane("below", height_ratio=0.24),
+        Pane("below", height_ratio=0.22),
+        HLine(0, color=GRID_COLOR, linestyle="--"),
         LinePlot(lambda frame: frame["turnover"], label="换手率", color="#d77cff", width=1.5),
+        CMF(20) @ LinePlot(label="CMF(20)", color="#2ecc71", width=1.5),
+        Pane("below", height_ratio=0.15),
+        RSI(14) @ LinePlot(label="RSI(14)", color="#4aa3ff", width=1.6, overbought=70, oversold=30),
         Pane("below", height_ratio=0.18),
         MACD(12, 26, 9) @ BarPlot(item="macdhist", color=AXIS_COLOR, alpha=0.68, width=0.76, label="MACD柱"),
         MACD(12, 26, 9) @ LinePlot(item="macd", label="DIF", color="#f1c40f", width=1.6),
@@ -376,8 +393,122 @@ def draw_single_kline_chart(raw_data: JsonDict, sp: str | None = None) -> DrawRe
             else:
                 _apply_month_ticks(ax, prices.index)
             ax.tick_params(labelbottom=True)
-        if index == len(axes) - 2:
+        if index == 1:
+            ax.set_ylabel("换手率", color="#d77cff")
+            ax.yaxis.set_major_formatter(FuncFormatter(_format_precise_percent_axis))
+            turnover_values = cast(pd.Series, prices["turnover"]).dropna()
+            turnover_max = float(turnover_values.max()) if not turnover_values.empty else 0.0
+            turnover_limit = max(turnover_max * 1.35, 0.01)
+            ax.set_ylim(-turnover_limit, turnover_limit)
+
+            turnover_line = next((line for line in ax.lines if line.get_label() == "换手率"), None)
+            if turnover_line is not None:
+                turnover_x = np.asarray(turnover_line.get_xdata(), dtype=float)
+                turnover_y = np.asarray(turnover_line.get_ydata(), dtype=float)
+                finite_turnover = np.isfinite(turnover_y)
+                if bool(finite_turnover.any()):
+                    turnover_peak_index = int(np.nanargmax(np.where(finite_turnover, turnover_y, np.nan)))
+                    turnover_peak_x = float(turnover_x[turnover_peak_index])
+                    turnover_peak_y = float(turnover_y[turnover_peak_index])
+                    ax.scatter(
+                        [turnover_peak_x],
+                        [turnover_peak_y],
+                        color="#d77cff",
+                        edgecolor=BG_COLOR,
+                        s=46,
+                        zorder=5,
+                    )
+                    ax.annotate(
+                        f"换手率 {turnover_peak_y:.2f}%",
+                        xy=(turnover_peak_x, turnover_peak_y),
+                        xytext=(8, 10),
+                        textcoords="offset points",
+                        color="#d77cff",
+                        fontsize=11,
+                        fontweight="bold",
+                        bbox={"facecolor": BG_COLOR, "edgecolor": "#d77cff", "alpha": 0.72, "pad": 3},
+                    )
+
+            cmf_line = next((line for line in ax.lines if line.get_label() == "CMF(20)"), None)
+            if cmf_line is not None:
+                cmf_x = np.asarray(cmf_line.get_xdata(), dtype=float)
+                cmf_y = np.asarray(cmf_line.get_ydata(), dtype=float)
+                cmf_color = cmf_line.get_color()
+                cmf_width = cmf_line.get_linewidth()
+                cmf_alpha = cmf_line.get_alpha()
+                cmf_line.remove()
+                cmf_ax = ax.twinx()
+                cmf_ax.set_label("twinx")
+                cmf_ax.set_facecolor("none")
+                cmf_ax.plot(cmf_x, cmf_y, label="CMF(20)", color=cmf_color, linewidth=cmf_width, alpha=cmf_alpha)
+                cmf_ax.axhline(0, color=GRID_COLOR, linestyle="--", alpha=0.55, linewidth=0.9)
+                cmf_ax.set_ylabel("CMF(20)", color="#2ecc71")
+                cmf_ax.yaxis.set_major_formatter(FuncFormatter(lambda value, _pos=None: f"{value * 100:.2f}%"))
+                cmf_ax.tick_params(axis="y", colors=AXIS_COLOR, labelsize=12)
+                cmf_ax.spines["right"].set_color(AXIS_COLOR)
+                cmf_ax.spines["right"].set_linewidth(1.1)
+                cmf_ax.grid(False)
+                with np.errstate(invalid="ignore"):
+                    finite_cmf = cmf_y[np.isfinite(cmf_y)]
+                cmf_abs_max = float(np.nanmax(np.abs(finite_cmf))) if len(finite_cmf) > 0 else 0.2
+                cmf_limit = max(cmf_abs_max * 1.35, 0.2)
+                cmf_ax.set_ylim(-cmf_limit, cmf_limit)
+                if len(finite_cmf) > 0:
+                    cmf_peak_index = int(np.nanargmax(np.where(np.isfinite(cmf_y), cmf_y, np.nan)))
+                    cmf_peak_x = float(cmf_x[cmf_peak_index])
+                    cmf_peak_y = float(cmf_y[cmf_peak_index])
+                    cmf_ax.scatter(
+                        [cmf_peak_x],
+                        [cmf_peak_y],
+                        color="#2ecc71",
+                        edgecolor=BG_COLOR,
+                        s=46,
+                        zorder=5,
+                    )
+                    cmf_ax.annotate(
+                        f"CMF {cmf_peak_y * 100:.2f}%",
+                        xy=(cmf_peak_x, cmf_peak_y),
+                        xytext=(8, -18),
+                        textcoords="offset points",
+                        color="#2ecc71",
+                        fontsize=11,
+                        fontweight="bold",
+                        bbox={"facecolor": BG_COLOR, "edgecolor": "#2ecc71", "alpha": 0.72, "pad": 3},
+                    )
+        elif index == 2:
+            ax.set_ylabel("RSI(14)")
+            ax.set_ylim(0, 100)
             ax.yaxis.set_major_formatter(FuncFormatter(_format_percent_axis))
+            ax.axhspan(70, 100, facecolor=UP_COLOR, alpha=0.12, zorder=0.1)
+            ax.axhspan(0, 30, facecolor=DOWN_COLOR, alpha=0.12, zorder=0.1)
+            ax.axhline(70, color=UP_COLOR, linestyle="--", alpha=0.75, linewidth=1.0)
+            ax.axhline(30, color=DOWN_COLOR, linestyle="--", alpha=0.75, linewidth=1.0)
+            ax.text(
+                0.5,
+                0.84,
+                "超买区 >70：提防追高/逢高减仓",
+                transform=ax.transAxes,
+                color=UP_COLOR,
+                fontsize=12,
+                fontweight="bold",
+                ha="center",
+                va="center",
+                bbox={"facecolor": BG_COLOR, "edgecolor": UP_COLOR, "alpha": 0.70, "pad": 3},
+            )
+            ax.text(
+                0.5,
+                0.16,
+                "超卖区 <30：避免恐慌割肉/关注反弹",
+                transform=ax.transAxes,
+                color=DOWN_COLOR,
+                fontsize=12,
+                fontweight="bold",
+                ha="center",
+                va="center",
+                bbox={"facecolor": BG_COLOR, "edgecolor": DOWN_COLOR, "alpha": 0.70, "pad": 3},
+            )
+        elif index == len(axes) - 1:
+            ax.set_ylabel("MACD")
         if index == len(axes) - 1:
             for patch in ax.patches:
                 if not isinstance(patch, Rectangle):
@@ -395,7 +526,7 @@ def draw_single_kline_chart(raw_data: JsonDict, sp: str | None = None) -> DrawRe
     if axes:
         axes[0].set_title(kline.title, color=FG_COLOR, fontsize=24, fontweight="bold", pad=24)
     fig.text(0.016, 0.005, "数据来源：东方财富 | SayuStock", color=FG_COLOR, fontsize=9, alpha=0.65)
-    fig.subplots_adjust(left=0.045, right=0.988, top=0.875, bottom=0.10, hspace=0.045)
+    fig.subplots_adjust(left=0.045, right=0.988, top=0.885, bottom=0.10, hspace=0.055)
     return _fig_to_image(fig)
 
 
