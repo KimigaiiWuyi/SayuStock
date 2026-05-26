@@ -174,18 +174,18 @@ def _parse_em_code(code: str) -> Market:
     return Market.UNKNOWN
 
 
-def _generate_time_array(sessions: List[Tuple[str, str]]) -> List[str]:
+def _generate_datetime_array(sessions: List[Tuple[str, str]]) -> List[datetime.datetime]:
     """
-    一个健壮的函数，根据给定的时间段列表生成分钟级别的时间数组。
+    一个健壮的函数，根据给定的时间段列表生成分钟级别的完整时间数组。
     能够正确处理跨天的时间段，并保持正确的时间顺序。
     """
-    full_time_array = []
+    full_datetime_array: List[datetime.datetime] = []
     delta = datetime.timedelta(minutes=1)
 
     for start_str, end_str in sessions:
         try:
             # 使用一个固定的日期（如1900-01-01）来创建datetime对象，以便进行时间运算
-            # 这样做可以避免日期变化带来的干扰
+            # 这样做可以在跨天交易中保留日期顺序，例如 21:30 -> 次日 04:00。
             start_dt = datetime.datetime.strptime(start_str, "%H:%M")
             end_dt = datetime.datetime.strptime(end_str, "%H:%M")
 
@@ -195,12 +195,20 @@ def _generate_time_array(sessions: List[Tuple[str, str]]) -> List[str]:
 
             current_dt = start_dt
             while current_dt <= end_dt:
-                full_time_array.append(current_dt.strftime("%H:%M"))
+                full_datetime_array.append(current_dt)
                 current_dt += delta
         except ValueError:
             continue
 
-    return list(dict.fromkeys(full_time_array))
+    return list(dict.fromkeys(full_datetime_array))
+
+
+def _generate_time_array(sessions: List[Tuple[str, str]]) -> List[str]:
+    """
+    根据给定的时间段列表生成分钟级别的 HH:MM 时间数组。
+    跨天时段会按交易顺序生成，但只保留时间部分，供兼容旧调用使用。
+    """
+    return [item.strftime("%H:%M") for item in _generate_datetime_array(sessions)]
 
 
 def get_trading_minutes(code: Optional[str] = None) -> List[str]:
@@ -215,6 +223,22 @@ def get_trading_minutes(code: Optional[str] = None) -> List[str]:
     Returns:
         List[str]: 一个包含所有交易分钟的字符串列表，格式为 'HH:MM'。
     """
+    return [item[-5:] for item in get_trading_datetimes(code)]
+
+
+def get_trading_datetimes(code: Optional[str] = None) -> List[str]:
+    """
+    根据给定的东方财富代码，计算其交易时间并返回分钟级别的完整时间范围数组。
+    跨天时段会保留日期偏移，避免 00:00~05:00 被排序到 21:30 前面。
+
+    Args:
+        code (Optional[str]): 东方财富的标准或内部代码。
+            例如: '300059', '1.600519', '106.BABA', '116.00700', 'rb2510'。
+            如果code为None或无法识别，将默认返回A股交易时间。
+
+    Returns:
+        List[str]: 一个包含所有交易分钟的字符串列表，格式为 'YYYY-MM-DD HH:MM'。
+    """
     market = _parse_em_code(code) if code else Market.A_SHARE
 
     # 如果市场未知，默认返回A股时间
@@ -223,4 +247,4 @@ def get_trading_minutes(code: Optional[str] = None) -> List[str]:
 
     sessions = MARKET_SESSIONS.get(market, MARKET_SESSIONS[Market.A_SHARE])
 
-    return _generate_time_array(sessions)
+    return [item.strftime("%Y-%m-%d %H:%M") for item in _generate_datetime_array(sessions)]

@@ -233,26 +233,72 @@ def _date_index_positions(index: pd.Index) -> pd.DatetimeIndex:
     return pd.DatetimeIndex(pd.to_datetime(index, errors="coerce"))
 
 
+def _format_intraday_tick_label(timestamp: pd.Timestamp, base_day: pd.Timestamp | None) -> str:
+    if base_day is not None and timestamp.normalize() > base_day:
+        return f"次日\n{timestamp.strftime('%H:%M')}"
+    return timestamp.strftime("%H:%M")
+
+
+def _add_cross_midnight_marker(ax: Axes, index: pd.Index) -> None:
+    dates = _date_index_positions(index)
+    if dates.empty:
+        return
+    valid_dates = [timestamp for timestamp in dates if not pd.isna(timestamp)]
+    if not valid_dates:
+        return
+    base_day = valid_dates[0].normalize()
+    for position, timestamp in enumerate(dates):
+        if pd.isna(timestamp):
+            continue
+        if timestamp.normalize() > base_day:
+            ax.axvline(position, color="#f1c40f", linestyle=":", alpha=0.55, linewidth=1.1, zorder=2)
+            ax.text(
+                position,
+                0.98,
+                "次日",
+                transform=ax.get_xaxis_transform(),
+                color="#f1c40f",
+                fontsize=10,
+                ha="left",
+                va="top",
+                alpha=0.82,
+                bbox={"facecolor": BG_COLOR, "edgecolor": "none", "alpha": 0.55, "pad": 1},
+            )
+            return
+
+
+def _intraday_tick_step_minutes(dates: pd.DatetimeIndex) -> int:
+    valid_dates = [timestamp for timestamp in dates if not pd.isna(timestamp)]
+    if len(valid_dates) < 2:
+        return 10
+    trading_minutes = (valid_dates[-1] - valid_dates[0]).total_seconds() / 60
+    return 30 if trading_minutes >= 12 * 60 else 10
+
+
 def _apply_intraday_10min_ticks(ax: Axes, index: pd.Index) -> None:
     dates = _date_index_positions(index)
     if dates.empty:
         return
+    valid_dates = [timestamp for timestamp in dates if not pd.isna(timestamp)]
+    base_day = valid_dates[0].normalize() if valid_dates else None
+    tick_step_minutes = _intraday_tick_step_minutes(dates)
     tick_positions: list[int] = []
     tick_labels: list[str] = []
     for position, timestamp in enumerate(dates):
         if pd.isna(timestamp):
             continue
-        if timestamp.minute % 10 == 0:
+        if timestamp.minute % tick_step_minutes == 0:
             tick_positions.append(position)
-            tick_labels.append(timestamp.strftime("%H:%M"))
+            tick_labels.append(_format_intraday_tick_label(timestamp, base_day))
     if not tick_positions:
         tick_positions = [int(position) for position in np.linspace(0, len(dates) - 1, min(8, len(dates)), dtype=int)]
         tick_labels = []
         for position in tick_positions:
             timestamp = _timestamp_from_value(dates[position])
-            tick_labels.append(timestamp.strftime("%H:%M") if timestamp is not None else "")
+            tick_labels.append(_format_intraday_tick_label(timestamp, base_day) if timestamp is not None else "")
     ax.set_xticks(tick_positions)
     ax.set_xticklabels(tick_labels)
+    _add_cross_midnight_marker(ax, index)
 
 
 def _apply_month_ticks(ax: Axes, index: pd.Index) -> None:

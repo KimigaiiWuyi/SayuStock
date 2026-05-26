@@ -19,7 +19,7 @@ from gsuid_core.logger import logger
 from .utils import fill_kline
 from ..utils.utils import int_to_percentage, number_to_chinese
 from ..utils.constant import ErroText
-from ..utils.time_range import get_trading_minutes
+from ..utils.time_range import get_trading_datetimes
 
 RawDict = Dict[str, Any]
 DataResult = str
@@ -113,6 +113,15 @@ def _numeric_series(data: object, *, fill_value: float | None = None) -> pd.Seri
     if fill_value is None:
         return series
     return cast(pd.Series, series.fillna(fill_value))
+
+
+def _trend_minute_key(value: object) -> str:
+    if isinstance(value, str):
+        stripped = value.strip()
+        if len(stripped) >= 5:
+            return stripped[-5:]
+        return stripped
+    return str(value)
 
 
 def _infer_kline_freq(df: pd.DataFrame) -> tuple[str, str, str, Any]:
@@ -218,11 +227,12 @@ def build_kline_render_data(raw_data: RawDict) -> KlineRenderData | DataResult:
 
 def _full_single_trends(raw_data: RawDict) -> list[dict[str, Any]]:
     code_id = raw_data["file_name"] if "file_name" in raw_data else ""
-    existing_map = {item["datetime"]: item for item in raw_data["trends"]}
+    existing_map = {_trend_minute_key(item["datetime"]): item for item in raw_data["trends"]}
     full_data: list[dict[str, Any]] = []
-    for time in get_trading_minutes(code_id):
-        if time in existing_map:
-            full_data.append(existing_map[time])
+    for time in get_trading_datetimes(code_id):
+        minute_key = _trend_minute_key(time)
+        if minute_key in existing_map:
+            full_data.append({**existing_map[minute_key], "datetime": time})
         else:
             full_data.append(
                 {
@@ -346,10 +356,15 @@ def build_multi_stock_render_data(raw_data_list: List[RawDict]) -> MultiStockRen
             continue
         code_id = str(raw_data.get("file_name", "")).split("_")[0]
         if time_array is None:
-            time_array = get_trading_minutes(code_id)
+            time_array = get_trading_datetimes(code_id)
 
-        existing_map = {item["datetime"]: item for item in raw_data["trends"]}
-        full_data = [existing_map.get(time, {"datetime": time, "price": None, "money": 0}) for time in time_array]
+        existing_map = {_trend_minute_key(item["datetime"]): item for item in raw_data["trends"]}
+        full_data = [
+            {**existing_map[_trend_minute_key(time)], "datetime": time}
+            if _trend_minute_key(time) in existing_map
+            else {"datetime": time, "price": None, "money": 0}
+            for time in time_array
+        ]
         price_history_pd = pd.DataFrame(full_data)
         price_history_pd["dt"] = pd.to_datetime(price_history_pd["datetime"], errors="coerce")
         price_history_pd["price"] = _numeric_series(price_history_pd["price"])
