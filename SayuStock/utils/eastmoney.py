@@ -104,6 +104,15 @@ class EastMoneyRequester:
         self.menu_cache: Dict[str, Dict[int, Dict[str, str]]] = {}
         self.preferred_push_domain: Literal["push2", "push2delay"] = "push2"
 
+    def _update_preferred_domain(self, req_url: str) -> None:
+        """根据失败的 URL 更新首选域名。"""
+        if "push2.eastmoney.com" in req_url and "push2delay" not in req_url:
+            self.preferred_push_domain = "push2delay"
+            logger.info("[SayuStock][EM] push2 失败，后续优先使用 push2delay")
+        elif "push2delay.eastmoney.com" in req_url:
+            self.preferred_push_domain = "push2"
+            logger.info("[SayuStock][EM] push2delay 失败，后续优先使用 push2")
+
     async def stock_request(
         self,
         url: str,
@@ -164,73 +173,50 @@ class EastMoneyRequester:
                 while self.now_queue >= 6:
                     await asyncio.sleep(random.uniform(0.4, 0.9))
 
-                for _ in range(2):
-                    try:
-                        self.now_queue += 1
-                        async with client.request(
-                            method,
-                            url=req_url,
-                            headers=request_headers,
-                            params=params,
-                            json=_json,
-                            data=data,
-                            timeout=ClientTimeout(total=300),
-                        ) as resp:
-                            try:
-                                raw_data = await resp.json(content_type=None)
-                            except (ContentTypeError, json.decoder.JSONDecodeError):
-                                raw_text = await resp.text()
-                                logger.debug(f"[SayuStock][EM] 非JSON响应: {raw_text[:500]}")
-                                raw_data = -999
-                            logger.debug(raw_data)
+                try:
+                    self.now_queue += 1
+                    async with client.request(
+                        method,
+                        url=req_url,
+                        headers=request_headers,
+                        params=params,
+                        json=_json,
+                        data=data,
+                        timeout=ClientTimeout(total=300),
+                    ) as resp:
+                        try:
+                            raw_data = await resp.json(content_type=None)
+                        except (ContentTypeError, json.decoder.JSONDecodeError):
+                            raw_text = await resp.text()
+                            logger.debug(f"[SayuStock][EM] 非JSON响应: {raw_text[:500]}")
+                            raw_data = -999
+                        logger.debug(raw_data)
 
-                            if resp.status != 200:
-                                logger.error(
-                                    f"[SayuStock][EM] 访问 {req_url} 失败, 错误码: {resp.status}, 错误返回: {raw_data}"
-                                )
-                                if "push2.eastmoney.com" in req_url and "push2delay" not in req_url:
-                                    self.preferred_push_domain = "push2delay"
-                                    logger.info("[SayuStock][EM] push2 失败，后续优先使用 push2delay")
-                                elif "push2delay.eastmoney.com" in req_url:
-                                    self.preferred_push_domain = "push2"
-                                    logger.info("[SayuStock][EM] push2delay 失败，后续优先使用 push2")
-                                if req_url != urls[-1]:
-                                    break
-                                return -999
-                            if isinstance(raw_data, int):
-                                if "push2.eastmoney.com" in req_url and "push2delay" not in req_url:
-                                    self.preferred_push_domain = "push2delay"
-                                    logger.info("[SayuStock][EM] push2 失败，后续优先使用 push2delay")
-                                elif "push2delay.eastmoney.com" in req_url:
-                                    self.preferred_push_domain = "push2"
-                                    logger.info("[SayuStock][EM] push2delay 失败，后续优先使用 push2")
-                                if req_url != urls[-1]:
-                                    break
-                                return raw_data
+                        if resp.status != 200:
+                            logger.error(
+                                f"[SayuStock][EM] 访问 {req_url} 失败, 错误码: {resp.status}, 错误返回: {raw_data}"
+                            )
+                            self._update_preferred_domain(req_url)
+                            if req_url != urls[-1]:
+                                continue
+                            return -999
+                        if isinstance(raw_data, int):
+                            self._update_preferred_domain(req_url)
+                            if req_url != urls[-1]:
+                                continue
                             return raw_data
-                    except ServerDisconnectedError:
-                        logger.warning(f"[SayuStock][EM] 请求 {req_url} 连接断开，稍后重试。")
-                        if "push2.eastmoney.com" in req_url and "push2delay" not in req_url:
-                            self.preferred_push_domain = "push2delay"
-                            logger.info("[SayuStock][EM] push2 连接断开，后续优先使用 push2delay")
-                        elif "push2delay.eastmoney.com" in req_url:
-                            self.preferred_push_domain = "push2"
-                            logger.info("[SayuStock][EM] push2delay 连接断开，后续优先使用 push2")
-                        await asyncio.sleep(random.uniform(0.2, 0.9))
-                    except ClientConnectorError as error:
-                        logger.error(f"[SayuStock][EM] 请求 {req_url} 连接失败: {error}")
-                        if "push2.eastmoney.com" in req_url and "push2delay" not in req_url:
-                            self.preferred_push_domain = "push2delay"
-                            logger.info("[SayuStock][EM] push2 连接失败，后续优先使用 push2delay")
-                        elif "push2delay.eastmoney.com" in req_url:
-                            self.preferred_push_domain = "push2"
-                            logger.info("[SayuStock][EM] push2delay 连接失败，后续优先使用 push2")
-                    finally:
-                        self.now_queue -= 1
-                else:
-                    if req_url == urls[-1]:
-                        return -400016
-                    logger.warning(f"[SayuStock][EM] 请求 {req_url} 失败, 尝试切换到备用域名...")
+                        return raw_data
+                except ServerDisconnectedError:
+                    logger.warning(f"[SayuStock][EM] 请求 {req_url} 连接断开。")
+                    self._update_preferred_domain(req_url)
+                except ClientConnectorError as error:
+                    logger.error(f"[SayuStock][EM] 请求 {req_url} 连接失败: {error}")
+                    self._update_preferred_domain(req_url)
+                finally:
+                    self.now_queue -= 1
+                if req_url == urls[-1]:
+                    return -400016
+                logger.warning(f"[SayuStock][EM] 请求 {req_url} 失败, 尝试切换到备用域名...")
         return -400016
 
     async def resolve_stock(self, query: str) -> Optional[EastMoneyStockItem]:
