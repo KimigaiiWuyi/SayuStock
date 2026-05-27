@@ -10,7 +10,7 @@ from aiohttp import (
     ClientSession,
     ClientTimeout,
     ContentTypeError,
-    ClientConnectorError,
+    ClientConnectionError,
     ServerDisconnectedError,
 )
 
@@ -209,7 +209,7 @@ class EastMoneyRequester:
                 except ServerDisconnectedError:
                     logger.warning(f"[SayuStock][EM] 请求 {req_url} 连接断开。")
                     self._update_preferred_domain(req_url)
-                except ClientConnectorError as error:
+                except ClientConnectionError as error:
                     logger.error(f"[SayuStock][EM] 请求 {req_url} 连接失败: {error}")
                     self._update_preferred_domain(req_url)
                 finally:
