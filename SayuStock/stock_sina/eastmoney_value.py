@@ -29,6 +29,7 @@ from ..utils.eastmoney import (
     EastMoneyStockItem,
     EastMoneyValueSeriesData,
 )
+from ..utils.stock.request import get_gg
 
 ValueType = Literal["pe", "pb"]
 BotSendContent = Union[str, bytes]
@@ -170,8 +171,42 @@ async def get_eastmoney_pepb_compare(
     return cast(BotSendContent, await convert_img(image))
 
 
+def _is_sector(raw_data: dict[str, Any]) -> bool:
+    """检测响应是否为板块（而非个股/ETF）数据。"""
+    data = raw_data.get("data", {})
+    if data.get("f107") == 90:
+        return True
+    f58 = str(data.get("f58", ""))
+    return "(板块)" in f58
+
+
+async def _fetch_sector_codes(raw_data: dict[str, Any]) -> list[str]:
+    """从板块响应中提取成分股代码列表（前13只）。"""
+    data = raw_data.get("data", {})
+    bk_code = str(data.get("f57", ""))
+    if not bk_code:
+        return []
+
+    market_list_resp = await EASTMONEY_REQUESTER.get_market_list(bk_code, False, 1, 13)
+    if isinstance(market_list_resp, str) or not market_list_resp.get("data"):
+        return []
+
+    stocks = market_list_resp["data"].get("diff", [])
+    return [str(s.get("f12", "")) for s in stocks if s.get("f12")]
+
+
 async def _parse_stock_input(_input: str) -> list[StockItem]:
-    stock_items = await EASTMONEY_REQUESTER.parse_stock_input(_input)
+    parts = [p.strip() for p in _input.replace("，", " ").replace(",", " ").split() if p.strip()]
+    expanded: list[str] = []
+    for part in parts:
+        raw_data = await get_gg(part, "single-stock", None, None)
+        if isinstance(raw_data, dict) and _is_sector(raw_data):
+            codes = await _fetch_sector_codes(raw_data)
+            expanded.extend(codes)
+        else:
+            expanded.append(part)
+
+    stock_items = await EASTMONEY_REQUESTER.parse_stock_input(" ".join(expanded))
     return [cast(StockItem, item) for item in stock_items]
 
 

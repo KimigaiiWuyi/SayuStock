@@ -141,18 +141,78 @@ class CloudMapDataService:
             直接透传该错误文本，避免被上层误判为暂无数据。
         """
         markets = [item.strip() for item in market.replace("，", " ").replace(",", " ").split() if item.strip()]
-        results: List[Dict[str, Any]] = []
+        expanded: List[str] = []
         for item in markets:
             if item in {"个股对比", "对比个股", "个股", "对比"}:
                 continue
             query = "A500ETF" if item == "A500" else item
+            codes = await self._fetch_sector_codes_by_query(query)
+            if codes:
+                expanded.extend(codes)
+            else:
+                expanded.append(query)
+
+        results: List[Dict[str, Any]] = []
+        for query in expanded:
             raw_data = await get_gg(query, "single-stock-kline-111", start_time, end_time)
             if isinstance(raw_data, str):
-                return raw_data, []
+                continue
             results.append(raw_data)
         if not results:
             return ErroText["notData"], []
         return results[0], results
+
+    @staticmethod
+    def _is_sector(raw_data: Dict[str, Any]) -> bool:
+        """检测响应是否为板块（而非个股/ETF）数据。"""
+        data = raw_data.get("data", {})
+        if data.get("f107") == 90:
+            return True
+        f58 = str(data.get("f58", ""))
+        return "(板块)" in f58
+
+    async def _fetch_sector_codes(self, raw_data: Dict[str, Any]) -> List[str]:
+        """从板块响应中提取成分股代码列表（前13只）。"""
+        data = raw_data.get("data", {})
+        bk_code = str(data.get("f57", ""))
+        if not bk_code:
+            return []
+
+        market_list_resp = await EASTMONEY_REQUESTER.get_market_list(bk_code, False, 1, 13)
+        if isinstance(market_list_resp, str) or not market_list_resp.get("data"):
+            return []
+
+        stocks = market_list_resp["data"].get("diff", [])
+        return [str(s.get("f12", "")) for s in stocks if s.get("f12")]
+
+    async def _fetch_sector_codes_by_query(self, query: str) -> List[str]:
+        """通过查询词获取板块成分股代码列表；非板块返回空列表。"""
+        raw_data = await get_gg(query, "single-stock", None, None)
+        if isinstance(raw_data, dict) and self._is_sector(raw_data):
+            return await self._fetch_sector_codes(raw_data)
+        return []
+
+    async def _fetch_sector_stocks(
+        self,
+        raw_data: Dict[str, Any],
+    ) -> tuple[CloudMapRawData, List[Dict[str, Any]]]:
+        """获取板块内前13只股票的分时数据，用于 multi 渲染。"""
+        codes = await self._fetch_sector_codes(raw_data)
+        if not codes:
+            return ErroText["notData"], []
+
+        tasks = [EASTMONEY_REQUESTER.get_intraday_by_query(code) for code in codes]
+        results = await asyncio.gather(*tasks)
+        valid_results: List[Dict[str, Any]] = []
+        for item in results:
+            if isinstance(item, str):
+                continue
+            valid_results.append(item)
+
+        if not valid_results:
+            return ErroText["notData"], []
+
+        return valid_results[0], valid_results
 
     async def fetch_single_stock_group(
         self,
@@ -169,6 +229,7 @@ class CloudMapDataService:
 
         Returns:
             单标的时返回 `(raw_data, [])`；多标的时返回 `(首个数据, 全部数据)`。
+            若单标的是板块，则返回板块成分股的 multi 数据。
         """
         vix_market = get_vix_name(market)
         if vix_market is not None:
@@ -176,7 +237,10 @@ class CloudMapDataService:
 
         market_list = market.split(" ")
         if len(market_list) == 1:
-            return await get_gg(market_list[0], "single-stock", start_time, end_time), []
+            raw_data = await get_gg(market_list[0], "single-stock", start_time, end_time)
+            if isinstance(raw_data, dict) and self._is_sector(raw_data):
+                return await self._fetch_sector_stocks(raw_data)
+            return raw_data, []
 
         tasks = []
         for item in market_list:
