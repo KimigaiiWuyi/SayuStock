@@ -3,6 +3,7 @@ import random
 import asyncio
 from typing import Any, Dict, List, Tuple, Union, Literal, Optional, TypedDict
 
+import pandas as pd
 from yarl import URL
 from aiohttp import (
     FormData,
@@ -33,7 +34,7 @@ from ..stock_config.stock_config import STOCK_CONFIG
 
 EastMoneyResponse = Union[Dict[str, Any], int]
 EastMoneyParams = Union[Dict[str, Any], List[Tuple[str, Any]], Tuple[Tuple[str, Any], ...], None]
-EastMoneyValueType = Literal["pe", "pb"]
+EastMoneyValueType = Literal["pe", "pb", "dy"]
 EastMoneyKlineCode = Literal[
     "5",
     "15",
@@ -57,6 +58,7 @@ EASTMONEY_VALUE_FIELD_MAP: Dict[EastMoneyValueType, str] = {
 EASTMONEY_VALUE_NAME_MAP: Dict[EastMoneyValueType, str] = {
     "pe": "市盈率(PE_TTM)",
     "pb": "市净率(PB_MRQ)",
+    "dy": "股息率(滚动12月)",
 }
 EASTMONEY_KLINE_DEFAULT_DAYS: Dict[str, int] = {
     "5": 30,
@@ -520,7 +522,7 @@ class EastMoneyRequester:
         """获取年 K；返回 `data.klines` 年线字符串列表。"""
         return await self.get_kline_by_query(query, "106")
 
-    @async_file_cache(market="{code}", sector="eastmoney-value-{value_type}", suffix="json", minutes=4320)
+    @async_file_cache(market="{code}", sector="eastmoney-value-{value_type}", suffix="json", sp="5000", minutes=4320)
     async def get_value_series(
         self,
         code: str,
@@ -548,7 +550,7 @@ class EastMoneyRequester:
             "columns": "ALL",
             "filter": f'(SECURITY_CODE="{code}")',
             "pageNumber": "1",
-            "pageSize": "720",
+            "pageSize": "5000",
             "sortColumns": "TRADE_DATE",
             "sortTypes": "-1",
             "source": "WEB",
@@ -589,6 +591,128 @@ class EastMoneyRequester:
     async def get_pb_series(self, stock: EastMoneyStockItem) -> Union[EastMoneyValueSeriesData, str]:
         """获取单只股票 PB_MRQ 历史序列；返回标准估值序列字典。"""
         return await self.get_value_series(stock["code"], stock["secid"], stock["name"], stock["sec_type"], "pb")
+
+    async def get_dividend_history(
+        self,
+        code: str,
+    ) -> Union[List[Dict[str, Any]], str]:
+        """获取东方财富分红历史数据。
+
+        Args:
+            code: 股票纯代码，例如 `600519`。
+
+        Returns:
+            分红记录列表；失败或无数据时返回错误文本。
+        """
+        url = "https://datacenter-web.eastmoney.com/api/data/v1/get"
+        params: Dict[str, str] = {
+            "reportName": "RPT_SHAREBONUS_DET",
+            "columns": "ALL",
+            "filter": f'(SECURITY_CODE="{code}")',
+            "pageNumber": "1",
+            "pageSize": "50",
+            "sortColumns": "REPORT_DATE",
+            "sortTypes": "-1",
+            "source": "WEB",
+            "client": "WEB",
+        }
+        resp = await self.stock_request(url, params=params)
+        if isinstance(resp, int):
+            return f"[SayuStock] 分红数据请求错误: {resp}"
+        result = resp["result"] if resp["result"] else {"data": []}
+        return result["data"]
+
+    async def get_dy_series(self, stock: EastMoneyStockItem) -> Union[EastMoneyValueSeriesData, str]:
+        """获取单只股票滚动12个月股息率(DY)历史序列。
+
+        基于分红数据和日K线收盘价计算：
+        股息率 = 滚动12个月总分红 / 当日收盘价 × 100
+
+        Returns:
+            标准估值序列字典；无数据或失败时返回错误文本。
+        """
+        from datetime import datetime, timedelta
+
+        code = stock["code"]
+        secid = stock["secid"]
+        name = stock["name"]
+        sec_type = stock["sec_type"]
+
+        # 1. 获取分红历史
+        dividend_resp = await self.get_dividend_history(code)
+        if isinstance(dividend_resp, str):
+            return dividend_resp
+        if not dividend_resp:
+            return "❌未获取到分红历史数据，无法计算股息率。"
+
+        dividend_events: List[Tuple[Any, float]] = []
+        for row in dividend_resp:
+            ex_date_str = row.get("EX_DIVIDEND_DATE")
+            bonus = row.get("PRETAX_BONUS_RMB")
+            if not ex_date_str or bonus is None:
+                continue
+            try:
+                ex_date = pd.Timestamp(str(ex_date_str)[:10])
+                bonus_per_share = float(bonus) / 10.0
+                if bonus_per_share > 0:
+                    dividend_events.append((ex_date, bonus_per_share))
+            except (ValueError, TypeError):
+                continue
+
+        if not dividend_events:
+            return "❌分红记录中无可用的除权除息日或分红金额，无法计算股息率。"
+
+        dividend_events.sort(key=lambda x: x[0])
+
+        # 2. 获取日K线（约10年历史）
+        end_time = datetime.now().strftime("%Y%m%d")
+        start_time = (datetime.now() - timedelta(days=3650)).strftime("%Y%m%d")
+        kline_resp = await self.get_stock_kline(secid, sec_type, "101", start_time, end_time)
+        if isinstance(kline_resp, str):
+            return kline_resp
+        klines = kline_resp.get("data", {}).get("klines", [])
+        if not klines:
+            return "❌未获取到日K线数据，无法计算股息率。"
+
+        daily_data: List[Tuple[Any, float]] = []
+        for line in klines:
+            parts = line.split(",")
+            if len(parts) < 3:
+                continue
+            try:
+                trade_date = pd.Timestamp(parts[0])
+                close_price = float(parts[2])
+                daily_data.append((trade_date, close_price))
+            except (ValueError, IndexError):
+                continue
+
+        if not daily_data:
+            return "❌日K线数据解析失败，无法计算股息率。"
+
+        # 3. 计算滚动12个月股息率
+        sorted_daily = sorted(daily_data, key=lambda x: x[0])
+        rows: List[Dict[str, Any]] = []
+        for trade_date, close in sorted_daily:
+            if close <= 0:
+                continue
+            one_year_ago = trade_date - pd.Timedelta(days=365)
+            rolling_div = sum(bonus for ex_date, bonus in dividend_events if one_year_ago < ex_date <= trade_date)
+            if rolling_div > 0:
+                dy_value = rolling_div / close * 100
+                rows.append({"date": trade_date.strftime("%Y-%m-%d"), "value": dy_value})
+
+        if not rows:
+            return "❌未计算出有效的股息率数据。"
+
+        return {
+            "code": code,
+            "secid": secid,
+            "name": name,
+            "sec_type": sec_type,
+            "value_type": "dy",
+            "value_name": "股息率(滚动12月)",
+            "rows": rows,
+        }
 
     @async_file_cache(market="{market}", sector="{po}", suffix="json", sp="{is_loop}-{pz}", minutes=5)
     async def get_market_list(

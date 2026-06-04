@@ -1,6 +1,3 @@
-import re
-import datetime
-
 from gsuid_core.sv import SV
 from gsuid_core.bot import Bot
 from gsuid_core.logger import logger
@@ -8,6 +5,7 @@ from gsuid_core.models import Event
 
 from ..utils.utils import convert_list, get_vix_name
 from .get_cloudmap import render_image
+from ..utils.time_range import parse_time_range
 from ..utils.database.models import SsBind
 
 sv_stock_stockinfo = SV("个股行情")
@@ -143,36 +141,11 @@ async def send_compare_img(bot: Bot, ev: Event):
     )
     txt = " ".join(txt.split())
 
-    if "最近一年" in txt or "近一年" in txt or "过去一年" in txt:
-        txt = txt.replace("最近一年", "").replace("近一年", "").replace("过去一年", "").strip()
-        start_time = datetime.datetime.now() - datetime.timedelta(days=365)
-        end_time = datetime.datetime.now()
-    elif "最近一月" in txt or "近一月" in txt or "过去一月" in txt:
-        txt = txt.replace("最近一月", "").replace("近一月", "").replace("过去一月", "").strip()
-        start_time = datetime.datetime.now() - datetime.timedelta(days=30)
-        end_time = datetime.datetime.now()
-    elif "年初至今" in txt or "今年以来" in txt or "今年" in txt:
-        txt = txt.replace("年初至今", "").replace("今年以来", "").replace("今年", "").strip()
-        start_time = datetime.datetime(datetime.datetime.now().year, 1, 1)
-        end_time = datetime.datetime.now()
-    else:
-        p = r"(\d{4}[./]\d{1,2}[./]\d{1,2})(?:[~-](\d{4}[./]\d{1,2}[./]\d{1,2}))?"  # noqa: E501
-        match = re.search(p, txt)
-        start_time = end_time = None
-
-        if match:
-            try:
-                start_str, end_str = match.groups()
-                start_time = datetime.datetime.strptime(re.sub(r"[./]", "-", start_str), "%Y-%m-%d")
-                end_time = (
-                    datetime.datetime.strptime(re.sub(r"[./]", "-", end_str), "%Y-%m-%d")
-                    if end_str
-                    else datetime.datetime.now()
-                )
-                txt = re.sub(p, "", txt).strip()
-            except ValueError:
-                await bot.send("日期格式错误，请使用正确的日期格式如 2024.12.05 或 2024/12/5")
-                return
+    try:
+        start_time, end_time, txt = parse_time_range(txt)
+    except ValueError:
+        await bot.send("日期格式错误，请使用正确的日期格式如 2024.12.05 或 2024/12/5")
+        return
 
     if not txt.strip():
         user_id = ev.at if ev.at else ev.user_id

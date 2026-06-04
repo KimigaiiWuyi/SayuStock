@@ -1,5 +1,6 @@
 # pyright: reportMissingTypeStubs=false, reportUnknownMemberType=false, reportUnknownVariableType=false, reportUnknownArgumentType=false
 import asyncio
+import datetime
 from io import BytesIO
 from typing import Any, Union, Literal, Optional, TypedDict, cast
 from dataclasses import dataclass
@@ -31,12 +32,13 @@ from ..utils.eastmoney import (
 )
 from ..utils.stock.request import get_gg
 
-ValueType = Literal["pe", "pb"]
+ValueType = Literal["pe", "pb", "dy"]
 BotSendContent = Union[str, bytes]
 
 VALUE_NAME_MAP: dict[ValueType, str] = {
     "pe": EASTMONEY_VALUE_NAME_MAP["pe"],
     "pb": EASTMONEY_VALUE_NAME_MAP["pb"],
+    "dy": EASTMONEY_VALUE_NAME_MAP["dy"],
 }
 
 # 与 stock_stockinfo 的个股/对比图保持一致的暗色主题样式。
@@ -139,8 +141,10 @@ class ValueSeries:
 async def get_eastmoney_pepb_compare(
     _input: str,
     _type: ValueType = "pe",
+    start_time: Optional[datetime.datetime] = None,
+    end_time: Optional[datetime.datetime] = None,
 ) -> BotSendContent:
-    """获取东方财富PE/PB历史估值数据，并使用mplchart生成对比图。"""
+    """获取东方财富PE/PB/DY历史估值数据，并使用mplchart生成对比图。"""
     stock_list = await _parse_stock_input(_input)
     if not stock_list:
         return "❌未识别到有效股票，请输入股票代码或名称，例如：市盈率对比 贵州茅台 五粮液"
@@ -165,7 +169,24 @@ async def get_eastmoney_pepb_compare(
     if not series_list:
         return f"❌未获取到{VALUE_NAME_MAP[_type]}历史数据，可能该标的不支持东方财富估值接口。"
 
-    # AI注入必须发生在“数据已获取、图片未生成”的位置，确保AI能获得可分析的结构化文字。
+    # 根据时间范围过滤数据
+    if start_time is not None or end_time is not None:
+        for vs in series_list:
+            mask = pd.Series([True] * len(vs.df), index=vs.df.index)
+            if start_time is not None:
+                mask &= vs.df["date"] >= start_time
+            if end_time is not None:
+                mask &= vs.df["date"] <= end_time
+            vs.df = vs.df.loc[mask].reset_index(drop=True)
+            if vs.df.empty:
+                failed.append(f"{vs.name}({vs.code})")
+
+        series_list = [vs for vs in series_list if not vs.df.empty]
+
+    if not series_list:
+        return f"❌在指定时间范围内未获取到{VALUE_NAME_MAP[_type]}历史数据，请尝试更宽的时间范围或不指定时间。"
+
+    # AI注入必须发生在"数据已获取、图片未生成"的位置，确保AI能获得可分析的结构化文字。
     _ai_return_value_compare(series_list, failed, _type)
     image = await asyncio.to_thread(draw_value_compare_chart, series_list, _type)
     return cast(BotSendContent, await convert_img(image))
@@ -218,8 +239,10 @@ async def fetch_eastmoney_value_series(
     requester_stock = cast(EastMoneyStockItem, stock)
     if _type == "pe":
         raw_series = await EASTMONEY_REQUESTER.get_pe_series(requester_stock)
-    else:
+    elif _type == "pb":
         raw_series = await EASTMONEY_REQUESTER.get_pb_series(requester_stock)
+    else:
+        raw_series = await EASTMONEY_REQUESTER.get_dy_series(requester_stock)
     if isinstance(raw_series, str):
         logger.warning(raw_series)
         return None

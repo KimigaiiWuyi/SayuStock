@@ -3,7 +3,7 @@ from gsuid_core.bot import Bot
 from gsuid_core.logger import logger
 from gsuid_core.models import Event
 
-from ..utils.utils import get_vix_name
+from ..utils.utils import convert_list, get_vix_name
 from ..utils.database.models import SsBind
 from ..utils.stock.request_utils import get_code_id
 
@@ -127,3 +127,30 @@ async def delete_uid(bot: Bot, ev: Event):
             return await bot.send("已取消!")
 
     await bot.send("✅[SayuStock] 删除自选成功!\n可发送[我的自选]查看或发送[添加自选]清除！")
+
+
+@sv_user_info.on_command(("清空自选", "清空我的自选"), block=True)
+async def clear_all_uid(bot: Bot, ev: Event):
+    qid = ev.user_id
+    logger.info(f"[SayuStock] 开始执行清空自选, qid={qid}")
+
+    now_uid = await SsBind.get_uid_list_by_game(qid, ev.bot_id)
+    if not now_uid:
+        return await bot.send("您还未添加自选呢~请输入 添加自选 查看帮助!")
+
+    uid_list = convert_list(now_uid)
+    resp = await bot.receive_resp(
+        f"⚠️ 是否确认清空您的所有自选股票?(总计{len(uid_list)}只)\n请输入是或否。",
+    )
+
+    if resp is not None:
+        if resp.text == "是":
+            uid_list = await SsBind.get_uid_list_by_game(qid, ev.bot_id)
+            if uid_list:
+                uid_list = convert_list(uid_list)
+                for _uid in uid_list:
+                    await SsBind.delete_uid(qid, ev.bot_id, _uid)
+        else:
+            return await bot.send("已取消!")
+
+    return await bot.send("✅[SayuStock] 清空自选成功!")

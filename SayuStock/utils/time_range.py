@@ -248,3 +248,53 @@ def get_trading_datetimes(code: Optional[str] = None) -> List[str]:
     sessions = MARKET_SESSIONS.get(market, MARKET_SESSIONS[Market.A_SHARE])
 
     return [item.strftime("%Y-%m-%d %H:%M") for item in _generate_datetime_array(sessions)]
+
+
+def parse_time_range(text: str) -> Tuple[Optional[datetime.datetime], Optional[datetime.datetime], str]:
+    """从输入文本中解析时间范围。
+
+    支持中文相对时间描述和具体日期格式。
+
+    Args:
+        text: 原始输入文本
+
+    Returns:
+        (start_time, end_time, cleaned_text)
+        start_time/end_time 为 None 表示未指定时间范围
+
+    Raises:
+        ValueError: 日期格式错误时抛出，附带错误提示信息
+    """
+    if "最近一年" in text or "近一年" in text or "过去一年" in text:
+        text = text.replace("最近一年", "").replace("近一年", "").replace("过去一年", "").strip()
+        start_time = datetime.datetime.now() - datetime.timedelta(days=365)
+        end_time = datetime.datetime.now()
+        return start_time, end_time, text
+    elif "最近一月" in text or "近一月" in text or "过去一月" in text:
+        text = text.replace("最近一月", "").replace("近一月", "").replace("过去一月", "").strip()
+        start_time = datetime.datetime.now() - datetime.timedelta(days=30)
+        end_time = datetime.datetime.now()
+        return start_time, end_time, text
+    elif "年初至今" in text or "今年以来" in text or "今年" in text:
+        text = text.replace("年初至今", "").replace("今年以来", "").replace("今年", "").strip()
+        start_time = datetime.datetime(datetime.datetime.now().year, 1, 1)
+        end_time = datetime.datetime.now()
+        return start_time, end_time, text
+    else:
+        p = r"(\d{4}[./]\d{1,2}[./]\d{1,2})(?:[~-](\d{4}[./]\d{1,2}[./]\d{1,2}))?"
+        match = re.search(p, text)
+        if match:
+            try:
+                start_str, end_str = match.groups()
+                start_time = datetime.datetime.strptime(re.sub(r"[./]", "-", start_str), "%Y-%m-%d")
+                end_time = (
+                    datetime.datetime.strptime(re.sub(r"[./]", "-", end_str), "%Y-%m-%d")
+                    if end_str
+                    else datetime.datetime.now()
+                )
+                text = re.sub(p, "", text).strip()
+                return start_time, end_time, text
+            except ValueError as e:
+                raise ValueError("日期格式错误，请使用正确的日期格式如 2024.12.05 或 2024/12/5") from e
+
+    return None, None, text
