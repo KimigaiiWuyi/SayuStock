@@ -442,7 +442,8 @@ def _merge_value_series(series_list: list[ValueSeries]) -> pd.DataFrame:
     merged: Optional[pd.DataFrame] = None
     for item in series_list:
         column = _safe_column_name(item)
-        value_df = item.df.rename(columns={"value": column}).copy()
+        # 只选取 date 和 value 列，避免 events 等其他列在 merge 时产生列名冲突
+        value_df = item.df[["date", "value"]].rename(columns={"value": column}).copy()
         if merged is None:
             merged = value_df
         else:
