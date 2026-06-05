@@ -1,3 +1,5 @@
+import datetime
+
 from gsuid_core.sv import SV
 from gsuid_core.bot import Bot
 from gsuid_core.logger import logger
@@ -7,6 +9,22 @@ from .eastmoney_value import get_eastmoney_pepb_compare
 from ..utils.time_range import parse_time_range
 
 sv_stock_sina = SV("市盈市净股息对比工具")
+
+
+def _apply_default_three_year_range(
+    start_time: datetime.datetime | None,
+    end_time: datetime.datetime | None,
+) -> tuple[datetime.datetime, datetime.datetime]:
+    """若用户未指定时间范围，则默认使用「三年前到当前」。
+
+    与个股/对比图保持一致，避免东方财富全历史数据范围过广。
+    """
+    now = datetime.datetime.now()
+    if end_time is None:
+        end_time = now
+    if start_time is None:
+        start_time = end_time - datetime.timedelta(days=365 * 3)
+    return start_time, end_time
 
 
 @sv_stock_sina.on_prefix(
@@ -34,6 +52,7 @@ async def send_stock_PE_info(bot: Bot, ev: Event):
     except ValueError as e:
         await bot.send(str(e))
         return
+    start_time, end_time = _apply_default_three_year_range(start_time, end_time)
     im = await get_eastmoney_pepb_compare(
         cleaned,
         "pe",
@@ -68,6 +87,7 @@ async def send_stock_PB_info(bot: Bot, ev: Event):
     except ValueError as e:
         await bot.send(str(e))
         return
+    start_time, end_time = _apply_default_three_year_range(start_time, end_time)
     im = await get_eastmoney_pepb_compare(
         cleaned,
         "pb",
@@ -102,6 +122,7 @@ async def send_stock_DY_info(bot: Bot, ev: Event):
     except ValueError as e:
         await bot.send(str(e))
         return
+    start_time, end_time = _apply_default_three_year_range(start_time, end_time)
     im = await get_eastmoney_pepb_compare(
         cleaned,
         "dy",

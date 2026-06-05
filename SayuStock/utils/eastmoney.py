@@ -1,7 +1,7 @@
 import json
 import random
 import asyncio
-from typing import Any, Dict, List, Tuple, Union, Literal, Optional, TypedDict
+from typing import Any, Dict, List, Tuple, Union, Literal, Optional, TypedDict, cast
 
 import pandas as pd
 from yarl import URL
@@ -625,8 +625,18 @@ class EastMoneyRequester:
     async def get_dy_series(self, stock: EastMoneyStockItem) -> Union[EastMoneyValueSeriesData, str]:
         """获取单只股票滚动12个月股息率(DY)历史序列。
 
-        基于分红数据和日K线收盘价计算：
-        股息率 = 滚动12个月总分红 / 当日收盘价 × 100
+        核心算法：按报告期(REPORT_DATE)对齐。
+
+        原因：一家公司“一年分一次”还是“一年分两次”只是不同分拆方式，
+        把同一报告期的多次分红先累加为“该财年的每股总分红”，再以该财年
+        所有除权日中的最早一天为“分子生效日”，在生效日及之后锁定金额。
+        这样：
+            - 同一财年多次除权不会重复计入（避免 TTM 窗口里分子错位）；
+            - 分子在每个财年只跳变一次，曲线更平滑；
+            - 跨年转型期隐含覆盖到最近 4 个财年（覆盖一个完整财年披露周期）。
+
+        公式：
+            股息率(t) = (sum of 生效日 <= t 的 报告期总分红) / 收盘价(t) * 100
 
         Returns:
             标准估值序列字典；无数据或失败时返回错误文本。
@@ -645,24 +655,97 @@ class EastMoneyRequester:
         if not dividend_resp:
             return "❌未获取到分红历史数据，无法计算股息率。"
 
-        dividend_events: List[Tuple[Any, float]] = []
+        # 1.1 解析每条分红为 (报告期, 除权日/公告日, 每股分红)
+        #     当 EX_DIVIDEND_DATE 为空（尚未除权）但方案已确定时，
+        #     用 PLAN_NOTICE_DATE 作为 fallback 日期，确保"董事会决议通过"
+        #     等状态的分红记录也能纳入计算。
+        raw_events: List[Dict[str, Any]] = []
         for row in dividend_resp:
-            ex_date_str = row.get("EX_DIVIDEND_DATE")
             bonus = row.get("PRETAX_BONUS_RMB")
-            if not ex_date_str or bonus is None:
+            report_date_str = row.get("REPORT_DATE")
+            if bonus is None:
+                continue
+            # 优先用除权日，其次用公告日
+            ex_date_str = row.get("EX_DIVIDEND_DATE")
+            fallback_date_str = row.get("PLAN_NOTICE_DATE") or row.get("NOTICE_DATE")
+            date_str = ex_date_str or fallback_date_str
+            if not date_str:
                 continue
             try:
-                ex_date = pd.Timestamp(str(ex_date_str)[:10])
+                ex_date_candidate = pd.Timestamp(str(date_str)[:10])
                 bonus_per_share = float(bonus) / 10.0
-                if bonus_per_share > 0:
-                    dividend_events.append((ex_date, bonus_per_share))
             except (ValueError, TypeError):
                 continue
+            if not isinstance(ex_date_candidate, pd.Timestamp) or bonus_per_share <= 0:
+                continue
+            ex_date: pd.Timestamp = ex_date_candidate
+            report_date: Optional[pd.Timestamp] = None
+            if report_date_str:
+                parsed_report: Any = None
+                try:
+                    parsed_report = pd.Timestamp(str(report_date_str)[:10])
+                except (ValueError, TypeError):
+                    parsed_report = None
+                if isinstance(parsed_report, pd.Timestamp):
+                    report_date = parsed_report
+            raw_events.append(
+                {
+                    "ex_date": ex_date,
+                    "bonus_per_share": bonus_per_share,
+                    "report_date": report_date,
+                    "is_planned": not bool(ex_date_str),  # 标记是否为预披露/未除权
+                }
+            )
 
-        if not dividend_events:
+        if not raw_events:
             return "❌分红记录中无可用的除权除息日或分红金额，无法计算股息率。"
 
-        dividend_events.sort(key=lambda x: x[0])
+        # 1.2 按报告期归并。同一 REPORT_DATE 下多次分红金额加总，
+        #     以该财年所有除权日中的最早一天为“分子生效日”，使同年多次
+        #     除权只会让曲线跳变一次。
+        #     对于没有 REPORT_DATE 的记录（接口特例）退化为按“报告期 = 每年1月1日 + 除权日年份”归并。
+        #     为避免 NaT 在字典键里出警告， key 使用字符串 'YYYY-MM-DD'。
+        period_groups: Dict[str, Dict[str, Any]] = {}
+        for ev in raw_events:
+            ex_date_val: pd.Timestamp = ev["ex_date"]
+            if ev["report_date"] is not None:
+                report_key_ts = cast(pd.Timestamp, ev["report_date"])
+            else:
+                # 接口未提供 REPORT_DATE 时，退化为以除权日所在年 1月1日 为报告期。
+                report_key_ts = cast(pd.Timestamp, pd.Timestamp(f"{ex_date_val.year}-01-01"))
+            key_str: str = report_key_ts.strftime("%Y-%m-%d")
+            bucket = period_groups.setdefault(
+                key_str,
+                {
+                    "report_date": report_key_ts,
+                    "ex_events": [],  # list of (ex_date, bonus_per_share)
+                },
+            )
+            bucket["ex_events"].append((ex_date_val, ev["bonus_per_share"], ev.get("is_planned", False)))
+
+        # 1.3 转为 period_records：同一报告期可能多次除权，原样保留每次除权。
+        period_records: List[Dict[str, Any]] = []
+        for key_str, bucket in period_groups.items():
+            ex_events = sorted(bucket["ex_events"], key=lambda x: x[0])
+            if not ex_events:
+                continue
+            total_bonus = float(sum(b for _, b, _ in ex_events))
+            if total_bonus <= 0:
+                continue
+            # 若该报告期下所有事件均无真实除权日（is_planned=True），
+            # 则视为预披露/未实施，不参与实际股息率计算与标注。
+            is_all_planned = all(planned for _, _, planned in ex_events)
+            period_records.append(
+                {
+                    "report_date": bucket["report_date"],
+                    "ex_events": ex_events,
+                    "bonus_per_share": total_bonus,
+                    # effective_date = 该报告期"最后一次"除权日，代表该报告期已完整披露的临界点。
+                    "effective_date": ex_events[-1][0],
+                    "is_planned": is_all_planned,
+                }
+            )
+        period_records.sort(key=lambda r: r["effective_date"])
 
         # 2. 获取日K线（约10年历史）
         end_time = datetime.now().strftime("%Y%m%d")
@@ -689,17 +772,98 @@ class EastMoneyRequester:
         if not daily_data:
             return "❌日K线数据解析失败，无法计算股息率。"
 
-        # 3. 计算滚动12个月股息率
+        # 3. 按自然年锁定的固定算法：逐日计算股息率
+        #
+        # 语义:
+        #   分子 = 当前自然年 trade_date.year 内“已完整除权”的、且
+        #         “报告期年份 == trade_date.year - 1”的所有报告期金额之和。
+        #   含义：投资者在 2026 年内能拿到的，是 2025 财年的分红。
+        #         （不论 2025 财年是通过 年报 还是 中期 分几次披露。）
+        #
+        # 关键点:
+        #   1. effective_date (该报告期“最后一次除权日”) <= trade_date
+        #      表示该报告期已完整披露、所有除权动作均已发生。
+        #   2. 报告期归属 = current_year - 1：不是按 effective_date 所在年，
+        #      而是按 REPORT_DATE 所在年。这样：
+        #        - 2025 年报 报告期 2025-12-31，除权可能 2026-07-11，
+        #          在 2026-07-11 之前认为“未完整”，分子不包含；
+        #        - 2026 年内分子锁定“上一财年”的所有报告期。
+        #   3. 跨年重置：current_year 切换时，分子换算到新一财年。
+        #
+        # 优点:
+        #   - 严格按报告期对齐，抹平“一年分两次”与“一年分一次”的差异；
+        #   - 跨年不累加，分子不会随时间漂移地越来越长；
+        #   - 年内固定，曲线仅在除权日跳变。
         sorted_daily = sorted(daily_data, key=lambda x: x[0])
         rows: List[Dict[str, Any]] = []
+        debug_count = 0
         for trade_date, close in sorted_daily:
             if close <= 0:
                 continue
-            one_year_ago = trade_date - pd.Timedelta(days=365)
-            rolling_div = sum(bonus for ex_date, bonus in dividend_events if one_year_ago < ex_date <= trade_date)
-            if rolling_div > 0:
+            current_year = trade_date.year
+            target_report_year = current_year - 1
+            applicable = [
+                r
+                for r in period_records
+                if r["effective_date"] <= trade_date and r["report_date"].year == target_report_year
+            ]
+            if applicable:
+                rolling_div = float(sum(r["bonus_per_share"] for r in applicable))
                 dy_value = rolling_div / close * 100
-                rows.append({"date": trade_date.strftime("%Y-%m-%d"), "value": dy_value})
+                # 事件明细：本年内全部生效报告期。
+                event_details: List[Dict[str, Any]] = [
+                    {
+                        "ex_date": r["effective_date"].strftime("%Y-%m-%d"),
+                        "report_date": r["report_date"].strftime("%Y-%m-%d"),
+                        "ex_dates": [d.strftime("%Y-%m-%d") for d, _, _ in r["ex_events"]],
+                        "bonus_per_share": float(r["bonus_per_share"]),
+                        "contribution_pct": float(r["bonus_per_share"]) / float(close) * 100,
+                        "is_planned": r.get("is_planned", False),
+                    }
+                    for r in applicable
+                ]
+                rows.append(
+                    {
+                        "date": trade_date.strftime("%Y-%m-%d"),
+                        "value": dy_value,
+                        "events": event_details,
+                    }
+                )
+                events_str = "; ".join(
+                    f"[报告期:{r['report_date'].strftime('%Y-%m-%d')} "
+                    f"生效:{r['effective_date'].strftime('%Y-%m-%d')} "
+                    f"金额:{r['bonus_per_share']:.4f}]"
+                    for r in applicable
+                )
+                logger.debug(
+                    f"[SayuStock][DY] {name}({code}) 股息率计算(按自然年-上一年财年): "
+                    f"日期={trade_date.strftime('%Y-%m-%d')}, "
+                    f"自然年={current_year}, "
+                    f"目标财年={target_report_year}, "
+                    f"命中报告期数={len(applicable)}, "
+                    f"命中报告期=[{events_str}], "
+                    f"分子={rolling_div:.4f}, "
+                    f"收盘价={close:.4f}, "
+                    f"股息率={rolling_div:.4f}/{close:.4f}*100={dy_value:.4f}%"
+                )
+                debug_count += 1
+            else:
+                logger.debug(
+                    f"[SayuStock][DY] {name}({code}) 跳过(按自然年-上一年财年): "
+                    f"日期={trade_date.strftime('%Y-%m-%d')}, "
+                    f"自然年={current_year}, "
+                    f"目标财年={current_year - 1}, "
+                    f"该财年尚无已完整除权的报告期, 分子=0"
+                )
+
+        logger.debug(
+            f"[SayuStock][DY] {name}({code}) 股息率计算完成(按自然年-上一年财年): "
+            f"原始分红事件={len(raw_events)}, "
+            f"归并后报告期数={len(period_records)}, "
+            f"K线天数={len(sorted_daily)}, "
+            f"输出有效天数={len(rows)}, "
+            f"调试日志条数={debug_count}"
+        )
 
         if not rows:
             return "❌未计算出有效的股息率数据。"
@@ -710,7 +874,7 @@ class EastMoneyRequester:
             "name": name,
             "sec_type": sec_type,
             "value_type": "dy",
-            "value_name": "股息率(滚动12月)",
+            "value_name": "股息率(按自然年-上一年财年 报告期对齐)",
             "rows": rows,
         }
 

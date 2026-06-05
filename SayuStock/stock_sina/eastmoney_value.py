@@ -252,11 +252,51 @@ async def fetch_eastmoney_value_series(
     if not rows:
         return None
 
-    sorted_items = [(pd.Timestamp(str(row["date"])), float(row["value"])) for row in rows]
+    sorted_rows = sorted(rows, key=lambda row: pd.Timestamp(str(row["date"])))
+    sorted_items: list[tuple[pd.Timestamp, float, list[dict[str, Any]]]] = []
+    for row in sorted_rows:
+        events_field = row.get("events") if isinstance(row, dict) else None
+        events_list: list[dict[str, Any]] = []
+        if isinstance(events_field, list):
+            for item in events_field:
+                if not isinstance(item, dict):
+                    continue
+                ex_date_raw = item.get("ex_date")
+                if not ex_date_raw:
+                    continue
+                try:
+                    ex_ts = pd.Timestamp(str(ex_date_raw)[:10])
+                except (ValueError, TypeError):
+                    continue
+                # 透传额外报告期/原始除权日信息（仅 DY 会用到），便于调试与 AI 摘要。
+                raw_report_date = item.get("report_date")
+                raw_ex_dates = item.get("ex_dates")
+                events_list.append(
+                    {
+                        "ex_date": ex_ts,
+                        "report_date": (pd.Timestamp(str(raw_report_date)[:10]) if raw_report_date else None),
+                        "ex_dates": (
+                            [pd.Timestamp(str(d)[:10]) for d in raw_ex_dates]
+                            if isinstance(raw_ex_dates, list)
+                            else None
+                        ),
+                        "bonus_per_share": float(item.get("bonus_per_share", 0.0) or 0.0),
+                        "contribution_pct": float(item.get("contribution_pct", 0.0) or 0.0),
+                        "is_planned": bool(item.get("is_planned", False)),
+                    }
+                )
+        sorted_items.append(
+            (
+                cast(pd.Timestamp, pd.Timestamp(str(row["date"]))),
+                float(row["value"]),
+                events_list,
+            )
+        )
     output_df = pd.DataFrame(
         {
             "date": [item[0] for item in sorted_items],
             "value": [item[1] for item in sorted_items],
+            "events": [item[2] for item in sorted_items],
         }
     )
     return ValueSeries(
@@ -388,6 +428,10 @@ def draw_value_compare_chart(
             text.set_text(label)
             text.set_color(FG_COLOR)
 
+    # 股息率(DY)图：标注每只标的在窗口内发生的分红事件。
+    if _type == "dy":
+        _annotate_dividend_events(ax, prices, series_list, value_columns, span, data_min, data_max)
+
     ax.set_title(title, fontsize=24, fontweight="bold", color=FG_COLOR, pad=24)
     fig.text(0.016, 0.005, "数据来源：东方财富 | SayuStock", color=FG_COLOR, fontsize=9, alpha=0.65)
     fig.subplots_adjust(left=0.06, right=0.965, top=0.9, bottom=0.16)
@@ -416,6 +460,157 @@ def _merge_value_series(series_list: list[ValueSeries]) -> pd.DataFrame:
 
 def _safe_column_name(item: ValueSeries) -> str:
     return f"v_{item.code}"
+
+
+def _annotate_dividend_events(
+    ax: Axes,
+    prices: pd.DataFrame,
+    series_list: list[ValueSeries],
+    value_columns: list[str],
+    span: float,
+    data_min: float,
+    data_max: float,
+) -> None:
+    """在股息率(DY)图上标注每只标的的每次分红事件。
+
+    每个事件以一个竖直短线（除权日对齐曲线 y 位置）、一个散点、以及一行文本标签
+    （除权日 + 每股分红 + 贡献股息率比例）表示。同一交易日可能发生多次分红，
+    会在纵向错开避免遮挡。同一只标的事件过多时，按贡献比例优先取 Top N。
+    """
+    max_event_labels_per_series = 8
+    index_to_position: dict[pd.Timestamp, int] = {cast(pd.Timestamp, ts): pos for pos, ts in enumerate(prices.index)}
+
+    for series_index, (column, value_series) in enumerate(zip(value_columns, series_list)):
+        if "events" not in value_series.df.columns:
+            logger.debug(f"[SayuStock][DY-Annotate] {value_series.label} 无 events 列, 跳过标注")
+            continue
+        event_count = 0
+        for _, row in value_series.df.iterrows():
+            ev = row.get("events")
+            if isinstance(ev, list) and len(ev) > 0:
+                event_count += 1
+        logger.debug(
+            f"[SayuStock][DY-Annotate] {value_series.label} events列存在, 有events的行数={event_count}, 总行数={len(value_series.df)}"
+        )
+        color = MPL_COLORS[series_index % len(MPL_COLORS)]
+        y_values = cast(pd.Series, prices[column])
+        y_max = float(y_values.max()) if not y_values.empty else data_max
+        y_min = float(y_values.min()) if not y_values.empty else data_min
+        vertical_pad = max((y_max - y_min) * 0.18, span * 0.04, 0.05)
+
+        # 为不同标的事件准备纵向偏移阶梯，避免互相重叠。
+        label_offsets_y: dict[pd.Timestamp, int] = {}
+
+        # 用 (ex_date, event) 集合去重，避免同一事件在多行重复出现。
+        seen_events: set[tuple[str, str]] = set()
+        events_unique: list[tuple[pd.Timestamp, dict[str, Any]]] = []
+        for _, row in value_series.df.iterrows():
+            raw_events = row.get("events")
+            if not isinstance(raw_events, list) or len(raw_events) == 0:
+                continue
+            for event in raw_events:
+                if not isinstance(event, dict):
+                    continue
+                # 跳过预披露/未实施的分红事件，避免在图上标注未除权的方案。
+                if event.get("is_planned"):
+                    continue
+                ex_date = event.get("ex_date")
+                if ex_date is None:
+                    continue
+                try:
+                    ex_ts = pd.Timestamp(str(ex_date))
+                except (ValueError, TypeError):
+                    continue
+                dedup_key = (str(ex_date), str(event.get("report_date", "")))
+                if dedup_key in seen_events:
+                    continue
+                seen_events.add(dedup_key)
+                events_unique.append((cast(pd.Timestamp, ex_ts), cast(dict[str, Any], event)))
+
+        # 按贡献比例从大到小排序，只标注贡献最大的若干个事件，防止图过密。
+        events_unique.sort(
+            key=lambda item: abs(float(item[1].get("contribution_pct", 0.0) or 0.0)),
+            reverse=True,
+        )
+        top_events = events_unique[:max_event_labels_per_series]
+        # 按时序排列后逐个画标签与竖线。
+        top_events.sort(key=lambda item: item[0])
+
+        for ex_ts, event in top_events:
+            # 找到该事件日最近的 K 线 x 位置（该日可能无交易）。
+            # 使用 index_to_position 映射，它基于 prices.index（已合并+过滤后的日期）。
+            position = index_to_position.get(ex_ts)
+            if position is None:
+                # ex_ts 可能不在 prices.index 中，找最近的 <= ex_ts 的位置
+                closest = [pos for ts, pos in index_to_position.items() if ts <= ex_ts]
+                if not closest:
+                    logger.debug(f"[SayuStock][DY-Annotate] 事件 {ex_ts} 无对应位置, 跳过")
+                    continue
+                position = closest[-1]
+            position = int(position)
+            try:
+                base_y = float(y_values.iloc[position])
+            except (IndexError, ValueError):
+                logger.debug(f"[SayuStock][DY-Annotate] 事件 {ex_ts} position={position} 取y值失败, 跳过")
+                continue
+            if pd.isna(base_y):
+                base_y = float(y_values.dropna().iloc[-1]) if not y_values.dropna().empty else data_min
+
+            bonus = float(event.get("bonus_per_share", 0.0) or 0.0)
+            contribution = float(event.get("contribution_pct", 0.0) or 0.0)
+            ex_label = ex_ts.strftime("%Y-%m-%d")
+
+            # 竖直短线表示除权日对齐位置。
+            ax.vlines(
+                position,
+                base_y - vertical_pad * 0.45,
+                base_y + vertical_pad * 0.85,
+                color=color,
+                alpha=0.55,
+                linewidth=1.1,
+                linestyles=(0, (3, 2)),
+                zorder=4,
+            )
+            ax.scatter(
+                [position],
+                [base_y],
+                color=color,
+                edgecolor=BG_COLOR,
+                s=46,
+                marker="D",
+                zorder=5,
+            )
+
+            offset_index = label_offsets_y.get(ex_ts, 0)
+            label_offsets_y[ex_ts] = offset_index + 1
+            y_text = base_y + vertical_pad * (0.95 + 0.55 * offset_index)
+
+            text = f"{ex_label}\n每股{bonus:.2f}元\n贡献{contribution:.2f}%"
+            ax.annotate(
+                text,
+                xy=(position, base_y),
+                xytext=(8, y_text - base_y),
+                textcoords="offset points",
+                fontsize=8.5,
+                color=color,
+                fontweight="bold",
+                ha="left",
+                va="bottom",
+                bbox={
+                    "boxstyle": "round,pad=0.25",
+                    "facecolor": BG_COLOR,
+                    "edgecolor": color,
+                    "linewidth": 0.9,
+                    "alpha": 0.78,
+                },
+                arrowprops={
+                    "arrowstyle": "-",
+                    "color": color,
+                    "alpha": 0.7,
+                    "linewidth": 0.7,
+                },
+                zorder=7,
+            )
 
 
 def _ai_return_value_compare(
