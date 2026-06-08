@@ -19,7 +19,7 @@ from gsuid_core.logger import logger
 from .utils import fill_kline
 from ..utils.utils import int_to_percentage, number_to_chinese
 from ..utils.constant import ErroText
-from ..utils.time_range import get_trading_datetimes
+from ..utils.time_range import is_market_active_now, get_trading_datetimes_bjt
 
 RawDict = Dict[str, Any]
 DataResult = str
@@ -238,17 +238,36 @@ def build_kline_render_data(raw_data: RawDict) -> KlineRenderData | DataResult:
 
 
 def _full_single_trends(raw_data: RawDict) -> list[dict[str, Any]]:
+    import datetime as _dt
+
     code_id = raw_data["file_name"] if "file_name" in raw_data else ""
     existing_map = {_trend_minute_key(item["datetime"]): item for item in raw_data["trends"]}
+    # 以 BJT 今日 00:00 为基准生成 datetime 数组：跨天时段（美股 21:30-04:00）会
+    # 自然进位到次日、X 轴跨天位置自动加“次日”标签。
+    time_array_dt = get_trading_datetimes_bjt(code_id, now_bjt=_dt.datetime.now())
+    # 容错：若市场识别不准（例如 time_range 还未覆盖某些 PREFIX 100 的指数），
+    # 推断出的时段与实际数据全部不在同一分钟上，existing_map 会被全部跳过，
+    # 后面会误报 notOpen。这里以下两种情形回退为“直接使用原始 trends”：
+    #   1) existing_map 为空（异常）
+    #   2) existing_map 中的 key 与 time_array 全部不在同一分钟上
+    if not existing_map:
+        return list(raw_data.get("trends", []))
+
+    time_keys_hhmm = {_trend_minute_key(t.strftime("%Y-%m-%d %H:%M")) for t in time_array_dt}
+    existing_keys = set(existing_map.keys())
+    if existing_keys.isdisjoint(time_keys_hhmm) and time_keys_hhmm:
+        # 两者不重叠：以实际数据为准
+        return list(raw_data.get("trends", []))
+
     full_data: list[dict[str, Any]] = []
-    for time in get_trading_datetimes(code_id):
-        minute_key = _trend_minute_key(time)
+    for dt_obj in time_array_dt:
+        minute_key = dt_obj.strftime("%H:%M")
         if minute_key in existing_map:
-            full_data.append({**existing_map[minute_key], "datetime": time})
+            full_data.append({**existing_map[minute_key], "datetime": dt_obj})
         else:
             full_data.append(
                 {
-                    "datetime": time,
+                    "datetime": dt_obj,
                     "price": None,
                     "open": None,
                     "high": None,
@@ -353,8 +372,11 @@ def build_single_stock_render_data(raw_data: RawDict) -> SingleStockRenderData |
 
 
 def build_multi_stock_render_data(raw_data_list: List[RawDict]) -> MultiStockRenderData | DataResult:
+    import datetime as _dt
+
     max_fluctuation = 0.0
     processed_stocks: list[MultiStockItem] = []
+    now_bjt = _dt.datetime.now()
 
     for raw_data in raw_data_list:
         if not isinstance(raw_data, dict):
@@ -366,16 +388,34 @@ def build_multi_stock_render_data(raw_data_list: List[RawDict]) -> MultiStockRen
             logger.warning(f"[SayuStock] Skipping {stock_name} due to invalid open price: {raw.get('f60')}.")
             continue
         code_id = str(raw_data.get("file_name", "")).split("_")[0]
-        time_array = get_trading_datetimes(code_id)
+        # 多市场对比：以 BJT 今日 00:00 为基准生成完整 datetime 数组，
+        # 这样跨天市场（如美股 21:30-04:00）会自然拼接在 X 轴右侧、
+        # 拥有“次日”标签。
+        time_array_dt = get_trading_datetimes_bjt(code_id, now_bjt=now_bjt)
 
+        # 东方财富 push2 推过来的分时是 HH:MM 字符串；与 BJT 绝对时间拼接时，
+        # 先把现有趋势接成 HH:MM 字典。
         existing_map = {_trend_minute_key(item["datetime"]): item for item in raw_data["trends"]}
-        full_data = [
-            {**existing_map[_trend_minute_key(time)], "datetime": time}
-            if _trend_minute_key(time) in existing_map
-            else {"datetime": time, "price": None, "money": 0}
-            for time in time_array
-        ]
-        price_history_pd = pd.DataFrame(full_data)
+
+        # 如果该市场当前不在交易时段内（已收盘或未开盘），不画出“昨日盘后/盘前”的
+        # 残余分时，让其在 X 轴上以 “未开盘” 留空，避免出现在不期望的位置。
+        market_active = is_market_active_now(code_id, now_bjt=now_bjt)
+
+        rows: list[dict[str, Any]] = []
+        for dt_obj in time_array_dt:
+            minute_key = dt_obj.strftime("%H:%M")
+            if not market_active:
+                # 不活跃市场：dt 置为 NaT，X 轴不会扩展到这些时间点；
+                # 但保留一行以供右上角 label 计算“今开参考”。
+                rows.append({"datetime": None, "price": None, "money": 0})
+                continue
+            if minute_key in existing_map:
+                src = existing_map[minute_key]
+                rows.append({**src, "datetime": dt_obj})
+            else:
+                rows.append({"datetime": dt_obj, "price": None, "money": 0})
+
+        price_history_pd = pd.DataFrame(rows)
         price_history_pd["dt"] = pd.to_datetime(price_history_pd["datetime"], errors="coerce")
         price_history_pd["price"] = _numeric_series(price_history_pd["price"])
         price_history_pd["money"] = _numeric_series(price_history_pd["money"], fill_value=0)
