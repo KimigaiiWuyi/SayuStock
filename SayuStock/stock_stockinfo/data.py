@@ -3,6 +3,8 @@ from typing import Any, Dict, List, Union, Optional
 from datetime import datetime
 from dataclasses import dataclass
 
+from gsuid_core.logger import logger
+
 from ..utils.utils import get_vix_name
 from ..utils.constant import ErroText, bk_dict, market_dict
 from ..utils.eastmoney import EASTMONEY_REQUESTER
@@ -253,8 +255,12 @@ class CloudMapDataService:
         valid_results: List[Dict[str, Any]] = []
         for item in gathered:
             if isinstance(item, str):
-                return item, []
+                # 跳过单只标的解析失败的情况，避免任一错误就终止整体多股查询
+                logger.warning(f"[SayuStock] 多股查询跳过失败标的: {item}")
+                continue
             valid_results.append(item)
+        if not valid_results:
+            return ErroText["notData"], []
         return valid_results[0], valid_results
 
 
