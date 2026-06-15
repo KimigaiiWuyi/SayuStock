@@ -404,16 +404,18 @@ def build_multi_stock_render_data(raw_data_list: List[RawDict]) -> MultiStockRen
         rows: list[dict[str, Any]] = []
         for dt_obj in time_array_dt:
             minute_key = dt_obj.strftime("%H:%M")
-            if not market_active:
-                # 不活跃市场：dt 置为 NaT，X 轴不会扩展到这些时间点；
-                # 但保留一行以供右上角 label 计算“今开参考”。
-                rows.append({"datetime": None, "price": None, "money": 0})
-                continue
             if minute_key in existing_map:
+                # 该分钟有实际分时数据（即使市场已收盘，也能正确回放当日走势）
                 src = existing_map[minute_key]
                 rows.append({**src, "datetime": dt_obj})
-            else:
-                rows.append({"datetime": dt_obj, "price": None, "money": 0})
+                continue
+            if not market_active:
+                # 市场不活跃且无数据：dt 置为 NaT，X 轴不会扩展到这些时间点，
+                # 也不画出“昨日盘后/盘前”的残余分时。
+                rows.append({"datetime": None, "price": None, "money": 0})
+                continue
+            # 市场活跃但当前分钟暂无数据（盘中未来时刻）：扩展 X 轴占位
+            rows.append({"datetime": dt_obj, "price": None, "money": 0})
 
         price_history_pd = pd.DataFrame(rows)
         price_history_pd["dt"] = pd.to_datetime(price_history_pd["datetime"], errors="coerce")
