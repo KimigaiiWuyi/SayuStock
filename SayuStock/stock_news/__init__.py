@@ -1,6 +1,7 @@
 import random
 import asyncio
-from typing import Dict, Union
+from collections import deque
+from typing import Dict, Optional, Union
 from datetime import datetime
 
 from gsuid_core.sv import SV
@@ -16,6 +17,33 @@ from ..utils.request import get_news, clean_news
 sv_stock_subscribe = SV("订阅新闻", pm=2, area="GROUP")
 
 TASK_NAME = "雪球新闻订阅"
+
+# 进程内发送去重（不持久化，重启即清空，仅作安全网）
+# 不同群会推送相同新闻，因此以 group_id 为 key
+# 结构: group_id -> 最近发送过的 news id 队列（最多 50 条，超出自动驱逐最旧）
+_SENT_HISTORY: Dict[str, deque] = {}
+_SENT_HISTORY_MAX = 50
+
+
+def _already_sent(group_id: Optional[str], news_id: int) -> bool:
+    """检查该群最近是否已发送过这条新闻"""
+    if not group_id:
+        return False
+    history = _SENT_HISTORY.get(group_id)
+    if not history:
+        return False
+    return news_id in history
+
+
+def _mark_sent(group_id: Optional[str], news_id: int) -> None:
+    """记录该群已发送过这条新闻"""
+    if not group_id:
+        return
+    history = _SENT_HISTORY.get(group_id)
+    if history is None:
+        history = deque(maxlen=_SENT_HISTORY_MAX)
+        _SENT_HISTORY[group_id] = history
+    history.append(news_id)
 
 
 @sv_stock_subscribe.on_fullmatch(
@@ -77,13 +105,22 @@ async def send_subscribe_info():
             return
 
         for subscribe in datas:
+            # 用真正发送出去的最大 ID 作为水位线，
+            # 避免被雪球撤回的新闻卡死导致下一轮重发
+            sent_max_id: int = int(subscribe.extra_message or 0)
+
             # 发送
             for new in reversed(news[1]["items"]):
                 em = subscribe.extra_message
                 if em and new["id"] > int(em) and new["mark"] in [1]:
+                    # 同一群内同一条新闻去重
+                    if _already_sent(subscribe.group_id, new["id"]):
+                        continue
                     dt_local = datetime.fromtimestamp(new["created_at"] / 1000).strftime("%Y-%m-%d %H:%M:%S")
                     await subscribe.send(f"【{dt_local}】雪球7x24消息\n{new['text']}")
                     await asyncio.sleep(2 + random.random() * 3)
+                    sent_max_id = max(sent_max_id, new["id"])
+                    _mark_sent(subscribe.group_id, new["id"])
 
             # 更新max_id
             opt: Dict[str, Union[str, int, None]] = {
@@ -102,7 +139,7 @@ async def send_subscribe_info():
                 if i not in opt:
                     opt[i] = subscribe.__getattribute__(i)
 
-            upd["extra_message"] = str(news[0])
+            upd["extra_message"] = str(sent_max_id)
             await Subscribe.update_data_by_data(
                 opt,
                 upd,

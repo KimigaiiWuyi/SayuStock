@@ -92,12 +92,17 @@ async def get_news(
     global NEWS
     _max_id = max_id
     return_max_id = max_id
+    # 用 seen_ids 防止同一新闻被反复 append 进全局 NEWS
+    seen_ids: set = {item["id"] for item in NEWS["items"]}
 
     for i in range(3):
         data = await get_news_list(max_id=_max_id)
         if isinstance(data, int):
             return data
         data = cast(XueQiu7x24, data)
+
+        if not data["items"]:
+            break
 
         if i == 0:
             return_max_id = data["items"][0]["id"]
@@ -106,8 +111,9 @@ async def get_news(
             break
 
         for item in data["items"]:
-            if item["id"] >= max_id:
+            if item["id"] > max_id and item["id"] not in seen_ids:
                 NEWS["items"].append(item)
+                seen_ids.add(item["id"])
 
         NEWS["next_id"] = data["next_id"]
         NEWS["next_max_id"] = data["next_max_id"]
