@@ -122,10 +122,13 @@ def register_stock_agent() -> None:
                 "send_cloudmap_img",
                 "get_latest_news",
                 "get_crypto_prices",
+                # —— P1 新增：大盘概览 + 板块热力 ——
+                "get_market_overview",
+                "get_sector_heatmap",
             ],
             tool_query="",
-            max_iterations=25,
-            max_tokens=40000,
+            max_iterations=30,
+            max_tokens=50000,
         )
     )
 
@@ -229,7 +232,9 @@ def register_papertrade_agents() -> None:
                 "stock_financials",
                 "stock_indicators",
                 "stock_is_trading_day",
-                # 已有
+                # 自主选股工具链（P1 新增）
+                "get_market_overview",       # 大盘概览：指数/涨跌/北向
+                "get_sector_heatmap",        # 板块热力：涨跌幅 TOP
                 "get_latest_news",
                 "get_vix_index",
                 "search_stock",
@@ -237,8 +242,8 @@ def register_papertrade_agents() -> None:
                 "send_cloudmap_img",
                 "send_stock_PB_info",
             ],
-            max_iterations=20,
-            max_tokens=35000,
+            max_iterations=30,
+            max_tokens=60000,
         )
     )
     register_capability_agent(

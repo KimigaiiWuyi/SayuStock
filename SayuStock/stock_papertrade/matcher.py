@@ -8,10 +8,6 @@
 """
 
 from dataclasses import dataclass
-from typing import Optional
-
-from gsuid_core.logger import logger
-
 
 # ============================================================
 # 费率常量
@@ -76,25 +72,46 @@ def match_order(
     """
     if side not in ("buy", "sell"):
         return MatchResult(
-            ok=False, side=side, code=code, requested_qty=qty,
-            actual_qty=0, price=price, amount=0.0,
-            commission=0.0, stamp_tax=0.0, fee_total=0.0,
+            ok=False,
+            side=side,
+            code=code,
+            requested_qty=qty,
+            actual_qty=0,
+            price=price,
+            amount=0.0,
+            commission=0.0,
+            stamp_tax=0.0,
+            fee_total=0.0,
             reason=f"非法方向: {side}",
         )
     if price <= 0:
         return MatchResult(
-            ok=False, side=side, code=code, requested_qty=qty,
-            actual_qty=0, price=price, amount=0.0,
-            commission=0.0, stamp_tax=0.0, fee_total=0.0,
+            ok=False,
+            side=side,
+            code=code,
+            requested_qty=qty,
+            actual_qty=0,
+            price=price,
+            amount=0.0,
+            commission=0.0,
+            stamp_tax=0.0,
+            fee_total=0.0,
             reason="价格异常",
         )
 
     actual_qty = round_lot(qty)
     if actual_qty == 0:
         return MatchResult(
-            ok=False, side=side, code=code, requested_qty=qty,
-            actual_qty=0, price=price, amount=0.0,
-            commission=0.0, stamp_tax=0.0, fee_total=0.0,
+            ok=False,
+            side=side,
+            code=code,
+            requested_qty=qty,
+            actual_qty=0,
+            price=price,
+            amount=0.0,
+            commission=0.0,
+            stamp_tax=0.0,
+            fee_total=0.0,
             reason=f"qty<{LOT_SIZE} 不足一整手",
         )
 
@@ -109,9 +126,16 @@ def match_order(
             actual_qty = round_lot(int(max_amount / price))
             if actual_qty < LOT_SIZE:
                 return MatchResult(
-                    ok=False, side=side, code=code, requested_qty=qty,
-                    actual_qty=0, price=price, amount=0.0,
-                    commission=0.0, stamp_tax=0.0, fee_total=0.0,
+                    ok=False,
+                    side=side,
+                    code=code,
+                    requested_qty=qty,
+                    actual_qty=0,
+                    price=price,
+                    amount=0.0,
+                    commission=0.0,
+                    stamp_tax=0.0,
+                    fee_total=0.0,
                     reason=f"现金不足 (需 {need:.2f}, 可用 {cash_available:.2f})",
                 )
             amount = actual_qty * price
@@ -122,9 +146,16 @@ def match_order(
             actual_qty = round_lot(position_qty)
             if actual_qty < LOT_SIZE:
                 return MatchResult(
-                    ok=False, side=side, code=code, requested_qty=qty,
-                    actual_qty=0, price=price, amount=0.0,
-                    commission=0.0, stamp_tax=0.0, fee_total=0.0,
+                    ok=False,
+                    side=side,
+                    code=code,
+                    requested_qty=qty,
+                    actual_qty=0,
+                    price=price,
+                    amount=0.0,
+                    commission=0.0,
+                    stamp_tax=0.0,
+                    fee_total=0.0,
                     reason=f"持仓不足 (需 {qty}, 持仓 {position_qty})",
                 )
             amount = actual_qty * price
@@ -144,16 +175,12 @@ def match_order(
     )
 
 
-def calc_realized_pnl(
-    avg_cost: float, sell_qty: int, sell_price: float, fee: float
-) -> float:
+def calc_realized_pnl(avg_cost: float, sell_qty: int, sell_price: float, fee: float) -> float:
     """卖出时计算已实现盈亏： (sell_price - avg_cost) * qty - fee"""
     return (sell_price - avg_cost) * sell_qty - fee
 
 
-def calc_new_avg_cost(
-    old_qty: int, old_avg_cost: float, buy_qty: int, buy_price: float, buy_fee: float
-) -> float:
+def calc_new_avg_cost(old_qty: int, old_avg_cost: float, buy_qty: int, buy_price: float, buy_fee: float) -> float:
     """加仓后新的加权平均成本。买费用计入成本。"""
     if old_qty + buy_qty == 0:
         return 0.0

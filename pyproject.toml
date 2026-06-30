@@ -34,9 +34,21 @@ exclude = ["tests", "deploy"]
 
 [tool.pyright]
 disableBytesTypePromotions = false
+include = ["SayuStock"]
+extraPaths = [
+    "../../../",
+    "../../../gsuid_core",
+    "../../../gsuid_core/ai_core",
+]
 
 [tool.basedpyright]
 deprecateTypingAliases = false
+include = ["SayuStock"]
+extraPaths = [
+    "../../../",
+    "../../../gsuid_core",
+    "../../../gsuid_core/ai_core",
+]  
 
 [project]
 name = "SayuStock"

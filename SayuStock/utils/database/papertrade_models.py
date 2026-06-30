@@ -2,14 +2,19 @@
 
 7 张表全部继承 BaseIDModel（只 id 主键），按 (group_id, bot_id, ...) 分区
 实现多群数据隔离。WebConsole admin 一次性挂到"SayuStock AI操盘"菜单分组下。
+
+迁移说明：本文件末尾通过 ``exec_list.extend`` 把 ALTER/CREATE INDEX 挂到
+``on_core_start_before`` 阶段的 ``trans_adapter`` 内执行；既有库会自动补齐。
 """
 
-from datetime import date, datetime
 from typing import Optional
+from datetime import date, datetime
 
 from sqlmodel import Field
+from sqlalchemy import UniqueConstraint
 
 from gsuid_core.webconsole.mount_app import PageSchema, GsAdminModel, site
+from gsuid_core.utils.database.startup import exec_list
 from gsuid_core.utils.database.base_models import BaseIDModel
 
 
@@ -17,9 +22,17 @@ from gsuid_core.utils.database.base_models import BaseIDModel
 # 1) 账户表
 # ============================================================
 class SayuPaperAccount(BaseIDModel, table=True):
-    """AI 模拟盘账户（每群每 bot 一份）"""
+    """AI 模拟盘账户（每群每 bot 一份）
 
-    __table_args__ = {"extend_existing": True}
+    ``(group_id, bot_id)`` 复合唯一约束：
+    - 新库由 ``create_all`` 自动挂上 ``ux_sayupaperaccount_gid_bid``；
+    - 老库通过文件末尾的 ``exec_list`` 跑 CREATE UNIQUE INDEX 兜底补齐。
+    """
+
+    __table_args__ = (
+        UniqueConstraint("group_id", "bot_id", name="ux_sayupaperaccount_gid_bid"),
+        {"extend_existing": True},
+    )
 
     group_id: str = Field(title="群号", index=True)
     bot_id: str = Field(title="平台", index=True)
@@ -234,3 +247,31 @@ class SayuPaperAgentPoolAdmin(GsAdminModel):
         icon="fa fa-bullhorn",
     )  # type: ignore
     model = SayuPaperAgentPool
+
+
+# ============================================================
+# 迁移 SQL（在 on_core_start_before 阶段的 trans_adapter 内执行）
+# 全部幂等：trans_adapter 对每条都 try/except pass，所以 SQLite/MySQL/PG
+# 任一不识别的 ALTER 报错都不会阻塞启动。
+# ============================================================
+exec_list.extend(
+    [
+        # 兼容已建过 sayupaperaccount 但未挂上 UniqueConstraint 的部署：
+        # 先清掉 (group_id, bot_id) 重复行，保留每个分区的最小 id；再补建唯一索引。
+        # SQLite / MySQL / PG 通用语法，subquery alias 在 SQLite 旧版可能需要别名，
+        # 用 INNER JOIN 形式兜底。
+        'DELETE FROM sayupaperaccount '
+        'WHERE id NOT IN ('
+        '  SELECT MIN(id) FROM sayupaperaccount GROUP BY group_id, bot_id'
+        ');',
+        # CREATE UNIQUE INDEX 三方言通用
+        'CREATE UNIQUE INDEX IF NOT EXISTS ux_sayupaperaccount_gid_bid '
+        'ON sayupaperaccount (group_id, bot_id);',
+        # MySQL 没有 IF NOT EXISTS 的 INDEX 语法，用 try 兜底
+        'ALTER TABLE sayupaperaccount '
+        'ADD UNIQUE INDEX ux_sayupaperaccount_gid_bid (group_id, bot_id);',
+        # PostgreSQL
+        'CREATE UNIQUE INDEX IF NOT EXISTS ux_sayupaperaccount_gid_bid '
+        'ON sayupaperaccount (group_id, bot_id);',
+    ]
+)

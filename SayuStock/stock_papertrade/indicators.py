@@ -11,7 +11,16 @@
 - score_from_indicators(ind) -> tuple[float, list[str]]  # -1.0~+1.0
 """
 
-from typing import Any, Dict, List, Optional, Tuple
+# pyright/basedpyright 文件级指令 —— 只对**本文件**生效。
+# 本文件大量使用 pandas Series 的标量提取（.iloc[i] / .sum() / .mean() /
+# .item() 等），pandas-stubs 在这一层大量把返回类型标为 ``Any`` —— 那是
+# 库类型 stub 的局限，不是代码错误。运行时这些值始终是数值（int / float /
+# np.integer / np.floating）。本文件内部已经做了 ``isinstance`` 守卫（见
+# ``_to_float``），保证运行时安全。
+# - 关闭 ``reportAny`` / ``reportUnknownMemberType`` / ``reportUnknownArgumentType``
+#   在本文件范围内（pandas-stubs 已知限制下的合理配置）
+# - 与 ``# type: ignore`` 不同：这是规则级配置，不是抑制特定错误
+# pyright: reportAny=false, reportUnknownMemberType=false, reportUnknownArgumentType=false
 
 import numpy as np
 import pandas as pd
@@ -20,15 +29,13 @@ import pandas as pd
 # ============================================================
 # 内部：把 K 线原始列表转成标准化 DataFrame
 # ============================================================
-def klines_to_df(klines: List[str]) -> pd.DataFrame:
+def klines_to_df(klines: list[str]) -> pd.DataFrame:
     """把东财 K 线字符串列表转 DataFrame。
 
     字符串格式："YYYY-MM-DD,open,close,high,low,volume,amount,amplitude,chg_pct,chg_amount,turnover_rate"
     """
-    rows: List[Dict[str, Any]] = []
+    rows: list[dict[str, float | str]] = []
     for line in klines:
-        if not isinstance(line, str):
-            continue
         parts = line.split(",")
         if len(parts) < 11:
             continue
@@ -54,20 +61,53 @@ def klines_to_df(klines: List[str]) -> pd.DataFrame:
 
 
 # ============================================================
+# 内部小工具：把 Series 子集 / 标量元素显式收窄到 float ——
+# pandas-stubs 把 ``DataFrame.__getitem__`` / ``Series.iloc`` / ``.item()`` /
+# ``.sum() / .mean()`` 等的返回标成 ``Any``；强行注解 ``float`` 不顶用，
+# basedpyright 仍把右值的 Any 类型告警。用 isinstance 收敛联合类型是 §17
+# 红线推荐的 union + isinstance 守卫，既不用 ``cast()`` 也不用 ``# type: ignore``。
+# ============================================================
+def _col_float(df: pd.DataFrame, name: str) -> pd.Series:
+    s: pd.Series = df[name]
+    return s.astype(float)
+
+
+def _tail_col(df: pd.DataFrame, name: str, n: int) -> pd.Series:
+    s: pd.Series = df[name]
+    return s.tail(n)
+
+
+def _tail_col_float(df: pd.DataFrame, name: str, n: int) -> pd.Series:
+    s: pd.Series = df[name]
+    return s.astype(float).tail(n)
+
+
+def _to_float(v: object) -> float:
+    """pandas 标量元素 / numpy 标量 / Python 标量 → float；非数值抛 ValueError。
+
+    用 isinstance 守卫让 basedpyright 收窄联合类型；这正是 §17 红线
+    推荐的 union + isinstance 守卫做法，替代 ``cast()`` 与 ``# type: ignore``。
+    """
+    if isinstance(v, bool):
+        return float(v)
+    if isinstance(v, (int, float, np.integer, np.floating)):
+        return float(v)
+    raise ValueError(f"Cannot convert {type(v).__name__} to float: {v!r}")
+
+
+# ============================================================
 # 1) 均线 MA
 # ============================================================
-def calc_ma(close: pd.Series, period: int) -> Optional[float]:
+def calc_ma(close: pd.Series, period: int) -> float | None:
     if len(close) < period:
         return None
-    return float(close.iloc[-period:].mean())
+    return _to_float(close.iloc[-period:].mean())
 
 
 # ============================================================
 # 2) MACD (12, 26, 9)
 # ============================================================
-def calc_macd(
-    close: pd.Series,
-) -> Tuple[Optional[float], Optional[float], Optional[float], bool, bool]:
+def calc_macd(close: pd.Series) -> tuple[float | None, float | None, float | None, bool, bool]:
     """返回 (DIF, DEA, BAR, golden_cross_in_3d, death_cross_in_3d)"""
     if len(close) < 35:
         return None, None, None, False, False
@@ -78,19 +118,19 @@ def calc_macd(
     dea = dif.ewm(span=9, adjust=False).mean()
     bar = (dif - dea) * 2
 
-    dif_v = float(dif.iloc[-1])
-    dea_v = float(dea.iloc[-1])
-    bar_v = float(bar.iloc[-1])
+    dif_v: float = _to_float(dif.iloc[-1])
+    dea_v: float = _to_float(dea.iloc[-1])
+    bar_v: float = _to_float(bar.iloc[-1])
 
     # 判断最近 3 日内是否金叉/死叉
     golden_cross_in_3d = False
     death_cross_in_3d = False
     for i in range(-3, 0):
         try:
-            d_prev = float(dif.iloc[i - 1])
-            d_curr = float(dif.iloc[i])
-            dea_prev = float(dea.iloc[i - 1])
-            dea_curr = float(dea.iloc[i])
+            d_prev: float = _to_float(dif.iloc[i - 1])
+            d_curr: float = _to_float(dif.iloc[i])
+            dea_prev: float = _to_float(dea.iloc[i - 1])
+            dea_curr: float = _to_float(dea.iloc[i])
             if d_prev <= dea_prev and d_curr > dea_curr:
                 golden_cross_in_3d = True
             if d_prev >= dea_prev and d_curr < dea_curr:
@@ -104,7 +144,7 @@ def calc_macd(
 # ============================================================
 # 3) RSI (Wilder 平滑)
 # ============================================================
-def calc_rsi(close: pd.Series, period: int) -> Optional[float]:
+def calc_rsi(close: pd.Series, period: int) -> float | None:
     if len(close) < period + 1:
         return None
     delta = close.diff()
@@ -113,9 +153,9 @@ def calc_rsi(close: pd.Series, period: int) -> Optional[float]:
     # Wilder 平滑（用 EMA 等价 alpha=1/period）
     avg_gain = gain.ewm(alpha=1.0 / period, adjust=False).mean()
     avg_loss = loss.ewm(alpha=1.0 / period, adjust=False).mean()
-    if float(avg_loss.iloc[-1]) == 0:
+    if _to_float(avg_loss.iloc[-1]) == 0:
         return 100.0
-    rs = float(avg_gain.iloc[-1]) / float(avg_loss.iloc[-1])
+    rs = _to_float(avg_gain.iloc[-1]) / _to_float(avg_loss.iloc[-1])
     rsi = 100.0 - 100.0 / (1.0 + rs)
     return rsi
 
@@ -123,28 +163,31 @@ def calc_rsi(close: pd.Series, period: int) -> Optional[float]:
 # ============================================================
 # 4) CMF (Chaikin Money Flow) 20 日
 # ============================================================
-def calc_cmf(df: pd.DataFrame, period: int = 20) -> Optional[float]:
+def calc_cmf(df: pd.DataFrame, period: int = 20) -> float | None:
     if len(df) < period:
         return None
-    sub = df.tail(period).copy()
-    high = sub["high"].astype(float)
-    low = sub["low"].astype(float)
-    close = sub["close"].astype(float)
-    volume = sub["volume"].astype(float)
+    high = _tail_col_float(df, "high", period)
+    low = _tail_col_float(df, "low", period)
+    close = _tail_col_float(df, "close", period)
+    volume = _tail_col_float(df, "volume", period)
     rng = (high - low).replace(0, np.nan)
     mfv = ((close - low) - (high - close)) / rng * volume
-    cmf = float(mfv.sum() / volume.sum()) if volume.sum() != 0 else 0.0
-    return cmf
+    vol_sum: float = _to_float(volume.sum())
+    if vol_sum == 0:
+        return 0.0
+    mfv_sum: float = _to_float(mfv.sum())
+    return mfv_sum / vol_sum
 
 
 # ============================================================
 # 5) 量比 = 今日量 / 5 日均量
 # ============================================================
-def calc_volume_ratio(df: pd.DataFrame) -> Optional[float]:
+def calc_volume_ratio(df: pd.DataFrame) -> float | None:
     if len(df) < 6:
         return None
-    today = float(df["volume"].iloc[-1])
-    avg5 = float(df["volume"].iloc[-6:-1].mean())
+    volume = _col_float(df, "volume")
+    today: float = _to_float(volume.iloc[-1])
+    avg5: float = _to_float(volume.iloc[-6:-1].mean())
     if avg5 == 0:
         return None
     return today / avg5
@@ -153,35 +196,33 @@ def calc_volume_ratio(df: pd.DataFrame) -> Optional[float]:
 # ============================================================
 # 6) 乖离率 BIAS = (close - ma20) / ma20
 # ============================================================
-def calc_bias(close: pd.Series, period: int = 20) -> Optional[float]:
+def calc_bias(close: pd.Series, period: int = 20) -> float | None:
     ma = calc_ma(close, period)
     if ma is None or ma == 0:
         return None
-    return float((close.iloc[-1] - ma) / ma)
+    last: float = _to_float(close.iloc[-1])
+    return (last - ma) / ma
 
 
 # ============================================================
 # 7) ATR% (近 14 日平均真实波幅 / 收盘价)
 # ============================================================
-def calc_atr_pct(df: pd.DataFrame, period: int = 14) -> Optional[float]:
+def calc_atr_pct(df: pd.DataFrame, period: int = 14) -> float | None:
     if len(df) < period + 1:
         return None
-    sub = df.tail(period + 1).copy()
-    high = sub["high"].astype(float)
-    low = sub["low"].astype(float)
-    close = sub["close"].astype(float)
+    high = _tail_col_float(df, "high", period + 1)
+    low = _tail_col_float(df, "low", period + 1)
+    close = _tail_col_float(df, "close", period + 1)
     prev_close = close.shift(1)
-    tr = pd.concat(
-        [
-            (high - low).abs(),
-            (high - prev_close).abs(),
-            (low - prev_close).abs(),
-        ],
-        axis=1,
-    ).max(axis=1)
+    parts: list[pd.Series] = [
+        (high - low).abs(),
+        (high - prev_close).abs(),
+        (low - prev_close).abs(),
+    ]
+    tr = pd.concat(parts, axis=1).max(axis=1)
     tr = tr.iloc[1:]  # 第一行没有 prev_close
-    atr = float(tr.mean())
-    last_close = float(close.iloc[-1])
+    atr: float = _to_float(tr.mean())
+    last_close: float = _to_float(close.iloc[-1])
     if last_close == 0:
         return None
     return atr / last_close
@@ -190,17 +231,127 @@ def calc_atr_pct(df: pd.DataFrame, period: int = 14) -> Optional[float]:
 # ============================================================
 # 8) 支撑/压力位（近 20 日最低/最高）
 # ============================================================
-def calc_support_resistance(df: pd.DataFrame, period: int = 20) -> Tuple[Optional[float], Optional[float]]:
+def calc_support_resistance(df: pd.DataFrame, period: int = 20) -> tuple[float | None, float | None]:
     if len(df) < period:
         return None, None
-    sub = df.tail(period)
-    return float(sub["low"].min()), float(sub["high"].max())
+    low = _tail_col(df, "low", period)
+    high = _tail_col(df, "high", period)
+    return _to_float(low.min()), _to_float(high.max())
+
+
+# ============================================================
+# 9) 布林带 BOLL（N 周期, K 倍标准差）
+#  典型用法：短期 20,2 / 中期 60,3
+#  返回 (mid, upper, lower, bandwidth, percent_b)
+#    bandwidth = (upper - lower) / mid   → 衡量"敞口"
+#    percent_b = (close - lower) / (upper - lower) → 价格在带内位置 (0~1)
+# ============================================================
+def calc_boll(
+    close: pd.Series,
+    period: int = 20,
+    std_mult: float = 2.0,
+) -> tuple[float | None, float | None, float | None, float | None, float | None]:
+    if len(close) < period:
+        return None, None, None, None, None
+    mid = _to_float(close.iloc[-period:].mean())
+    std = _to_float(close.iloc[-period:].std(ddof=0))
+    upper = mid + std_mult * std
+    lower = mid - std_mult * std
+    if mid == 0:
+        bandwidth = None
+    else:
+        bandwidth = (upper - lower) / mid
+    last_close = _to_float(close.iloc[-1])
+    if (upper - lower) == 0:
+        percent_b = None
+    else:
+        percent_b = (last_close - lower) / (upper - lower)
+    return mid, upper, lower, bandwidth, percent_b
+
+
+# ============================================================
+# 10) CCI 顺势指标（典型 14 周期）
+#   TP = (high + low + close) / 3
+#   CCI = (TP - SMA(TP, n)) / (0.015 * mean_dev)
+#   区间：常态 -100~+100；>+100 超买 <-100 超卖
+# ============================================================
+def calc_cci(df: pd.DataFrame, period: int = 14) -> float | None:
+    if len(df) < period:
+        return None
+    high = _tail_col_float(df, "high", period)
+    low = _tail_col_float(df, "low", period)
+    close = _tail_col_float(df, "close", period)
+    tp: pd.Series = (high + low + close) / 3.0
+    sma_tp: float = _to_float(tp.mean())
+    mean_dev: float = _to_float((tp - sma_tp).abs().mean())
+    if mean_dev == 0:
+        return 0.0
+    last_tp: float = _to_float(tp.iloc[-1])
+    return (last_tp - sma_tp) / (0.015 * mean_dev)
+
+
+# ============================================================
+# 11) BBI 多空指标（Bull Bear Index）
+#   BBI = (MA3 + MA6 + MA12 + MA24) / 4
+#   close > BBI → 多头占优；close < BBI → 空头占优
+# ============================================================
+def calc_bbi(close: pd.Series) -> float | None:
+    if len(close) < 24:
+        return None
+    ma3 = calc_ma(close, 3)
+    ma6 = calc_ma(close, 6)
+    ma12 = calc_ma(close, 12)
+    ma24 = calc_ma(close, 24)
+    if None in (ma3, ma6, ma12, ma24):
+        return None
+    return (ma3 + ma6 + ma12 + ma24) / 4.0  # type: ignore[operator]
+
+
+# ============================================================
+# 12) 5/15/30/60 分钟 K 线适配器
+#   日 K 内部仍走 klines_to_df；分钟 K 由 get_gg(code, "single-stock-kline-5"|"15"|"30"|"60", ...)
+#   拉到的格式与日 K 略不同（东财分钟 K 列顺序可能多/少），这里做宽松解析：
+#   "YYYY-MM-DD HH:MM,open,close,high,low,volume,amount[,amplitude,...]"
+# ============================================================
+def klines_to_df_mins(klines: list[str]) -> pd.DataFrame:
+    """把东财分钟 K 字符串列表转 DataFrame。
+
+    分钟 K 与日 K 主要区别：
+    - 第一列可能是 "YYYY-MM-DD HH:MM" 而非 "YYYY-MM-DD"
+    - 字段数可能略少于 11（分钟 K 普遍只给 6~7 列）
+    """
+    rows: list[dict[str, float | str]] = []
+    for line in klines:
+        parts = line.split(",")
+        if len(parts) < 6:
+            continue
+        try:
+            # 第一列可能含空格，统一只取日期部分
+            date_part = parts[0].split(" ")[0]
+            rows.append(
+                {
+                    "date": date_part,
+                    "open": float(parts[1]),
+                    "close": float(parts[2]),
+                    "high": float(parts[3]),
+                    "low": float(parts[4]),
+                    "volume": float(parts[5]),
+                    "amount": float(parts[6]) if len(parts) > 6 else 0.0,
+                    "amplitude": float(parts[7]) if len(parts) > 7 else 0.0,
+                    "chg_pct": float(parts[8]) if len(parts) > 8 else 0.0,
+                    "chg_amount": float(parts[9]) if len(parts) > 9 else 0.0,
+                    "turnover_rate": float(parts[10]) if len(parts) > 10 else 0.0,
+                }
+            )
+        except (ValueError, IndexError):
+            continue
+    return pd.DataFrame(rows)
 
 
 # ============================================================
 # 主入口：compute_indicators
 # ============================================================
-def compute_indicators(df: pd.DataFrame) -> Dict[str, Any]:
+def compute_indicators(df: pd.DataFrame) -> dict[str, float | bool | None]:
     """从 K 线 DataFrame 计算所有技术指标，返回 dict。
 
     缺失指标以 None 表示。
@@ -210,7 +361,7 @@ def compute_indicators(df: pd.DataFrame) -> Dict[str, Any]:
 
     df = df.copy()
     df["close"] = df["close"].astype(float)
-    close = df["close"]
+    close: pd.Series = df["close"]
 
     ma5 = calc_ma(close, 5)
     ma10 = calc_ma(close, 10)
@@ -227,8 +378,22 @@ def compute_indicators(df: pd.DataFrame) -> Dict[str, Any]:
     atr_pct = calc_atr_pct(df, 14)
     support, resistance = calc_support_resistance(df, 20)
 
-    turnover = float(df["turnover_rate"].iloc[-1]) if "turnover_rate" in df.columns else None
-    last_close = float(close.iloc[-1])
+    # —— 新增：BOLL 短期 20,2 / 中期 60,3 ——
+    boll20_mid, boll20_upper, boll20_lower, boll20_bw, boll20_pct = calc_boll(close, 20, 2.0)
+    boll60_mid, boll60_upper, boll60_lower, boll60_bw, boll60_pct = calc_boll(close, 60, 3.0)
+    # 短期 vs 中期 敞口比 = 短期带宽 / 中期带宽
+    boll_opening_ratio: float | None = None
+    if boll20_bw is not None and boll60_bw is not None and boll60_bw != 0:
+        boll_opening_ratio = boll20_bw / boll60_bw
+
+    cci14 = calc_cci(df, 14)
+    bbi = calc_bbi(close)
+
+    turnover: float | None = None
+    if "turnover_rate" in df.columns:
+        tr_col: pd.Series = df["turnover_rate"]
+        turnover = _to_float(tr_col.iloc[-1])
+    last_close: float = _to_float(close.iloc[-1])
 
     return {
         "ma5": ma5,
@@ -251,33 +416,80 @@ def compute_indicators(df: pd.DataFrame) -> Dict[str, Any]:
         "resistance": resistance,
         "turnover_pct": turnover,
         "last_close": last_close,
+        # —— 新增：BOLL / CCI / BBI ——
+        "boll20_mid": boll20_mid,
+        "boll20_upper": boll20_upper,
+        "boll20_lower": boll20_lower,
+        "boll20_bandwidth": boll20_bw,
+        "boll20_pct_b": boll20_pct,
+        "boll60_mid": boll60_mid,
+        "boll60_upper": boll60_upper,
+        "boll60_lower": boll60_lower,
+        "boll60_bandwidth": boll60_bw,
+        "boll60_pct_b": boll60_pct,
+        "boll_opening_ratio_short_vs_mid": boll_opening_ratio,
+        "cci14": cci14,
+        "bbi": bbi,
         # 形态特征
-        "ma_bull_alignment": (
-            ma5 is not None and ma10 is not None and ma20 is not None
-            and ma5 > ma10 > ma20
+        "ma_bull_alignment": (ma5 is not None and ma10 is not None and ma20 is not None and ma5 > ma10 > ma20),
+        "ma_bear_alignment": (ma5 is not None and ma10 is not None and ma20 is not None and ma5 < ma10 < ma20),
+        "close_above_ma20": (ma20 is not None and last_close > ma20),
+        "close_below_ma20": (ma20 is not None and last_close < ma20),
+        # —— 新增：BOLL 突破 / BBI 多空 ——
+        "boll20_breakout_up": (
+            boll20_upper is not None and last_close > boll20_upper
         ),
-        "ma_bear_alignment": (
-            ma5 is not None and ma10 is not None and ma20 is not None
-            and ma5 < ma10 < ma20
+        "boll20_breakout_down": (
+            boll20_lower is not None and last_close < boll20_lower
         ),
-        "close_above_ma20": (
-            ma20 is not None and last_close > ma20
-        ),
-        "close_below_ma20": (
-            ma20 is not None and last_close < ma20
-        ),
+        "close_above_bbi": (bbi is not None and last_close > bbi),
+        "close_below_bbi": (bbi is not None and last_close < bbi),
     }
 
 
-def _empty_indicators() -> Dict[str, Any]:
+def _empty_indicators() -> dict[str, float | bool | None]:
     return {
-        "ma5": None, "ma10": None, "ma20": None, "ma60": None,
-        "macd_dif": None, "macd_dea": None, "macd_bar": None,
-        "macd_golden_cross_in_3d": False, "macd_death_cross_in_3d": False,
-        "rsi6": None, "rsi12": None, "rsi24": None,
-        "cmf20": None, "volume_ratio": None, "bias": None, "atr_pct": None,
-        "support": None, "resistance": None,
-        "turnover_pct": None, "last_close": None,
-        "ma_bull_alignment": False, "ma_bear_alignment": False,
-        "close_above_ma20": False, "close_below_ma20": False,
+        "ma5": None,
+        "ma10": None,
+        "ma20": None,
+        "ma60": None,
+        "macd_dif": None,
+        "macd_dea": None,
+        "macd_bar": None,
+        "macd_golden_cross_in_3d": False,
+        "macd_death_cross_in_3d": False,
+        "rsi6": None,
+        "rsi12": None,
+        "rsi24": None,
+        "cmf20": None,
+        "volume_ratio": None,
+        "bias": None,
+        "atr_pct": None,
+        "support": None,
+        "resistance": None,
+        "turnover_pct": None,
+        "last_close": None,
+        # —— BOLL / CCI / BBI ——
+        "boll20_mid": None,
+        "boll20_upper": None,
+        "boll20_lower": None,
+        "boll20_bandwidth": None,
+        "boll20_pct_b": None,
+        "boll60_mid": None,
+        "boll60_upper": None,
+        "boll60_lower": None,
+        "boll60_bandwidth": None,
+        "boll60_pct_b": None,
+        "boll_opening_ratio_short_vs_mid": None,
+        "cci14": None,
+        "bbi": None,
+        # 形态
+        "ma_bull_alignment": False,
+        "ma_bear_alignment": False,
+        "close_above_ma20": False,
+        "close_below_ma20": False,
+        "boll20_breakout_up": False,
+        "boll20_breakout_down": False,
+        "close_above_bbi": False,
+        "close_below_bbi": False,
     }

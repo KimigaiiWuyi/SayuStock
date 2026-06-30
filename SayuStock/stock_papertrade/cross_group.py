@@ -1,33 +1,38 @@
 """跨群查询辅助。
 
-`AI操盘查询 <group_id>` / `AI操盘排行` 命令用。
-所有方法都接受 group_id 显式参数，从 SQLModel 直接按 group_id 过滤。
+``AI操盘查询 <group_id>`` / ``AI操盘排行`` 命令用。
+所有方法都走 ``.where(group_id == group_id)`` 直接命中索引，
+避免 ``list_all`` 在大表上做 Python-side 全表过滤。
+
+模块级助手用 ``async_maker`` 直接管理 session（见 ``docs/.../05-database.md §5.4``），
+因为 ``@with_session`` 装饰器为首参为 cls 的 classmethod 设计，不能贴到普通函数。
 """
 
 from typing import Any, Dict, List, Optional
 
+from sqlmodel import col
+from sqlalchemy import select
+
+from gsuid_core.utils.database.base_models import async_maker
+
 from . import db
+from ..utils.database.papertrade_models import SayuPaperAccount
 
 
 async def query_account(group_id: str, bot_id: Optional[str] = None) -> Optional[dict]:
-    """查指定群的账户。bot_id 留空时取该群第一条（一般就 1 条）"""
+    """查指定群的账户。bot_id 留空时返回该群最新一条（按 created_at desc）。"""
     if bot_id:
         acc = await db.PaperAccountRepo.get(group_id, bot_id)
         return _acc_to_dict(acc) if acc else None
-    all_accs = await db.PaperAccountRepo.list_all()
-    matched = [a for a in all_accs if a.group_id == group_id]
-    if not matched:
-        return None
-    return _acc_to_dict(matched[0])
+    acc = await _select_first_account_by_group(group_id)
+    return _acc_to_dict(acc) if acc else None
 
 
 async def query_positions(group_id: str, bot_id: Optional[str] = None) -> List[dict]:
-    if bot_id:
-        positions = await db.PaperPositionRepo.list_by_account(group_id, bot_id)
-    else:
-        all_accs = await db.PaperAccountRepo.list_all()
-        bid = next((a.bot_id for a in all_accs if a.group_id == group_id), "")
-        positions = await db.PaperPositionRepo.list_by_account(group_id, bid)
+    bot_id = bot_id or await _resolve_bot_id_for_group(group_id)
+    if not bot_id:
+        return []
+    positions = await db.PaperPositionRepo.list_by_account(group_id, bot_id)
     return [
         {
             "stock_code": p.stock_code,
@@ -39,13 +44,10 @@ async def query_positions(group_id: str, bot_id: Optional[str] = None) -> List[d
     ]
 
 
-async def query_trades(
-    group_id: str, bot_id: Optional[str] = None, limit: int = 10
-) -> List[dict]:
+async def query_trades(group_id: str, bot_id: Optional[str] = None, limit: int = 10) -> List[dict]:
+    bot_id = bot_id or await _resolve_bot_id_for_group(group_id)
     if not bot_id:
-        all_accs = await db.PaperAccountRepo.list_all()
-        bid = next((a.bot_id for a in all_accs if a.group_id == group_id), "")
-        bot_id = bid
+        return []
     rows = await db.PaperTradeRepo.list_by_account(group_id, bot_id, limit=limit)
     return [
         {
@@ -64,10 +66,9 @@ async def query_trades(
 
 
 async def query_latest_snapshot(group_id: str, bot_id: Optional[str] = None) -> Optional[dict]:
+    bot_id = bot_id or await _resolve_bot_id_for_group(group_id)
     if not bot_id:
-        all_accs = await db.PaperAccountRepo.list_all()
-        bid = next((a.bot_id for a in all_accs if a.group_id == group_id), "")
-        bot_id = bid
+        return None
     snap = await db.PaperSnapshotRepo.latest(group_id, bot_id)
     if not snap:
         return None
@@ -98,7 +99,42 @@ async def query_leaderboard(limit: int = 20) -> List[dict]:
     ]
 
 
-def _acc_to_dict(acc) -> Dict[str, Any]:
+# ============================================================
+# 内部助手：走 async_maker 而非 @with_session —
+#   @with_session 装饰器为首参吃 cls 的 classmethod 设计，不能贴到普通函数。
+#   见 docs/skills/gscore-plugin-development/references/05-database.md §5.4。
+# ============================================================
+async def _select_first_account_by_group(group_id: str) -> Optional[SayuPaperAccount]:
+    """按 group_id 取该群最新一条账户（created_at desc, id asc）。命中 (group_id) 索引。"""
+    async with async_maker() as session:
+        stmt = (
+            select(SayuPaperAccount)
+            .where(col(col(SayuPaperAccount.group_id)) == group_id)
+            .order_by(col(col(SayuPaperAccount.created_at)).desc(), col(col(SayuPaperAccount.id)).asc())
+            .limit(1)
+        )
+        result = await session.execute(stmt)
+        return result.scalar_one_or_none()
+
+
+async def _resolve_bot_id_for_group(group_id: str) -> str:
+    """返回该群已开户的 bot_id；空群返回 ''。
+
+    用 SELECT 命中 ``(group_id, bot_id)`` 唯一索引，避免 ``list_all`` 全表扫。
+    """
+    async with async_maker() as session:
+        stmt = (
+            select(col(SayuPaperAccount.bot_id))
+            .where(col(col(SayuPaperAccount.group_id)) == group_id)
+            .order_by(col(col(SayuPaperAccount.created_at)).desc(), col(col(SayuPaperAccount.id)).asc())
+            .limit(1)
+        )
+        result = await session.execute(stmt)
+        row = result.first()
+        return row[0] if row else ""
+
+
+def _acc_to_dict(acc: Optional[SayuPaperAccount]) -> Dict[str, Any]:
     if not acc:
         return {}
     return {

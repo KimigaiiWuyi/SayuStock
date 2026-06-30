@@ -1,0 +1,250 @@
+{
+  "大盘行情": {
+    "desc": "查看大盘整体与板块分布情况",
+    "data": [
+      {
+        "name": "大盘概览",
+        "desc": "主要指数行情、涨跌分布、成交额",
+        "eg": "大盘概览",
+        "need_ck": false,
+        "need_sk": false,
+        "need_admin": false
+      },
+      {
+        "name": "全天候板块",
+        "desc": "全球股市/大宗商品/外汇/加密货币综合行情",
+        "eg": "全天候",
+        "need_ck": false,
+        "need_sk": false,
+        "need_admin": false
+      },
+      {
+        "name": "大盘云图",
+        "desc": "行业板块涨跌分布热力图（可筛选板块）",
+        "eg": "大盘云图",
+        "need_ck": false,
+        "need_sk": false,
+        "need_admin": false
+      },
+      {
+        "name": "行业云图",
+        "desc": "指定行业板块涨跌分布（需后跟行业名）",
+        "eg": "板块云图 半导体",
+        "need_ck": false,
+        "need_sk": false,
+        "need_admin": false
+      },
+      {
+        "name": "概念云图",
+        "desc": "指定概念板块涨跌分布（需后跟概念名）",
+        "eg": "概念云图 人工智能",
+        "need_ck": false,
+        "need_sk": false,
+        "need_admin": false
+      }
+    ]
+  },
+  "个股查询": {
+    "desc": "支持分时/日K/周K/月K/季K/年K，多股可空格分隔",
+    "data": [
+      {
+        "name": "个股",
+        "desc": "查询个股分时图（默认）",
+        "eg": "个股 证券ETF",
+        "need_ck": false,
+        "need_sk": false,
+        "need_admin": false
+      },
+      {
+        "name": "日K",
+        "desc": "查询个股日K线",
+        "eg": "个股 日k 白酒ETF",
+        "need_ck": false,
+        "need_sk": false,
+        "need_admin": false
+      },
+      {
+        "name": "周K",
+        "desc": "查询个股周K线",
+        "eg": "个股 周k 医药ETF",
+        "need_ck": false,
+        "need_sk": false,
+        "need_admin": false
+      },
+      {
+        "name": "月K",
+        "desc": "查询个股月K线",
+        "eg": "个股 月k 沪深300",
+        "need_ck": false,
+        "need_sk": false,
+        "need_admin": false
+      },
+      {
+        "name": "我的个股",
+        "desc": "查看自选股当日分时图（最多5只）",
+        "eg": "我的个股",
+        "need_ck": false,
+        "need_sk": false,
+        "need_admin": false
+      }
+    ]
+  },
+  "对比工具": {
+    "desc": "多只股票横向对比，可指定时间范围",
+    "data": [
+      {
+        "name": "对比个股",
+        "desc": "多股涨跌幅对比（板块名自动展开为成分股）",
+        "eg": "对比个股 白酒ETF 医药ETF",
+        "need_ck": false,
+        "need_sk": false,
+        "need_admin": false
+      },
+      {
+        "name": "对比时间",
+        "desc": "指定时间范围的对比（年初至今/最近一年/具体日期）",
+        "eg": "对比个股 年初至今 白酒ETF 医药ETF",
+        "need_ck": false,
+        "need_sk": false,
+        "need_admin": false
+      },
+      {
+        "name": "市盈率对比",
+        "desc": "多股 PE 历史走势对比（默认近三年）",
+        "eg": "市盈率对比 600000 000001",
+        "need_ck": false,
+        "need_sk": false,
+        "need_admin": false
+      },
+      {
+        "name": "市净率对比",
+        "desc": "多股 PB 历史走势对比（默认近三年）",
+        "eg": "市净率对比 600000 000001",
+        "need_ck": false,
+        "need_sk": false,
+        "need_admin": false
+      },
+      {
+        "name": "股息率对比",
+        "desc": "多股滚动12月股息率历史对比",
+        "eg": "股息率对比 600000 000001",
+        "need_ck": false,
+        "need_sk": false,
+        "need_admin": false
+      }
+    ]
+  },
+  "基金持仓": {
+    "desc": "查询基金重仓股与分布",
+    "data": [
+      {
+        "name": "基金持仓",
+        "desc": "查询基金持仓股票分布",
+        "eg": "基金持仓 000001",
+        "need_ck": false,
+        "need_sk": false,
+        "need_admin": false
+      },
+      {
+        "name": "持仓分布",
+        "desc": "同上，查询基金持仓股票分布",
+        "eg": "持仓分布 沪深300ETF",
+        "need_ck": false,
+        "need_sk": false,
+        "need_admin": false
+      }
+    ]
+  },
+  "自选管理": {
+    "desc": "维护个人的自选/持仓股票池",
+    "data": [
+      {
+        "name": "添加自选",
+        "desc": "添加股票到自选（支持股票/名称/板块/VIX，多个用空格分隔）",
+        "eg": "添加自选 600000 贵州茅台",
+        "need_ck": false,
+        "need_sk": false,
+        "need_admin": false
+      },
+      {
+        "name": "删除自选",
+        "desc": "从自选中删除股票（多个用空格分隔）",
+        "eg": "删除自选 600000 贵州茅台",
+        "need_ck": false,
+        "need_sk": false,
+        "need_admin": false
+      },
+      {
+        "name": "清空自选",
+        "desc": "一键清空当前账户的全部自选（需确认）",
+        "eg": "清空自选",
+        "need_ck": false,
+        "need_sk": false,
+        "need_admin": false
+      },
+      {
+        "name": "我的自选",
+        "desc": "查看自选股当日行情概览（价格/涨跌幅/换手/成交额）",
+        "eg": "我的自选",
+        "need_ck": false,
+        "need_sk": false,
+        "need_admin": false
+      }
+    ]
+  },
+  "AI智能": {
+    "desc": "使用 Kronos 模型对个股未来走势进行预测",
+    "data": [
+      {
+        "name": "模型预测",
+        "desc": "对单只股票/ETF 跑 Kronos AI 走势预测（约3分钟）",
+        "eg": "模型预测 600000",
+        "need_ck": false,
+        "need_sk": false,
+        "need_admin": false
+      },
+      {
+        "name": "AI预测",
+        "desc": "同上，模型预测的别名",
+        "eg": "AI预测 贵州茅台",
+        "need_ck": false,
+        "need_sk": false,
+        "need_admin": false
+      }
+    ]
+  },
+  "新闻订阅": {
+    "desc": "雪球 7x24 财经新闻推送（仅群聊）",
+    "data": [
+      {
+        "name": "订阅雪球新闻",
+        "desc": "开启雪球 7x24 小时财经新闻自动推送",
+        "eg": "订阅雪球新闻",
+        "need_ck": false,
+        "need_sk": false,
+        "need_admin": false
+      },
+      {
+        "name": "取消订阅雪球新闻",
+        "desc": "关闭当前会话的雪球新闻推送",
+        "eg": "取消订阅雪球新闻",
+        "need_ck": false,
+        "need_sk": false,
+        "need_admin": false
+      }
+    ]
+  },
+  "其他": {
+    "desc": "帮助与状态",
+    "data": [
+      {
+        "name": "帮助",
+        "desc": "查看本帮助图片",
+        "eg": "帮助",
+        "need_ck": false,
+        "need_sk": false,
+        "need_admin": false
+      }
+    ]
+  }
+}

@@ -12,21 +12,20 @@ P3: 雪球新闻提及的股票
 """
 
 import re
-from typing import List, Optional, Set
+from typing import Set, List
 
 from gsuid_core.logger import logger
 
 from . import db
 
-
 # 单路上限
 SOURCE_CAPS = {
-    "position":   20,
-    "watchlist":  20,
+    "position": 20,
+    "watchlist": 20,
     "agent_pool": 20,
-    "sector":     15,   # 3 板块 × 5 只
-    "hotmap":     10,
-    "news":       10,
+    "sector": 15,  # 3 板块 × 5 只
+    "hotmap": 10,
+    "news": 10,
 }
 TOTAL_CAP = 50
 
@@ -114,14 +113,19 @@ _TICKER_RE = re.compile(r"\b(\d{6})\b")
 
 # 中文名 → 6 位代码的简易映射（仅作为兜底；实际通过 get_code_id 二次验证）
 _KNOWN_NAMES = {
-    "茅台": "600519", "贵州茅台": "600519",
+    "茅台": "600519",
+    "贵州茅台": "600519",
     "五粮液": "000858",
-    "宁德": "300750", "宁德时代": "300750",
-    "平安": "601318", "中国平安": "601318",
-    "招行": "600036", "招商银行": "600036",
+    "宁德": "300750",
+    "宁德时代": "300750",
+    "平安": "601318",
+    "中国平安": "601318",
+    "招行": "600036",
+    "招商银行": "600036",
     "中际旭创": "300308",
     "寒武纪": "688256",
-    "海光": "688041", "海光信息": "688041",
+    "海光": "688041",
+    "海光信息": "688041",
 }
 
 
@@ -254,7 +258,8 @@ async def post_decision_pool_update(
             if action == "buy":
                 # 买入：加入池，7 天后过期
                 await db.PaperAgentPoolRepo.upsert(
-                    group_id, bot_id,
+                    group_id,
+                    bot_id,
                     stock_code=code,
                     stock_name=d.get("name", ""),
                     secid=d.get("secid", ""),
@@ -269,7 +274,8 @@ async def post_decision_pool_update(
             elif action == "hold" and d.get("score", 0) > 0.1:
                 # hold 但信号不错，加入候选，3 天后过期
                 await db.PaperAgentPoolRepo.upsert(
-                    group_id, bot_id,
+                    group_id,
+                    bot_id,
                     stock_code=code,
                     stock_name=d.get("name", ""),
                     secid=d.get("secid", ""),

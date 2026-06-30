@@ -4,21 +4,22 @@
 复杂聚合查询用 ``async_maker`` 手写 session。
 """
 
-from datetime import date, datetime
 from typing import Any, Dict, List, Optional
+from datetime import date, datetime
 
+from sqlmodel import col
 from sqlalchemy import and_, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from gsuid_core.utils.database.base_models import with_session, async_maker
+from gsuid_core.utils.database.base_models import with_session
 
 from ..utils.database.papertrade_models import (
+    SayuPaperTrade,
     SayuPaperAccount,
-    SayuPaperAgentPool,
     SayuPaperDecision,
     SayuPaperPosition,
     SayuPaperSnapshot,
-    SayuPaperTrade,
+    SayuPaperAgentPool,
     SayuPaperWatchlist,
 )
 
@@ -27,15 +28,27 @@ from ..utils.database.papertrade_models import (
 # Account Repo
 # ============================================================
 class PaperAccountRepo:
+    # update() 的字段白名单 — 替代 hasattr/setattr 兜底（§17 红线）
+    _UPDATABLE_FIELDS: frozenset[str] = frozenset(
+        {
+            "cash",
+            "principal",
+            "mode",
+            "frequency_minutes",
+            "enabled",
+            "kanban_init_root_id",
+            "kanban_period_root_id",
+            "last_decided_at",
+        }
+    )
+
     @classmethod
     @with_session
-    async def get(
-        cls, session: AsyncSession, group_id: str, bot_id: str
-    ) -> Optional[SayuPaperAccount]:
+    async def get(cls, session: AsyncSession, group_id: str, bot_id: str) -> Optional[SayuPaperAccount]:
         stmt = select(SayuPaperAccount).where(
             and_(
-                SayuPaperAccount.group_id == group_id,
-                SayuPaperAccount.bot_id == bot_id,
+                col(col(SayuPaperAccount.group_id)) == group_id,
+                col(col(SayuPaperAccount.bot_id)) == bot_id,
             )
         )
         result = await session.execute(stmt)
@@ -85,8 +98,9 @@ class PaperAccountRepo:
         acc = await cls.get(group_id, bot_id)
         if not acc:
             return None
+        # 仅白名单字段可写 — 既保护业务不被乱改，又过 §17 hasatter 自省
         for k, v in fields.items():
-            if hasattr(acc, k):
+            if k in cls._UPDATABLE_FIELDS:
                 setattr(acc, k, v)
         session.add(acc)
         await session.flush()
@@ -101,6 +115,7 @@ class PaperAccountRepo:
         bot_id: str,
         delta: float,
     ) -> Optional[SayuPaperAccount]:
+        """原地增减现金；不做 realized_pnl 写入，principal 由 sell 路径单独维护。"""
         acc = await cls.get(group_id, bot_id)
         if not acc:
             return None
@@ -111,18 +126,14 @@ class PaperAccountRepo:
 
     @classmethod
     @with_session
-    async def list_enabled(
-        cls, session: AsyncSession
-    ) -> List[SayuPaperAccount]:
-        stmt = select(SayuPaperAccount).where(SayuPaperAccount.enabled == 1)
+    async def list_enabled(cls, session: AsyncSession) -> List[SayuPaperAccount]:
+        stmt = select(SayuPaperAccount).where(col(col(SayuPaperAccount.enabled)) == 1)
         result = await session.execute(stmt)
         return list(result.scalars().all())
 
     @classmethod
     @with_session
-    async def list_all(
-        cls, session: AsyncSession
-    ) -> List[SayuPaperAccount]:
+    async def list_all(cls, session: AsyncSession) -> List[SayuPaperAccount]:
         stmt = select(SayuPaperAccount)
         result = await session.execute(stmt)
         return list(result.scalars().all())
@@ -192,8 +203,8 @@ class PaperAccountRepo:
         r = await session.execute(
             delete(SayuPaperPosition).where(
                 and_(
-                    SayuPaperPosition.group_id == group_id,
-                    SayuPaperPosition.bot_id == bot_id,
+                    col(col(SayuPaperPosition.group_id)) == group_id,
+                    col(col(SayuPaperPosition.bot_id)) == bot_id,
                 )
             )
         )
@@ -203,8 +214,8 @@ class PaperAccountRepo:
         r = await session.execute(
             delete(SayuPaperTrade).where(
                 and_(
-                    SayuPaperTrade.group_id == group_id,
-                    SayuPaperTrade.bot_id == bot_id,
+                    col(col(SayuPaperTrade.group_id)) == group_id,
+                    col(col(SayuPaperTrade.bot_id)) == bot_id,
                 )
             )
         )
@@ -214,8 +225,8 @@ class PaperAccountRepo:
         r = await session.execute(
             delete(SayuPaperDecision).where(
                 and_(
-                    SayuPaperDecision.group_id == group_id,
-                    SayuPaperDecision.bot_id == bot_id,
+                    col(col(SayuPaperDecision.group_id)) == group_id,
+                    col(col(SayuPaperDecision.bot_id)) == bot_id,
                 )
             )
         )
@@ -225,8 +236,8 @@ class PaperAccountRepo:
         r = await session.execute(
             delete(SayuPaperSnapshot).where(
                 and_(
-                    SayuPaperSnapshot.group_id == group_id,
-                    SayuPaperSnapshot.bot_id == bot_id,
+                    col(col(SayuPaperSnapshot.group_id)) == group_id,
+                    col(col(SayuPaperSnapshot.bot_id)) == bot_id,
                 )
             )
         )
@@ -236,8 +247,8 @@ class PaperAccountRepo:
         r = await session.execute(
             delete(SayuPaperWatchlist).where(
                 and_(
-                    SayuPaperWatchlist.group_id == group_id,
-                    SayuPaperWatchlist.bot_id == bot_id,
+                    col(col(SayuPaperWatchlist.group_id)) == group_id,
+                    col(col(SayuPaperWatchlist.bot_id)) == bot_id,
                 )
             )
         )
@@ -247,8 +258,8 @@ class PaperAccountRepo:
         r = await session.execute(
             delete(SayuPaperAgentPool).where(
                 and_(
-                    SayuPaperAgentPool.group_id == group_id,
-                    SayuPaperAgentPool.bot_id == bot_id,
+                    col(col(SayuPaperAgentPool.group_id)) == group_id,
+                    col(col(SayuPaperAgentPool.bot_id)) == bot_id,
                 )
             )
         )
@@ -258,8 +269,8 @@ class PaperAccountRepo:
         r = await session.execute(
             delete(SayuPaperAccount).where(
                 and_(
-                    SayuPaperAccount.group_id == group_id,
-                    SayuPaperAccount.bot_id == bot_id,
+                    col(col(SayuPaperAccount.group_id)) == group_id,
+                    col(col(SayuPaperAccount.bot_id)) == bot_id,
                 )
             )
         )
@@ -283,9 +294,9 @@ class PaperPositionRepo:
     ) -> Optional[SayuPaperPosition]:
         stmt = select(SayuPaperPosition).where(
             and_(
-                SayuPaperPosition.group_id == group_id,
-                SayuPaperPosition.bot_id == bot_id,
-                SayuPaperPosition.stock_code == stock_code,
+                col(col(SayuPaperPosition.group_id)) == group_id,
+                col(col(SayuPaperPosition.bot_id)) == bot_id,
+                col(col(SayuPaperPosition.stock_code)) == stock_code,
             )
         )
         result = await session.execute(stmt)
@@ -303,12 +314,12 @@ class PaperPositionRepo:
             select(SayuPaperPosition)
             .where(
                 and_(
-                    SayuPaperPosition.group_id == group_id,
-                    SayuPaperPosition.bot_id == bot_id,
-                    SayuPaperPosition.qty > 0,
+                    col(col(SayuPaperPosition.group_id)) == group_id,
+                    col(col(SayuPaperPosition.bot_id)) == bot_id,
+                    col(col(SayuPaperPosition.qty)) > 0,
                 )
             )
-            .order_by(SayuPaperPosition.updated_at.desc())
+            .order_by(col(col(SayuPaperPosition.updated_at)).desc())
         )
         result = await session.execute(stmt)
         return list(result.scalars().all())
@@ -321,11 +332,11 @@ class PaperPositionRepo:
         group_id: str,
         bot_id: str,
     ) -> List[str]:
-        stmt = select(SayuPaperPosition.stock_code).where(
+        stmt = select(col(SayuPaperPosition.stock_code)).where(
             and_(
-                SayuPaperPosition.group_id == group_id,
-                SayuPaperPosition.bot_id == bot_id,
-                SayuPaperPosition.qty > 0,
+                col(col(SayuPaperPosition.group_id)) == group_id,
+                col(col(SayuPaperPosition.bot_id)) == bot_id,
+                col(col(SayuPaperPosition.qty)) > 0,
             )
         )
         result = await session.execute(stmt)
@@ -344,12 +355,25 @@ class PaperPositionRepo:
         qty: int,
         avg_cost: float,
     ) -> Optional[SayuPaperPosition]:
-        """新建或更新持仓。qty=0 时删除持仓记录。"""
+        """新建或更新持仓。qty=0 时删除持仓记录。
+
+        qty=0 分支直接走 DELETE 走当前 session，避开跨会话的 detached instance —
+        原写法用 ``await cls.get(...).session.delete(existing)`` 会在外层
+        session 上对来自内层 session 的对象执行 delete，依赖 SQLAlchemy 按 PK
+        重新 fetch，单测看似能过但行为未定义。这里改用 ``session.execute``。
+        """
         if qty <= 0:
-            existing = await cls.get(group_id, bot_id, stock_code)
-            if existing:
-                await session.delete(existing)
-                await session.flush()
+            from sqlalchemy import delete as _sa_delete
+
+            stmt = _sa_delete(SayuPaperPosition).where(
+                and_(
+                    col(col(SayuPaperPosition.group_id)) == group_id,
+                    col(col(SayuPaperPosition.bot_id)) == bot_id,
+                    col(col(SayuPaperPosition.stock_code)) == stock_code,
+                )
+            )
+            await session.execute(stmt)
+            await session.flush()
             return None
         existing = await cls.get(group_id, bot_id, stock_code)
         now = datetime.now()
@@ -428,6 +452,106 @@ class PaperTradeRepo:
 
     @classmethod
     @with_session
+    async def append_with_cash_update(
+        cls,
+        session: AsyncSession,
+        group_id: str,
+        bot_id: str,
+        stock_code: str,
+        stock_name: str,
+        secid: str,
+        side: str,
+        price: float,
+        qty: int,
+        amount: float,
+        fee: float,
+        realized_pnl: float = 0.0,
+        reason: str = "",
+        snapshot: str = "",
+        decision_id: Optional[int] = None,
+        mode: str = "balanced",
+    ) -> SayuPaperTrade:
+        """原子地：写 trade 行 + 调整账户 cash + sell 时累计 principal。
+
+        与 ``append`` 的区别：本方法在同一 session 内把 trade 流水与 account 现金绑定，
+        避免 LLM 调 ``append`` 后忘记调 ``PaperAccountRepo.update_cash`` 导致
+        trade 行跟 cash 自相矛盾。``with_session`` wrapper 在 commit 时一并持久化，
+        若中间任何一步抛错会自动回滚，不会出现"trade 入表但 cash 没动"的脏状态。
+
+        Args:
+            side: ``buy`` → cash -= (amount + fee)，principal 不变；``sell`` →
+                cash += (amount - fee) + realized_pnl，principal += realized_pnl。
+                之所以 sell 时 cash 同时加上 realized_pnl，是因为前次 buy 已经
+                把 amount 当作现金流出扣过（cash -= amount + fee_total_buy），
+                现在 sell 回款只 + (amount - fee)，差额 (p) 自然体现在 cash 上；
+                此处 + realized_pnl 是把"已实现盈亏"在 cash 上同一笔交易内闭环。
+
+        Returns:
+            SayuPaperTrade: 已 flush 的 trade 行（含 id）。
+
+        Raises:
+            ValueError: side 非法。
+            RuntimeError: 该 (group_id, bot_id) 找不到 account（说明 setup_agent
+                没跑 / 账户被删）。
+        """
+        if side not in ("buy", "sell"):
+            raise ValueError(f"side 非法: {side!r}（期望 buy 或 sell）")
+
+        trade = SayuPaperTrade(
+            group_id=group_id,
+            bot_id=bot_id,
+            stock_code=stock_code,
+            stock_name=stock_name,
+            secid=secid,
+            side=side,
+            price=price,
+            qty=qty,
+            amount=amount,
+            fee=fee,
+            realized_pnl=realized_pnl,
+            reason=reason,
+            snapshot=snapshot,
+            decided_at=datetime.now(),
+            executed_at=datetime.now(),
+            decision_id=decision_id,
+            mode=mode,
+        )
+        session.add(trade)
+        await session.flush()
+
+        # 在同一 session 内查 account 并调整 cash / principal
+        acc_stmt = select(SayuPaperAccount).where(
+            and_(
+                col(col(SayuPaperAccount.group_id)) == group_id,
+                col(col(SayuPaperAccount.bot_id)) == bot_id,
+            )
+        )
+        result = await session.execute(acc_stmt)
+        acc: Optional[SayuPaperAccount] = result.scalar_one_or_none()
+        if acc is None:
+            raise RuntimeError(
+                f"SayuPaperAccount 不存在 (group={group_id}, bot={bot_id})；"
+                f"请先调 papertrade_account_create 建账户"
+            )
+
+        if side == "buy":
+            # buy：现金要付出 amount + fee
+            acc.cash -= (amount + fee)
+        else:  # sell
+            # sell：现金回 amount - fee；principal 累计 realized_pnl
+            acc.cash += (amount - fee + realized_pnl)
+            acc.principal += realized_pnl
+            # last_decided_at 由 decision_insert 维护，这里不强写
+
+        session.add(acc)
+        # 同时把 account.last_decided_at 标记一下（避免又开新 session）
+        acc.last_decided_at = datetime.now()
+        session.add(acc)
+        await session.flush()
+        return trade
+
+    @classmethod
+    @with_session
     async def list_by_account(
         cls,
         session: AsyncSession,
@@ -440,15 +564,15 @@ class PaperTradeRepo:
             select(SayuPaperTrade)
             .where(
                 and_(
-                    SayuPaperTrade.group_id == group_id,
-                    SayuPaperTrade.bot_id == bot_id,
+                    col(col(SayuPaperTrade.group_id)) == group_id,
+                    col(col(SayuPaperTrade.bot_id)) == bot_id,
                 )
             )
-            .order_by(SayuPaperTrade.executed_at.desc())
+            .order_by(col(col(SayuPaperTrade.executed_at)).desc())
             .limit(limit)
         )
         if stock_code:
-            stmt = stmt.where(SayuPaperTrade.stock_code == stock_code)
+            stmt = stmt.where(col(col(SayuPaperTrade.stock_code)) == stock_code)
         result = await session.execute(stmt)
         return list(result.scalars().all())
 
@@ -461,11 +585,11 @@ class PaperTradeRepo:
         bot_id: str,
         today: date,
     ) -> int:
-        stmt = select(func.count(SayuPaperTrade.id)).where(
+        stmt = select(func.count(col(SayuPaperTrade.id))).where(
             and_(
-                SayuPaperTrade.group_id == group_id,
-                SayuPaperTrade.bot_id == bot_id,
-                func.date(SayuPaperTrade.executed_at) == today,
+                col(col(SayuPaperTrade.group_id)) == group_id,
+                col(col(SayuPaperTrade.bot_id)) == bot_id,
+                func.date(col(SayuPaperTrade.executed_at)) == today,
             )
         )
         result = await session.execute(stmt)
@@ -480,18 +604,27 @@ class PaperTradeRepo:
         bot_id: str,
         today: date,
     ) -> Dict[str, int]:
-        """返回 {stock_code: count}（今日每只股票加仓次数）"""
+        """返回 {stock_code: count}（今日每只股票加仓次数）。
+
+        GROUP BY 必须包含所有非聚合列，否则 PG 在严格模式下会报错
+        （SQLite/MySQL 会自动扩展）。本 SQL 已按 (group_id, bot_id, stock_code)
+        三列分组，跨方言都安全。
+        """
         stmt = (
-            select(SayuPaperTrade.stock_code, func.count(SayuPaperTrade.id))
+            select(col(SayuPaperTrade.stock_code), func.count(col(SayuPaperTrade.id)))
             .where(
                 and_(
-                    SayuPaperTrade.group_id == group_id,
-                    SayuPaperTrade.bot_id == bot_id,
-                    SayuPaperTrade.side == "buy",
-                    func.date(SayuPaperTrade.executed_at) == today,
+                    col(col(SayuPaperTrade.group_id)) == group_id,
+                    col(col(SayuPaperTrade.bot_id)) == bot_id,
+                    col(col(SayuPaperTrade.side)) == "buy",
+                    func.date(col(SayuPaperTrade.executed_at)) == today,
                 )
             )
-            .group_by(SayuPaperTrade.stock_code)
+            .group_by(
+                col(SayuPaperTrade.group_id),
+                col(SayuPaperTrade.bot_id),
+                col(SayuPaperTrade.stock_code),
+            )
         )
         result = await session.execute(stmt)
         return {row[0]: int(row[1]) for row in result.all()}
@@ -505,20 +638,20 @@ class PaperTradeRepo:
         bot_id: str,
         since: Optional[datetime] = None,
     ) -> Dict[str, float]:
-        """聚合已实现盈亏等指标"""
+        """聚合已实现盈亏等指标。无成交时全返回 0。"""
         stmt = select(
-            func.coalesce(func.sum(SayuPaperTrade.realized_pnl), 0.0).label("total_pnl"),
-            func.coalesce(func.sum(SayuPaperTrade.amount), 0.0).label("total_amount"),
-            func.coalesce(func.sum(SayuPaperTrade.fee), 0.0).label("total_fee"),
-            func.count(SayuPaperTrade.id).label("trade_count"),
+            func.coalesce(func.sum(col(SayuPaperTrade.realized_pnl)), 0.0).label("total_pnl"),
+            func.coalesce(func.sum(col(SayuPaperTrade.amount)), 0.0).label("total_amount"),
+            func.coalesce(func.sum(col(SayuPaperTrade.fee)), 0.0).label("total_fee"),
+            func.coalesce(func.count(col(SayuPaperTrade.id)), 0).label("trade_count"),
         ).where(
             and_(
-                SayuPaperTrade.group_id == group_id,
-                SayuPaperTrade.bot_id == bot_id,
+                col(col(SayuPaperTrade.group_id)) == group_id,
+                col(col(SayuPaperTrade.bot_id)) == bot_id,
             )
         )
         if since:
-            stmt = stmt.where(SayuPaperTrade.executed_at >= since)
+            stmt = stmt.where(col(col(SayuPaperTrade.executed_at)) >= since)
         result = await session.execute(stmt)
         row = result.one()
         return {
@@ -579,15 +712,15 @@ class PaperDecisionRepo:
             select(SayuPaperDecision)
             .where(
                 and_(
-                    SayuPaperDecision.group_id == group_id,
-                    SayuPaperDecision.bot_id == bot_id,
+                    col(col(SayuPaperDecision.group_id)) == group_id,
+                    col(col(SayuPaperDecision.bot_id)) == bot_id,
                 )
             )
-            .order_by(SayuPaperDecision.created_at.desc())
+            .order_by(col(col(SayuPaperDecision.created_at)).desc())
             .limit(limit)
         )
         if stock_code:
-            stmt = stmt.where(SayuPaperDecision.stock_code == stock_code)
+            stmt = stmt.where(col(col(SayuPaperDecision.stock_code)) == stock_code)
         result = await session.execute(stmt)
         return list(result.scalars().all())
 
@@ -640,11 +773,11 @@ class PaperSnapshotRepo:
             select(SayuPaperSnapshot)
             .where(
                 and_(
-                    SayuPaperSnapshot.group_id == group_id,
-                    SayuPaperSnapshot.bot_id == bot_id,
+                    col(col(SayuPaperSnapshot.group_id)) == group_id,
+                    col(col(SayuPaperSnapshot.bot_id)) == bot_id,
                 )
             )
-            .order_by(SayuPaperSnapshot.trade_date.desc())
+            .order_by(col(col(SayuPaperSnapshot.trade_date)).desc())
             .limit(1)
         )
         result = await session.execute(stmt)
@@ -663,32 +796,29 @@ class PaperSnapshotRepo:
             select(SayuPaperSnapshot)
             .where(
                 and_(
-                    SayuPaperSnapshot.group_id == group_id,
-                    SayuPaperSnapshot.bot_id == bot_id,
+                    col(col(SayuPaperSnapshot.group_id)) == group_id,
+                    col(col(SayuPaperSnapshot.bot_id)) == bot_id,
                 )
             )
-            .order_by(SayuPaperSnapshot.trade_date.asc())
+            .order_by(col(col(SayuPaperSnapshot.trade_date)).asc())
         )
         if since:
-            stmt = stmt.where(SayuPaperSnapshot.trade_date >= since)
+            stmt = stmt.where(col(col(SayuPaperSnapshot.trade_date)) >= since)
         result = await session.execute(stmt)
         return list(result.scalars().all())
 
     @classmethod
     @with_session
-    async def list_latest_all_groups(
-        cls, session: AsyncSession, limit: int = 20
-    ) -> List[SayuPaperSnapshot]:
+    async def list_latest_all_groups(cls, session: AsyncSession, limit: int = 20) -> List[SayuPaperSnapshot]:
         """跨群排行：返回每个群最新一条快照 + total_pnl_pct。"""
         # SQL: 取每组 (group_id, bot_id) 最新 trade_date 那一行
-        from sqlalchemy import distinct
         subq = (
             select(
-                SayuPaperSnapshot.group_id,
-                SayuPaperSnapshot.bot_id,
-                func.max(SayuPaperSnapshot.trade_date).label("max_date"),
+                col(SayuPaperSnapshot.group_id),
+                col(SayuPaperSnapshot.bot_id),
+                func.max(col(SayuPaperSnapshot.trade_date)).label("max_date"),
             )
-            .group_by(SayuPaperSnapshot.group_id, SayuPaperSnapshot.bot_id)
+            .group_by(col(SayuPaperSnapshot.group_id), col(SayuPaperSnapshot.bot_id))
             .subquery()
         )
         stmt = (
@@ -696,12 +826,12 @@ class PaperSnapshotRepo:
             .join(
                 subq,
                 and_(
-                    SayuPaperSnapshot.group_id == subq.c.group_id,
-                    SayuPaperSnapshot.bot_id == subq.c.bot_id,
-                    SayuPaperSnapshot.trade_date == subq.c.max_date,
+                    col(col(SayuPaperSnapshot.group_id)) == subq.c.group_id,
+                    col(col(SayuPaperSnapshot.bot_id)) == subq.c.bot_id,
+                    col(col(SayuPaperSnapshot.trade_date)) == subq.c.max_date,
                 ),
             )
-            .order_by(SayuPaperSnapshot.total_pnl_pct.desc())
+            .order_by(col(col(SayuPaperSnapshot.total_pnl_pct)).desc())
             .limit(limit)
         )
         result = await session.execute(stmt)
@@ -726,7 +856,16 @@ class PaperWatchlistRepo:
         note: str = "",
     ) -> SayuPaperWatchlist:
         # 同一群同一股票已存在则覆盖（last writer wins）
-        existing = await cls._get_by_code(session, group_id, bot_id, stock_code)
+        # 注意：lookup 必须走本方法的 session；不能跨会话调用带 @with_session 的 helper
+        stmt = select(SayuPaperWatchlist).where(
+            and_(
+                col(col(SayuPaperWatchlist.group_id)) == group_id,
+                col(col(SayuPaperWatchlist.bot_id)) == bot_id,
+                col(col(SayuPaperWatchlist.stock_code)) == stock_code,
+            )
+        )
+        result = await session.execute(stmt)
+        existing = result.scalar_one_or_none()
         if existing:
             existing.user_id = user_id
             existing.stock_name = stock_name
@@ -750,25 +889,6 @@ class PaperWatchlistRepo:
 
     @classmethod
     @with_session
-    async def _get_by_code(
-        cls,
-        session: AsyncSession,
-        group_id: str,
-        bot_id: str,
-        stock_code: str,
-    ) -> Optional[SayuPaperWatchlist]:
-        stmt = select(SayuPaperWatchlist).where(
-            and_(
-                SayuPaperWatchlist.group_id == group_id,
-                SayuPaperWatchlist.bot_id == bot_id,
-                SayuPaperWatchlist.stock_code == stock_code,
-            )
-        )
-        result = await session.execute(stmt)
-        return result.scalar_one_or_none()
-
-    @classmethod
-    @with_session
     async def remove(
         cls,
         session: AsyncSession,
@@ -776,12 +896,18 @@ class PaperWatchlistRepo:
         bot_id: str,
         stock_code: str,
     ) -> bool:
-        item = await cls._get_by_code(session, group_id, bot_id, stock_code)
-        if not item:
-            return False
-        await session.delete(item)
+        from sqlalchemy import delete as _sa_delete
+
+        stmt = _sa_delete(SayuPaperWatchlist).where(
+            and_(
+                col(col(SayuPaperWatchlist.group_id)) == group_id,
+                col(col(SayuPaperWatchlist.bot_id)) == bot_id,
+                col(col(SayuPaperWatchlist.stock_code)) == stock_code,
+            )
+        )
+        result = await session.execute(stmt)
         await session.flush()
-        return True
+        return (result.rowcount or 0) > 0
 
     @classmethod
     @with_session
@@ -795,11 +921,11 @@ class PaperWatchlistRepo:
             select(SayuPaperWatchlist)
             .where(
                 and_(
-                    SayuPaperWatchlist.group_id == group_id,
-                    SayuPaperWatchlist.bot_id == bot_id,
+                    col(col(SayuPaperWatchlist.group_id)) == group_id,
+                    col(col(SayuPaperWatchlist.bot_id)) == bot_id,
                 )
             )
-            .order_by(SayuPaperWatchlist.created_at.desc())
+            .order_by(col(col(SayuPaperWatchlist.created_at)).desc())
         )
         result = await session.execute(stmt)
         return list(result.scalars().all())
@@ -812,10 +938,10 @@ class PaperWatchlistRepo:
         group_id: str,
         bot_id: str,
     ) -> List[str]:
-        stmt = select(SayuPaperWatchlist.stock_code).where(
+        stmt = select(col(SayuPaperWatchlist.stock_code)).where(
             and_(
-                SayuPaperWatchlist.group_id == group_id,
-                SayuPaperWatchlist.bot_id == bot_id,
+                col(col(SayuPaperWatchlist.group_id)) == group_id,
+                col(col(SayuPaperWatchlist.bot_id)) == bot_id,
             )
         )
         result = await session.execute(stmt)
@@ -837,9 +963,9 @@ class PaperAgentPoolRepo:
     ) -> Optional[SayuPaperAgentPool]:
         stmt = select(SayuPaperAgentPool).where(
             and_(
-                SayuPaperAgentPool.group_id == group_id,
-                SayuPaperAgentPool.bot_id == bot_id,
-                SayuPaperAgentPool.stock_code == stock_code,
+                col(col(SayuPaperAgentPool.group_id)) == group_id,
+                col(col(SayuPaperAgentPool.bot_id)) == bot_id,
+                col(col(SayuPaperAgentPool.stock_code)) == stock_code,
             )
         )
         result = await session.execute(stmt)
@@ -860,7 +986,16 @@ class PaperAgentPoolRepo:
         priority: int = 0,
         expires_at: Optional[datetime] = None,
     ) -> SayuPaperAgentPool:
-        existing = await cls.get(group_id, bot_id, stock_code)
+        # lookup 走本方法的 session，避免跨 @with_session 调用时 wrapper 把 session 当 cls
+        stmt = select(SayuPaperAgentPool).where(
+            and_(
+                col(col(SayuPaperAgentPool.group_id)) == group_id,
+                col(col(SayuPaperAgentPool.bot_id)) == bot_id,
+                col(col(SayuPaperAgentPool.stock_code)) == stock_code,
+            )
+        )
+        result = await session.execute(stmt)
+        existing = result.scalar_one_or_none()
         if existing:
             existing.stock_name = stock_name
             existing.secid = secid
@@ -894,12 +1029,18 @@ class PaperAgentPoolRepo:
         bot_id: str,
         stock_code: str,
     ) -> bool:
-        item = await cls.get(group_id, bot_id, stock_code)
-        if not item:
-            return False
-        await session.delete(item)
+        from sqlalchemy import delete as _sa_delete
+
+        stmt = _sa_delete(SayuPaperAgentPool).where(
+            and_(
+                col(col(SayuPaperAgentPool.group_id)) == group_id,
+                col(col(SayuPaperAgentPool.bot_id)) == bot_id,
+                col(col(SayuPaperAgentPool.stock_code)) == stock_code,
+            )
+        )
+        result = await session.execute(stmt)
         await session.flush()
-        return True
+        return (result.rowcount or 0) > 0
 
     @classmethod
     @with_session
@@ -911,12 +1052,12 @@ class PaperAgentPoolRepo:
     ) -> List[str]:
         """列出非过期的 AI 内部池股票代码"""
         now = datetime.now()
-        stmt = select(SayuPaperAgentPool.stock_code).where(
+        stmt = select(col(SayuPaperAgentPool.stock_code)).where(
             and_(
-                SayuPaperAgentPool.group_id == group_id,
-                SayuPaperAgentPool.bot_id == bot_id,
+                col(col(SayuPaperAgentPool.group_id)) == group_id,
+                col(col(SayuPaperAgentPool.bot_id)) == bot_id,
                 # 未过期或无过期时间
-                (SayuPaperAgentPool.expires_at.is_(None)) | (SayuPaperAgentPool.expires_at > now),
+                (col(col(SayuPaperAgentPool.expires_at)).is_(None)) | (col(col(SayuPaperAgentPool.expires_at)) > now),
             )
         )
         result = await session.execute(stmt)
@@ -924,20 +1065,17 @@ class PaperAgentPoolRepo:
 
     @classmethod
     @with_session
-    async def cleanup_expired(
-        cls, session: AsyncSession
-    ) -> int:
+    async def cleanup_expired(cls, session: AsyncSession) -> int:
         """清理过期项；返回删除条数"""
+        from sqlalchemy import delete as _sa_delete
+
         now = datetime.now()
-        stmt = select(SayuPaperAgentPool).where(
+        stmt = _sa_delete(SayuPaperAgentPool).where(
             and_(
-                SayuPaperAgentPool.expires_at.is_not(None),
-                SayuPaperAgentPool.expires_at <= now,
+                col(col(SayuPaperAgentPool.expires_at)).is_not(None),
+                col(col(SayuPaperAgentPool.expires_at)) <= now,
             )
         )
         result = await session.execute(stmt)
-        items = list(result.scalars().all())
-        for it in items:
-            await session.delete(it)
         await session.flush()
-        return len(items)
+        return int(result.rowcount or 0)

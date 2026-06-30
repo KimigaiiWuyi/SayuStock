@@ -101,7 +101,7 @@ async def _fetch_finance_report(code: str, report: FinanceReport) -> List[Dict[s
 async def get_financial_snapshot(code: str) -> Dict[str, Any]:
     """从 main_financial 抽取最近 1~4 期的关键指标，返回扁平 dict。
 
-    字段：
+    字段（标准行业）：
     - roe: 最新一期 ROE
     - revenue_yoy: 最新一期 营业总收入同比
     - profit_yoy: 最新一期 归属母公司净利润同比
@@ -111,6 +111,18 @@ async def get_financial_snapshot(code: str) -> Dict[str, Any]:
     - eps: 最新一期 基本每股收益
     - bps: 最新一期 每股净资产
     - report_date: 报告期 ISO 字符串
+
+    字段（银行/保险/券商专属，识别到行业后追加）：
+    - jroa: 加权平均净资产收益率（银行偏好口径，扣非）
+    - net_interest_margin: 净息差（仅银行；保险/券商为 None）
+    - npl_ratio: 不良贷款率（仅银行）
+    - provision_coverage: 拨备覆盖率（仅银行）
+    - core_capital_adequacy_ratio: 核心一级资本充足率（仅银行）
+
+    字段（行业识别元信息）：
+    - _industry_type: "standard" | "bank" | "insurance" | "broker" | "unknown"
+    - _raw_keys_present: 接口真实给到的字段名（让 LLM 知道为什么某些字段是 None）
+    - _gap: 本次未取到值的关键字段名（用于 LLM 决策时说明）
     """
     rows = await get_main_financial(code)
     if not rows:
@@ -126,8 +138,20 @@ async def get_financial_snapshot(code: str) -> Dict[str, Any]:
         except (TypeError, ValueError):
             return None
 
-    return {
-        "report_date": str(latest.get("REPORT_DATE") or "")[:10],
+    # 行业识别 —— 看 main_financial 表里有什么特征字段
+    # 银行：会有 JROA / NPL_RATIO / PROVISION_COVERAGE_RATIO / NEW_CAPITAL_ADEQUACY_RATIO
+    # 保险：会有 SOLVENCY_AR / PREMIUM_INCOME
+    # 券商：会有 MAIN_BUSINESS_INCOME
+    industry_type: str = "standard"
+    if latest.get("JROA") is not None or latest.get("NPL_RATIO") is not None:
+        industry_type = "bank"
+    elif latest.get("SOLVENCY_AR") is not None or latest.get("PREMIUM_INCOME") is not None:
+        industry_type = "insurance"
+    elif latest.get("MAIN_BUSINESS_INCOME") is not None and latest.get("NETPROFIT") is not None:
+        # 券商：通常有 NETPROFIT 但缺 XSMLL 毛利率
+        industry_type = "broker"
+
+    result: dict[str, Any] = {
         "roe": _f("ROE_WEIGHTED_A"),
         "revenue_yoy": _f("TOTAL_OPERATE_INCOME_YOY"),
         "profit_yoy": _f("YSTZ") or _f("PARENT_NETPROFIT_YOY"),
@@ -137,3 +161,48 @@ async def get_financial_snapshot(code: str) -> Dict[str, Any]:
         "eps": _f("BASIC_EPS"),
         "bps": _f("BPS"),
     }
+
+    # 银行/保险/券商专属字段（识别到才填）
+    if industry_type == "bank":
+        result["jroa"] = _f("JROA")  # 银行 ROE（扣非后）
+        result["net_interest_margin"] = _f("NET_INTEREST_MARGIN") or _f("JXCJ")
+        result["npl_ratio"] = _f("NPL_RATIO")  # 不良率
+        result["provision_coverage"] = _f("PROVISION_COVERAGE_RATIO")  # 拨备覆盖率
+        result["core_capital_adequacy_ratio"] = _f("NEW_CAPITAL_ADEQUACY_RATIO") or _f("CORE_CAPITAL_ADEQUACY_RATIO")
+        # 银行股 roe / revenue_yoy / gross_margin / net_margin 通常是 None，
+        # 用 jroa 替代 roe 更合规
+    elif industry_type == "insurance":
+        result["solvency_ar"] = _f("SOLVENCY_AR")  # 偿付能力充足率
+        result["premium_income"] = _f("PREMIUM_INCOME")  # 保费收入
+    elif industry_type == "broker":
+        result["main_business_income"] = _f("MAIN_BUSINESS_INCOME")  # 主营营收
+        result["roe"] = _f("ROE_WEIGHTED_A")  # 券商 ROE 通常有
+
+    result["report_date"] = str(latest.get("REPORT_DATE") or "")[:10]
+    result["_industry_type"] = industry_type
+
+    # 列出 main_financial 接口真实给到的字段（不管值是不是 None）——
+    # 银行股 revenue_yoy/gross_margin 为 None 是因为接口表里没这列，
+    # 不代表"数据缺失"。
+    all_target_keys = [
+        "ROE_WEIGHTED_A", "TOTAL_OPERATE_INCOME_YOY", "YSTZ", "PARENT_NETPROFIT_YOY",
+        "XSMLL", "SJSGMGJ", "XSLL", "ZCFZL", "BASIC_EPS", "BPS",
+        "JROA", "NET_INTEREST_MARGIN", "JXCJ", "NPL_RATIO",
+        "PROVISION_COVERAGE_RATIO", "NEW_CAPITAL_ADEQUACY_RATIO", "CORE_CAPITAL_ADEQUACY_RATIO",
+        "SOLVENCY_AR", "PREMIUM_INCOME", "MAIN_BUSINESS_INCOME", "NETPROFIT",
+    ]
+    result["_raw_keys_present"] = sorted(
+        k for k in all_target_keys
+        if latest.get(k) is not None and latest.get(k) != "" and latest.get(k) != "-"
+    )
+    # 数据缺口：列出所有 None 的关键字段，让 LLM 在决策时知道
+    gap_candidates = [
+        "roe", "revenue_yoy", "profit_yoy", "gross_margin",
+        "net_margin", "debt_ratio", "eps", "bps",
+        "jroa", "net_interest_margin", "npl_ratio", "provision_coverage",
+    ]
+    result["_gap"] = sorted(
+        k for k in gap_candidates
+        if k in result and result[k] is None
+    )
+    return result
