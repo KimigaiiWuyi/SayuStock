@@ -415,13 +415,13 @@ def draw_single_kline_chart(raw_data: JsonDict, sp: str | None = None) -> DrawRe
         # EMA(12),
         SMA(10),
         BBANDS(20, 2.0),
-        BBANDS(60, 2.0),
+        BBANDS(60, 3.0),
         Pane("below", height_ratio=0.22),
         HLine(0, color=GRID_COLOR, linestyle="--"),
         LinePlot(lambda frame: frame["turnover"], label="换手率", color="#d77cff", width=1.5),
         CMF(20) @ LinePlot(label="CMF(20)", color="#2ecc71", width=1.5),
         Pane("below", height_ratio=0.15),
-        RSI(14) @ LinePlot(label="RSI(14)", color="#4aa3ff", width=1.6, overbought=70, oversold=30),
+        RSI(14) @ LinePlot(label="RSI(14)", color="#4aa3ff", width=1.6, overbought=80, oversold=20),
         Pane("below", height_ratio=0.18),
         MACD(12, 26, 9) @ BarPlot(item="macdhist", color=AXIS_COLOR, alpha=0.68, width=0.76, label="MACD柱"),
         MACD(12, 26, 9) @ LinePlot(item="macd", label="DIF", color="#f1c40f", width=1.6),
@@ -530,14 +530,14 @@ def draw_single_kline_chart(raw_data: JsonDict, sp: str | None = None) -> DrawRe
             ax.set_ylabel("RSI(14)")
             ax.set_ylim(0, 100)
             ax.yaxis.set_major_formatter(FuncFormatter(_format_percent_axis))
-            ax.axhspan(70, 100, facecolor=UP_COLOR, alpha=0.12, zorder=0.1)
-            ax.axhspan(0, 30, facecolor=DOWN_COLOR, alpha=0.12, zorder=0.1)
-            ax.axhline(70, color=UP_COLOR, linestyle="--", alpha=0.75, linewidth=1.0)
-            ax.axhline(30, color=DOWN_COLOR, linestyle="--", alpha=0.75, linewidth=1.0)
+            ax.axhspan(80, 100, facecolor=UP_COLOR, alpha=0.12, zorder=0.1)
+            ax.axhspan(0, 20, facecolor=DOWN_COLOR, alpha=0.12, zorder=0.1)
+            ax.axhline(80, color=UP_COLOR, linestyle="--", alpha=0.75, linewidth=1.0)
+            ax.axhline(20, color=DOWN_COLOR, linestyle="--", alpha=0.75, linewidth=1.0)
             ax.text(
                 0.5,
                 0.84,
-                "超买区 >70：提防追高/逢高减仓",
+                "超买区 >80：提防追高/逢高减仓",
                 transform=ax.transAxes,
                 color=UP_COLOR,
                 fontsize=12,
@@ -549,7 +549,7 @@ def draw_single_kline_chart(raw_data: JsonDict, sp: str | None = None) -> DrawRe
             ax.text(
                 0.5,
                 0.16,
-                "超卖区 <30：避免恐慌割肉/关注反弹",
+                "超卖区 <20：避免恐慌割肉/关注反弹",
                 transform=ax.transAxes,
                 color=DOWN_COLOR,
                 fontsize=12,
