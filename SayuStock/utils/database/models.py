@@ -7,6 +7,24 @@ from gsuid_core.utils.database.base_models import Bind, Type, T_Bind
 
 from ..utils import convert_list
 
+# 导入 AI 模拟盘 7 张表 + WebConsole 注册
+from .papertrade_models import (  # noqa: F401
+    SayuPaperAccount,
+    SayuPaperPosition,
+    SayuPaperTrade,
+    SayuPaperDecision,
+    SayuPaperSnapshot,
+    SayuPaperWatchlist,
+    SayuPaperAgentPool,
+    SayuPaperAccountAdmin,
+    SayuPaperPositionAdmin,
+    SayuPaperTradeAdmin,
+    SayuPaperDecisionAdmin,
+    SayuPaperSnapshotAdmin,
+    SayuPaperWatchlistAdmin,
+    SayuPaperAgentPoolAdmin,
+)
+
 
 class SsBind(Bind, table=True):
     __table_args__ = {"extend_existing": True}

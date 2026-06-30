@@ -130,4 +130,135 @@ def register_stock_agent() -> None:
     )
 
 
+# ============================================================
+# AI 模拟盘 3 个能力代理
+# ============================================================
+PAPERTRADE_SETUP_PROMPT = """你是「AI 模拟盘建账代理」。
+
+只做一件事：在 SQLModel SayuPaperAccount 表中建一个 100w 现金的账户，并把 Kanban
+根任务 ID 回填到 ``kanban_init_root_id`` 字段。
+
+【纪律】
+- 不传群号时，从 ctx.deps.ev.group_id 拿
+- 群已有账户时直接返回，不要再创建
+- 不修改 enabled / mode / 任何其他字段
+- 返回 1 段简短确认：群号 + 初始资金 + 模式 + 数据库 id
+"""
+
+
+PAPERTRADE_DECISION_PROMPT = """你是「AI 模拟盘决策代理」（无人格）。
+
+【你的任务】
+对每个候选股票做：拉行情 → 算技术指标 → 拉财报 → 读新闻 → 评分 → 决策 buy/sell/hold
+→ 撮合 → 写 SQLModel（持仓 / 流水 / 决策日志）→ 返回 1 段事实 markdown 简报。
+人格转译会由框架在播报时自动加一层人设口吻；你只输出**事实**。
+
+【数据流】
+1. papertrade_account_query → 看现金 / 模式 / enabled
+2. papertrade_position_list / papertrade_watchlist_list / agent_pool（通过 PaperAgentPoolRepo 内部）
+3. 拉宏观：get_latest_news(5) + send_cloudmap_img
+4. 对【持仓 + 候选池 + 群友关注】每只股票并发拉：
+   - stock_indicators → MA / MACD / RSI / CMF
+   - stock_financials → ROE / 营收同比 / 净利同比 / 毛利率
+   - get_single_stock → 拿 f43 最新价 + f168 换手率 + f173 ROE + f183-f188 财务比率
+5. 拼成决策上下文 → 调用本地 score_stock + decide_action + apply_risk_check
+6. 若 buy/sell 通过风控：
+   a. papertrade_match_order 撮合
+   b. papertrade_position_upsert 更新持仓
+   c. papertrade_trade_insert 写流水
+   d. papertrade_decision_insert 写决策
+7. 若 hold：只 papertrade_decision_insert 写决策（reason 详细写为什么不动）
+8. 更新 account.last_decided_at
+
+【纪律】
+- 数据不足时**不得编造**——明确列出缺口，给保守结论。
+- 严禁把"模拟盘决策结果"当成对真人的投资建议——这是模拟盘。
+- 非开盘日（节假日 / 周末）→ 直接返回「今天不开盘，休息一下~」并退出。
+- 风控被触发时**不报 buy/sell**，而是返回「风控 X 触发，强制 hold」
+- 信号弱时主动持币（80%+ 现金是合法状态）
+- 候选池上限 50 只；如超过按来源优先级截断
+- 不对真账户做任何操作（绝对只动 papertrade_* 工具 + SQLModel）"""
+
+
+PAPERTRADE_REPORTER_PROMPT = """你是「AI 模拟盘复盘代理」。
+
+只做：拉期内的 trade_log + decision_log，统计总盈亏 / 胜率 / 最大回撤 / 换手率 / 持仓时间，
+输出 1 段 markdown 复盘报告（含数据表 + 1~2 个结论）。
+不写日志、不下新单。
+"""
+
+
+def register_papertrade_agents() -> None:
+    register_capability_agent(
+        CapabilityAgentProfile(
+            profile_id="papertrade_setup_agent",
+            display_name="AI 模拟盘建账代理",
+            when_to_use="需要新建 AI 模拟盘账户；初始化 / 重置场景",
+            system_prompt=PAPERTRADE_SETUP_PROMPT,
+            match_keywords=["AI操盘初始化", "建模拟盘账户", "建AI账户"],
+            tool_names=[
+                "papertrade_account_query",
+                "papertrade_account_create",
+            ],
+            max_iterations=5,
+            max_tokens=10000,
+        )
+    )
+    register_capability_agent(
+        CapabilityAgentProfile(
+            profile_id="papertrade_decision_agent",
+            display_name="AI 模拟盘决策代理",
+            when_to_use="AI 模拟盘每 30 分钟决策；查行情+指标+财报+新闻 → 评分 → 决策 → 撮合 → 写库",
+            system_prompt=PAPERTRADE_DECISION_PROMPT,
+            match_keywords=[
+                "AI操盘", "AI模拟盘", "AI买", "AI卖",
+                "看盘", "决策", "虚拟盘", "papertrade",
+            ],
+            tool_names=[
+                # 业务/账本
+                "papertrade_account_query",
+                "papertrade_position_list",
+                "papertrade_trade_list",
+                "papertrade_watchlist_list",
+                # 私有
+                "papertrade_decision_insert",
+                "papertrade_trade_insert",
+                "papertrade_position_upsert",
+                "papertrade_match_order",
+                # 通用
+                "stock_financials",
+                "stock_indicators",
+                "stock_is_trading_day",
+                # 已有
+                "get_latest_news",
+                "get_vix_index",
+                "search_stock",
+                "get_stock_change_rate",
+                "send_cloudmap_img",
+                "send_stock_PB_info",
+            ],
+            max_iterations=20,
+            max_tokens=35000,
+        )
+    )
+    register_capability_agent(
+        CapabilityAgentProfile(
+            profile_id="papertrade_reporter_agent",
+            display_name="AI 模拟盘复盘代理",
+            when_to_use="AI 模拟盘月报 / 季报 / 年报生成",
+            system_prompt=PAPERTRADE_REPORTER_PROMPT,
+            match_keywords=["AI操盘月报", "AI模拟盘复盘", "AI 模拟盘月报", "papertrade 复盘"],
+            tool_names=[
+                "papertrade_account_query",
+                "papertrade_position_list",
+                "papertrade_trade_list",
+                "send_cloudmap_img",
+            ],
+            max_iterations=8,
+            max_tokens=20000,
+        )
+    )
+
+
 register_stock_agent()
+register_papertrade_agents()
