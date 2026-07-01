@@ -1,9 +1,9 @@
 """AI 模拟盘 ai_tools 集合。
 
-11 个 ai_tools，分三类（**没有重叠**，每个工具只做一件事）：
-- 业务/账本（**4 个只读**，capability_domain="AI模拟盘"，category="common"）
+13 个 ai_tools，分三类（**没有重叠**，每个工具只做一件事）：
+- 业务/账本（**5 个只读**，capability_domain="AI模拟盘"，category="common"）
   —— 主 persona + 能力代理都能用
-- 能力代理私有（**4 个写**，capability_domain="AI模拟盘"，category="default" + visible_when）
+- 能力代理私有（**5 个写**，capability_domain="AI模拟盘"，category="default" + visible_when）
   —— 仅 papertrade_*_agent 可见；防止主 persona 误调写操作
 - 通用辅助（3 个，capability_domain="AI模拟盘"，category="common"）
   —— 财报 / 指标 / 交易日判断
@@ -15,27 +15,9 @@
 **所有 group_id 参数**：留空时从 ctx.deps.ev.group_id 推断。
 """
 
-# pyright/basedpyright 文件级指令 —— 仅作用于本文件。
-# 本文件依赖 ``gsuid_core.ai_core.{models,register,planning.runtime}`` 等
-# 框架模块（基于 pyright 静态分析插件路径看不见根包），还依赖 ``@with_session``
-# 装饰器动态签名以及 ``@ai_tools`` 等未注解装饰器 —— 这些都是上游已知限制，
-# 不是本文件代码错误。开启以下噪声规则没有任何价值：
-# - reportMissingImports: 根包导入被插件路径屏蔽
-# - reportUnknownVariableType / reportUnknownMemberType:
-#   上游 ``ToolContext`` / ``Event`` / ``ai_tools`` 等未注解，牵连到所有下
-#   游属性 (acc.cash, ev.group_id, ...)。
-# - reportUnknownArgumentType: ``get_gg`` 等上游返回 Any，传参时无法 narrow。
-# - reportCallIssue: @with_session 装饰器从签名里隐藏 session 参数，
-#   基于 pyright 看不到这个变换
-# - reportUntypedFunctionDecorator: @ai_tools 等装饰器无类型注解，basedpyright
-#   看不到 wrap 后函数的签名，导致重复报告所有下层未知类型。
-# - reportUnusedParameter: 框架要求的 ctx 参数在本工具实现里未必使用
-#   （如某些通用工具根本不看 ev）。
-# pyright: reportMissingImports=false, reportUnknownVariableType=false, reportUnknownMemberType=false, reportUnknownParameterType=false, reportUnknownArgumentType=false, reportCallIssue=false, reportUntypedFunctionDecorator=false, reportUnusedParameter=false
-
 import json
 import datetime as _dt
-from typing import Any, Dict, TypedDict
+from typing import Any, Dict, Optional, Set, TypedDict
 
 from pydantic_ai import RunContext
 
@@ -503,6 +485,38 @@ async def papertrade_watchlist_list(
     return json.dumps(items, ensure_ascii=False)
 
 
+@ai_tools(category="common", capability_domain="AI模拟盘")
+async def papertrade_agent_pool_list(
+    ctx: RunContext[ToolContext],
+    group_id: str = "",
+    bot_id: str = "",
+) -> str:
+    """查询 AI 内部候选池（agent_pool）当前内容（公开只读）。
+
+    返回 [{stock_code, stock_name, reason, priority, expires_at}, ...]。
+    决策代理在每轮开头调此工具候选池充盈度，不足时调 papertrade_candidate_refresh
+    增量补充；避免永远只看持仓股、不再找新标的的"锚定陷阱"。
+    """
+    gid: str = _resolve_group_id(ctx, group_id)
+    bid: str = _resolve_bot_id(ctx, bot_id)
+    if not gid or not bid:
+        return "⚠️ 无法确定 group_id/bot_id"
+    rows = await db.PaperAgentPoolRepo.list_by_account(gid, bid)
+    items: list[dict[str, Any]] = []
+    for r in rows:
+        expires_at: _dt.datetime | None = r.expires_at
+        items.append(
+            {
+                "stock_code": r.stock_code,
+                "stock_name": r.stock_name,
+                "reason": r.reason,
+                "priority": r.priority,
+                "expires_at": expires_at.isoformat() if expires_at else None,
+            }
+        )
+    return json.dumps(items, ensure_ascii=False)
+
+
 # ============================================================
 # 2) 能力代理私有工具（4 个，visible_when 限定）
 # ============================================================
@@ -729,6 +743,148 @@ async def papertrade_position_upsert(
     capability_domain="AI模拟盘",
     visible_when=_visible_to_papertrade_agent,
 )
+async def papertrade_candidate_refresh(
+    ctx: RunContext[ToolContext],
+    group_id: str = "",
+    bot_id: str = "",
+    batch_size: int = 5,
+) -> str:
+    """扫描市场增量补充 AI 候选池（agent_pool），防止"锚定陷阱"。
+
+    仅 papertrade_*_agent 可见（visible_when 限定）。决策代理在每轮开头调
+    ``papertrade_agent_pool_list`` 看池子是否充盈；若 < 3 只则调本工具扫一笔
+    新鲜标的进来（**增量、小批量**，默认 batch_size=5，最大 10，避免一次性填
+    满 50 只堵塞后续选股）。
+
+    数据源（跳过已在持仓 / watchlist / agent_pool 的股票）：
+      P2: 行业板块龙头（EastMoney 涨幅 TOP3 板块 × 成分股 TOP3）
+      P3: 大盘热股 TOP10（EastMoney 热度）
+      P3: 雪球新闻提及的股票
+
+    每只入池后给 3 天过期时间 + priority=1（低优先级，仅作"待评估"标记），
+    真正的 buy/sell 决策仍由决策代理深度分析后产出。
+
+    Args:
+        batch_size: 本回合最多入池几只（默认 5，上限 10）。超出会被截断。
+
+    Returns:
+        JSON 字典：{"added": [...], "pool_size_before": N, "pool_size_after": M,
+        "sources": {"sector": K, "hotmap": J, "news": I, "deduped": X}}
+    """
+    from datetime import timedelta
+    from .candidate_pool import (
+        _from_position,
+        _from_watchlist,
+        _from_sector_top_picks,
+        _from_hotmap_top_n,
+        _from_news_extract_tickers,
+    )
+
+    gid: str = _resolve_group_id(ctx, group_id)
+    bid: str = _resolve_bot_id(ctx, bot_id)
+    if not gid or not bid:
+        return "⚠️ 无法确定 group_id/bot_id"
+
+    # ── clamp batch_size ──
+    batch_size = max(1, min(int(batch_size), 10))
+
+    # ── 1) 算池子当前大小（刷新前） ──
+    pool_before: list[str] = []
+    try:
+        pool_before = await db.PaperAgentPoolRepo.list_codes(gid, bid)
+    except Exception as e:
+        _gslogger.debug(f"[SayuStock][PaperTrade] candidate_refresh 查池失败（降级0）: {e}")
+
+    # ── 2) 读持仓 + watchlist，去重 ──
+    seen: Set[str] = set(pool_before)
+    try:
+        seen.update(await _from_position(gid, bid))
+    except Exception:
+        pass
+    try:
+        seen.update(await _from_watchlist(gid, bid))
+    except Exception:
+        pass
+
+    now = _dt.datetime.now()
+    sources: dict[str, int] = {"sector": 0, "hotmap": 0, "news": 0, "deduped": 0}
+    added: list[dict[str, str]] = []
+
+    async def _try_add(codes: list[str], src: str) -> None:
+        nonlocal added
+        for c in codes:
+            if len(added) >= batch_size:
+                break
+            if not (c and len(c) == 6 and c.isdigit()):
+                continue
+            if c in seen:
+                sources["deduped"] += 1
+                continue
+            seen.add(c)
+            # 推定 secid（沪市 6 开头 → 1.xxx；其余 → 0.xxx）
+            secid = f"1.{c}" if c.startswith("6") else f"0.{c}"
+            try:
+                await db.PaperAgentPoolRepo.upsert(
+                    gid,
+                    bid,
+                    stock_code=c,
+                    stock_name="",  # 刷新时暂不查 get_code_id，决策代理深度分析时再补
+                    secid=secid,
+                    reason=f"sector/hotmap/news 自动扫描 (priority=1)",
+                    added_by="auto_refresh",
+                    priority=1,
+                    expires_at=now + timedelta(days=3),
+                )
+            except Exception as e:
+                _gslogger.debug(f"[SayuStock][PaperTrade] candidate_refresh 写入 {c} 失败: {e}")
+                continue
+            added.append({"stock_code": c, "secid": secid, "source": src})
+            sources[src] += 1
+
+    # ── 3) P2: 板块龙头 ──
+    try:
+        sector_codes = await _from_sector_top_picks(top_sectors=3, per_sector=3)
+        await _try_add(sector_codes, "sector")
+    except Exception as e:
+        _gslogger.debug(f"[SayuStock][PaperTrade] candidate_refresh sector 失败: {e}")
+
+    # ── 4) P3: 热股 ──
+    try:
+        hot_codes = await _from_hotmap_top_n(n=10)
+        await _try_add(hot_codes, "hotmap")
+    except Exception as e:
+        _gslogger.debug(f"[SayuStock][PaperTrade] candidate_refresh hotmap 失败: {e}")
+
+    # ── 5) P3: 新闻 ticker ──
+    try:
+        news_codes = await _from_news_extract_tickers()
+        await _try_add(news_codes, "news")
+    except Exception as e:
+        _gslogger.debug(f"[SayuStock][PaperTrade] candidate_refresh news 失败: {e}")
+
+    # ── 6) 算池子刷新后大小 ──
+    pool_after: list[str] = []
+    try:
+        pool_after = await db.PaperAgentPoolRepo.list_codes(gid, bid)
+    except Exception:
+        pool_after = list(seen)
+
+    return json.dumps(
+        {
+            "added": added,
+            "pool_size_before": len(pool_before),
+            "pool_size_after": len(pool_after),
+            "sources": sources,
+        },
+        ensure_ascii=False,
+    )
+
+
+@ai_tools(
+    category="default",
+    capability_domain="AI模拟盘",
+    visible_when=_visible_to_papertrade_agent,
+)
 async def papertrade_match_order(
     ctx: RunContext[ToolContext],
     side: str,
@@ -738,17 +894,34 @@ async def papertrade_match_order(
     cash_available: float = 0.0,
     position_qty: int = 0,
 ) -> str:
-    """撮合一笔订单（A 股真实费率）；返回 MatchResult JSON 字符串。
+    """撮合一笔订单（A 股真实费率 + 涨跌停拦截）；返回 MatchResult JSON 字符串。
+
+    内置涨跌停板拦截：本工具自动从 quote_service 拉取目标股票的昨收价比对。
+    当买入价触及涨停 或 卖出价触及跌停 时直接返回 ok=False，**不会**下真正的单。
+    调用方（LLM）判断到 ok=False + reason 含"涨停"或"跌停"后应改 hold。
 
     Args:
         side: buy / sell
-        stock_code: 股票代码
+        stock_code: 股票代码（用于识别主板 / 科创 / 创业板 / 北交所）
         qty: 请求股数
         price: 成交价
         cash_available: 账户可用现金（buy 时必填）
         position_qty: 当前持仓股数（sell 时必填）
     """
     from .matcher import match_order
+
+    # ── 拉取昨收价 & 涨跌幅，用于涨跌停拦截 ──
+    last_close: Optional[float] = None
+    change_pct: Optional[float] = None
+    try:
+        # secid 格式：沪市(6开头) → "1.xxxxxx"；深市/北交所 → "0.xxxxxx"
+        secid = f"1.{stock_code}" if stock_code.startswith("6") else f"0.{stock_code}"
+        entry = await quote_service.get_quote_detail(secid)
+        if entry is not None:
+            last_close = entry.last_close
+            change_pct = entry.change_pct
+    except Exception as e:
+        _gslogger.debug(f"[SayuStock][PaperTrade] match_quote_fetch failed stock={stock_code}: {e}")
 
     res = match_order(
         side=side,
@@ -757,6 +930,8 @@ async def papertrade_match_order(
         price=price,
         cash_available=cash_available,
         position_qty=position_qty,
+        last_close=last_close,
+        change_pct=change_pct,
     )
     view: _MatchResultView = {
         "ok": res.ok,

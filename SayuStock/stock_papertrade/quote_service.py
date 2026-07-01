@@ -60,6 +60,8 @@ class QuoteCacheEntry:
     price: Optional[float]
     fetched_at: float = field(default_factory=time.time)
     name: Optional[str] = None  # 仅诊断用，不暴露给业务
+    last_close: Optional[float] = None  # f60 昨收价
+    change_pct: Optional[float] = None  # f45 涨跌幅（%，如 9.99）
 
 
 # ============================================================
@@ -122,17 +124,39 @@ class QuoteService:
 
             self._misses += 1
             price: Optional[float] = None
+            last_close: Optional[float] = None
+            change_pct: Optional[float] = None
             name: Optional[str] = None
             try:
-                price, name = await self._fetch_one(secid)
+                price, last_close, change_pct, name = await self._fetch_one(secid)
             except Exception as e:
                 logger.debug(f"[PaperTrade][Quote] secid={secid} 拉报价失败: {e}")
                 # 失败也写一条 None 缓存，避免下一秒立刻又重试；TTL 仍是 60s
                 # （调大 TTL 也可，但这层 cache 是临时挡板，主要兜底在 DB 列）
             self._cache[secid] = QuoteCacheEntry(
-                secid=secid, price=price, name=name, fetched_at=time.time()
+                secid=secid,
+                price=price,
+                name=name,
+                last_close=last_close,
+                change_pct=change_pct,
+                fetched_at=time.time(),
             )
             return price
+
+    # ----------------------------------------------------------------
+    # 公共 API：单条目（后向兼容 get_quote 拿现价）
+    # ----------------------------------------------------------------
+    async def get_quote_detail(self, secid: str) -> Optional[QuoteCacheEntry]:
+        """拿完整缓存条目（含 last_close / change_pct）。优先走缓存；缺失穿透。"""
+        if not secid:
+            return None
+        now = time.time()
+        cached = self._cache.get(secid)
+        if cached is not None and (now - cached.fetched_at) < QUOTE_CACHE_TTL:
+            return cached
+        # 穿透一次 get_quote 让它把整条 cache entry 写齐
+        await self.get_quote(secid)
+        return self._cache.get(secid)
 
     # ----------------------------------------------------------------
     # 公共 API：批量（缓存优先；并发拉缺失项）
@@ -181,8 +205,13 @@ class QuoteService:
     # ----------------------------------------------------------------
     # 内部：单次 HTTP
     # ----------------------------------------------------------------
-    async def _fetch_one(self, secid: str) -> tuple[Optional[float], Optional[str]]:
-        """拉一次；返回 ``(price, name)``，出错返回 ``(None, None)``。"""
+    async def _fetch_one(
+        self, secid: str
+    ) -> tuple[Optional[float], Optional[float], Optional[float], Optional[str]]:
+        """拉一次；返回 ``(price, last_close, change_pct, name)``，出错返回 ``(None, None, None, None)``。
+
+        f43=现价, f45=涨跌幅(%), f60=昨收, f57=名称
+        """
         from ..utils.eastmoney import EASTMONEY_REQUESTER
 
         params = [
@@ -198,30 +227,48 @@ class QuoteService:
             )
         except asyncio.TimeoutError:
             logger.debug(f"[PaperTrade][Quote] secid={secid} 超时 (>={QUOTE_TIMEOUT_S}s)")
-            return (None, None)
+            return (None, None, None, None)
         except Exception as e:
             logger.debug(f"[PaperTrade][Quote] secid={secid} HTTP 失败: {e}")
-            return (None, None)
+            return (None, None, None, None)
 
         if isinstance(resp, int):  # -999 / -400016 等错误码
-            return (None, None)
+            return (None, None, None, None)
         if not isinstance(resp, dict):
-            return (None, None)
+            return (None, None, None, None)
         data = resp.get("data")
         if not isinstance(data, dict):
-            return (None, None)
+            return (None, None, None, None)
         raw_price = data.get("f43")
         if raw_price is None:
-            return (None, None)
+            return (None, None, None, None)
         try:
             price = float(raw_price)
         except (TypeError, ValueError):
-            return (None, None)
+            return (None, None, None, None)
         if price <= 0:
-            return (None, None)
+            return (None, None, None, None)
+        # 昨收价
+        last_close: Optional[float] = None
+        raw_lc = data.get("f60")
+        if raw_lc is not None:
+            try:
+                lc = float(raw_lc)
+                if lc > 0:
+                    last_close = lc
+            except (TypeError, ValueError):
+                pass
+        # 涨跌幅（百分比数值，如 9.99 表示 9.99%）
+        change_pct: Optional[float] = None
+        raw_chg = data.get("f45")
+        if raw_chg is not None:
+            try:
+                change_pct = float(raw_chg)
+            except (TypeError, ValueError):
+                pass
         name_raw = data.get("f57")
         name = str(name_raw) if name_raw else None
-        return (price, name)
+        return (price, last_close, change_pct, name)
 
     # ----------------------------------------------------------------
     # 调试 / 维护

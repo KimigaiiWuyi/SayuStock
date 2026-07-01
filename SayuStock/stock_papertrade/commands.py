@@ -66,12 +66,25 @@ async def _setup_papertrade_kanban_trees(
     except Exception as e:
         raise RuntimeError(f"Kanban init 树创建失败: {type(e).__name__}: {e}") from e
 
-    # ─── 2) Kanban period 树（3 子任务：decision/snapshot/monthly_report） ───
+    # ─── 2) Kanban period 树（4 子任务：decision/snapshot/monthly_report/pool_refresh） ───
     period_root_id: str | None = None
     try:
         subtasks: list[dict] = [
             {
-                "description": "查询账户/候选池/持仓 → 决策 → papertrade_*_insert/upsert 写入",
+                "description": (
+                    "每 30 分钟决策心跳：\n"
+                    "Phase 0: papertrade_agent_pool_list 看 AI 候选池充盈度"
+                    " → 若 <3 只则 papertrade_candidate_refresh(batch_size=5) 扫新标的入池；\n"
+                    "Phase 1: papertrade_account_query + papertrade_position_list"
+                    " → 看账户+持仓；\n"
+                    "Phase 2: papertrade_watchlist_list + papertrade_agent_pool_list"
+                    " → 合入候选全集（持仓+群友关注+AI池）；\n"
+                    "Phase 3: 拉宏观 news/cloudmap；\n"
+                    "Phase 4: 对候选集每只跑 stock_indicators + stock_financials；\n"
+                    "Phase 5: 评分 → 决策 buy/sell/hold → 如有交易走撮合→流水→持仓→决策；\n"
+                    "关键纪律：即使持仓只有 1 只也必须评估 agent_pool/watchlist 的标的，"
+                    "防锚定陷阱。hold 仅写 decision_insert，不调撮合。"
+                ),
                 "agent_profile": "papertrade_decision_agent",
                 "recurring_trigger": "cron:0,30 9-14 * * 1-5",
             },
@@ -84,6 +97,16 @@ async def _setup_papertrade_kanban_trees(
                 "description": "月初出复盘报告（月收益 / 胜率 / 最大回撤）",
                 "agent_profile": "papertrade_reporter_agent",
                 "recurring_trigger": "cron:0 9 1 * *",
+            },
+            {
+                "description": (
+                    "候选池刷新（独立于 decision，每 2 小时跑一次）：\n"
+                    "papertrade_agent_pool_list → 若池 <3 只则 "
+                    "papertrade_candidate_refresh(batch_size=5) 从 sector/hotmap/news 入池;\n"
+                    "**本轮仅做入池，不调任何撮合/流水/持仓/决策工具，不做 buy/sell 判断**。"
+                ),
+                "agent_profile": "papertrade_pool_refresh_agent",
+                "recurring_trigger": "cron:30 10,12,14 * * 1-5",
             },
         ]
         period_root, _ = await create_kanban_tree(
@@ -304,11 +327,12 @@ async def _kick_immediate_decision(ev: Event, group_id: str, bot_id: str) -> Non
 
 1) SQLModel 建账户（100w 现金，balanced 模式）
 2) Kanban init 树（leaf-root / papertrade_setup_agent，单次执行把账户建好）
-3) Kanban period 树（ROOT 非周期，仅容器；3 个子任务各自独立挂 APScheduler）：
+3) Kanban period 树（ROOT 非周期，仅容器；4 个子任务各自独立挂 APScheduler）：
    - 决策代理（cron:0,30 9-14 * * 1-5，工作日每 30 分钟看盘）
    - 决策代理（cron:35 15 * * 1-5，工作日收盘写当日快照）
    - 复盘代理（cron:0 9 1 * *，每月 1 日 09:00 出月报）
-4) kick_root 一次，触发 3 个子任务各自 arm 到 APScheduler
+   - 候选池刷新浪俭代理（cron:30 10,12,14 * * 1-5，每 2 小时刷新候选池防锚定）
+4) kick_root 一次，触发 4 个子任务各自 arm 到 APScheduler
 
 仅群主/管理员可触发；已开户直接返回原账户。
 
@@ -323,8 +347,9 @@ async def send_init_command(bot: Bot, ev: Event):
         1) check_admin（pm <= 1）
         2) PaperAccountRepo.get_or_create 建 SQLModel 账户
         3) register_kanban_task 建 init 树（papertrade_setup_agent）
-        4) register_kanban_task 建 period 树（ROOT 非周期，3 子任务各自带 recurring_trigger）
-        5) kick_root(period_root_id) 触发 3 个子任务各自 arm 到 APScheduler
+        4) register_kanban_task 建 period 树（ROOT 非周期，4 子任务各自带 recurring_trigger：
+           decision / snapshot / monthly_report / pool_refresh）
+        5) kick_root(period_root_id) 触发 4 个子任务各自 arm 到 APScheduler
         6) bind_kanban_init/period 回填 root_id
 
     重要：之前实现只跑了步骤 2，没有 Kanban 心跳树，开盘时不会自动决策——
@@ -334,7 +359,7 @@ async def send_init_command(bot: Bot, ev: Event):
     recurring_trigger，create_kanban_tree 内部就会把它的 recurring_status
     同步写成 'armed'，execute_ready_tasks 随即早返，_maybe_arm_recurring_
     subtasks 永远不会被调用）。现在改为 ROOT 不设 recurring_trigger，
-    只让 3 个子任务各自独立 arm，参见 ``_setup_papertrade_kanban_trees``
+    只让 4 个子任务各自独立 arm，参见 ``_setup_papertrade_kanban_trees``
     内的详细注释。
     """
     if not await check_admin(ev):

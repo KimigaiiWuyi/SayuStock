@@ -209,7 +209,7 @@ def _format_percent_axis(value: float, _pos: object = None) -> str:
 
 
 def _format_precise_percent_axis(value: float, _pos: object = None) -> str:
-    return f"{value:.2f}%"
+    return f"{value * 100:.2f}%"
 
 
 def _style_axis(ax: Axes, *, grid: bool = True) -> None:
@@ -470,7 +470,7 @@ def draw_single_kline_chart(raw_data: JsonDict, sp: str | None = None) -> DrawRe
                         zorder=5,
                     )
                     ax.annotate(
-                        f"换手率 {turnover_peak_y:.2f}%",
+                        f"换手率 {turnover_peak_y * 100:.2f}%",
                         xy=(turnover_peak_x, turnover_peak_y),
                         xytext=(8, 10),
                         textcoords="offset points",

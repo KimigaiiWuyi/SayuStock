@@ -167,6 +167,15 @@ PAPERTRADE_DECISION_PROMPT = """你是「AI 模拟盘决策代理」（无人格
 人格转译会由框架在播报时自动加一层人设口吻；你只输出**事实**。
 
 【数据流】
+== Phase 0：确保候选池充盈（防锚定陷阱） ==
+0. papertrade_agent_pool_list → 看 AI 候选池有多少只
+   - 若 < 3 只，立刻调 papertrade_candidate_refresh(batch_size=5) 扫一笔新鲜标的
+     （工具内自动跳过持仓/群友关注中已有的，3 天过期，优先级=1）
+   - 若 ≥ 3 只，跳过刷新直接进入 Step 1
+   - **设计意图**：防止"选过一次股后永远只看持仓、不再找新标的"的锚定；
+     即使 agent_pool 只有上期留下来的持仓股，也要保证每轮有 ≥3 个独立候选。
+
+== Phase 1：账户与持仓 ==
 1. papertrade_account_query → 看现金 / 模式 / enabled / **真·total_equity**
    （2026-07-01 起 total_equity = cash + Σposition_value，含持仓市值；不再单
    独报 cash 当总资产）
@@ -178,17 +187,42 @@ PAPERTRADE_DECISION_PROMPT = """你是「AI 模拟盘决策代理」（无人格
        "live" = 60s 内新鲜报价，可用
        "db"   = DB 有缓存但超过 60s，估值偏旧但有数据
        "cost" = 从未刷过价（首次建仓刚 upsert 时），用 avg_cost 兜底显示
-2. papertrade_watchlist_list / agent_pool（通过 PaperAgentPoolRepo 内部）
-3. 拉宏观：get_latest_news(5) + send_cloudmap_img
-4. 对【候选池 + 群友关注】每只股票并发拉：
+
+== Phase 2：候选池合入 ==
+2. papertrade_watchlist_list + papertrade_agent_pool_list
+   - 合并【持仓 + 群友关注 + AI 候选池】为"本轮待评估候选全集"
+   - **关键**：即使持仓只有 1 只，也必须把 agent_pool / watchlist 的标的拉进
+     评估；不能因为"watchlist 为空"就只盯持仓——这正是锚定陷阱的成因。
+   - 候选去重 + 按 source priority 排序（持仓 > watchlist > agent_pool > sector > hotmap > news）
+
+== Phase 3：市场环境 ==
+3. 拉宏观：get_latest_news(5) + send_cloudmap_img（为候选集提供板块/资金偏好上下文）
+
+== Phase 4：个股深度分析 ==
+4. 对【候选全集（持仓 + watchlist + agent_pool）】每只股票并发拉：
    - stock_indicators → MA / MACD / RSI / CMF / BOLL / CCI / BBI
    - stock_financials → ROE / 营收同比 / 净利同比 / 毛利率
-   - （持仓已经在 step 1.5 拿到 current_price，**持仓不再重复** get_single_stock
+   - （持仓已经在 Step 1.5 拿到 current_price，**持仓不再重复** get_single_stock
      拿 f43——除非 quote_source="cost"/"db" 且时间窗非常紧）
+   - **本步覆盖全部候选**，不要因为某只股票"不在持仓里"跳过分
+     析——这些正是要观察是否值得新建仓的目标。
+
+== Phase 5：评分与决策 ==
 5. 拼成决策上下文 → 调用本地 score_stock + decide_action + apply_risk_check
 6. 若 buy/sell 通过风控（**顺序不可颠倒**：先落流水，流水成功才动持仓，
    否则 T+1 拦截会导致"持仓已清空但流水/现金没变"的脏状态）：
    a. papertrade_match_order 撮合
+      **涨跌停板拦截（2026-07-01 加）**：本工具会自动拉取目标股昨日收盘价
+      来判断是否触碰涨停 / 跌停板。
+      - **涨停（buy 拦截）**：若返回 `ok=False` 且 reason 含"涨停板买入拦截"，
+        说明该股价已触或接近今日本板涨停（主板+10% / 科创 创业板+20% /
+        北交所+30%），按 A 股规则此时买方排队也难成交——**立刻停止本轮该
+        股票的后续步骤**，改走 step 7 写一条 hold 决策，reason 里写清楚
+        "XX 股今日涨停，无法买入"。**不得**改 attempt "等回调再买"重试
+        同一只，模拟盘没有条件单，等下轮看盘再说。
+      - **跌停（sell 拦截）**：若返回 `ok=False` 且 reason 含"跌停板卖出拦截"，
+        说明该股价已触或接近今日本板跌停，买方缺失卖单同样难成交——处理
+        方式同上，改写 hold 决策。
    b. papertrade_trade_insert 写流水
       **A 股 T+1 拦截（仅 sell）**：若返回 "⚠️ A 股 T+1 拦截：xxx"，说明该
       股今天已有买入，锁定股数不可卖——**此时立刻停止本轮该股票的后续步骤，
@@ -202,6 +236,13 @@ PAPERTRADE_DECISION_PROMPT = """你是「AI 模拟盘决策代理」（无人格
 8. 更新 account.last_decided_at
 
 【纪律】
+- **防锚定陷阱**：每轮决策必须处理 Phase 0→1→2 三阶段，不能因为"已持仓 X 股"
+  就跳过候选池扫描。候选池空 ≠ "没有候选"——调 papertrade_candidate_refresh 扫
+  一批进来。（2026-07-01 加：此前 agent 买过一次后永远只看这个股的根本原因，
+  就是没有 Phase 0 这个强制入池步骤。）
+- **A 股涨跌停板（2026-07-01 加）**：涨停不追、跌停不割——这是真实
+  A 股的成交约束，模拟盘也必须遵守。step 6a 遇到涨停/跌停拦截直接
+  切 hold，**严禁**绕过"等它跌回再买"重试同一只票（下轮看盘再说）。
 - **A 股 T+1**：T 日买入股数 T+1 日开盘前不可卖（撮合层硬拦）。
   plan sell 前先确认 ``papertrade_position_list`` 里这只股票的建仓日 /
   对应 trade 的 executed_at，否则会触发拦截错误。
@@ -219,6 +260,37 @@ PAPERTRADE_REPORTER_PROMPT = """你是「AI 模拟盘复盘代理」。
 只做：拉期内的 trade_log + decision_log，统计总盈亏 / 胜率 / 最大回撤 / 换手率 / 持仓时间，
 输出 1 段 markdown 复盘报告（含数据表 + 1~2 个结论）。
 不写日志、不下新单。
+"""
+
+
+# ============================================================
+# AI 模拟盘 · 候选池刷新浪俭代理（2026-07-01 新增）
+# ============================================================
+PAPERTRADE_POOL_REFRESH_PROMPT = """你是「AI 模拟盘候选池刷新浪俭代理」。
+
+【你的任务】
+检查本群的 AI 候选池（agent_pool）充盈度；若不足 3 只，调
+papertrade_candidate_refresh(batch_size=5) 扫描一笔新鲜标的入池。
+**这只是"入池"动作，不是买卖决策**——你完全不调任何撮合/流水/持仓/决策工具，
+不做任何 buy/sell/hold 判断。你的唯一产出是让 agent_pool 里多几只待评估标的，
+让下一轮 papertrade_decision_agent 有票可看。
+
+【工作流】
+1. papertrade_agent_pool_list → 看 agent_pool 当前几只
+   - count >= 3 → 直接返回 "池已充盈 (N 只)，跳过刷新"，不写任何东西
+   - count < 3  → 进 step 2
+2. papertrade_candidate_refresh(batch_size=5) → 工具会从 sector / hotmap / news
+   三源扫描，自动跳过持仓 + watchlist + agent_pool 已有的，增量写入 agent_pool
+   （3 天过期，priority=1）
+3. 返回一段简短池状态："刷新前 N 只 → 扫描入池 K 只 (sector:x / hotmap:y / news:z) →
+   刷新后 (N+K) 只" + added 列表的 stock_code/secid 摘要
+
+【纪律】
+- **仅做入池**，不调任何撮合/流水/持仓/决策写工具（即使工具可见也不要调）。
+- 非开盘日 → 直接返回"非开盘日，跳过候选池刷新"（sector/hotmap/news 数据
+  在非交易日不可靠）。
+- 刷新失败的 source 不影响整体——工具内部已 per-source try/except，失败的
+  source 返回 sources.<name>=0 即可，不要 retry。
 """
 
 
@@ -262,11 +334,13 @@ def register_papertrade_agents() -> None:
                 "papertrade_position_list",
                 "papertrade_trade_list",
                 "papertrade_watchlist_list",
+                "papertrade_agent_pool_list",
                 # 私有
                 "papertrade_decision_insert",
                 "papertrade_trade_insert",
                 "papertrade_position_upsert",
                 "papertrade_match_order",
+                "papertrade_candidate_refresh",
                 # 通用
                 "stock_financials",
                 "stock_indicators",
@@ -283,6 +357,23 @@ def register_papertrade_agents() -> None:
             ],
             max_iterations=30,
             max_tokens=60000,
+        )
+    )
+    register_capability_agent(
+        CapabilityAgentProfile(
+            profile_id="papertrade_pool_refresh_agent",
+            display_name="AI 模拟盘候选池刷新浪俭代理",
+            when_to_use="AI 模拟盘候选池低于阈值时，从 sector/hotmap/news 入池新鲜标的；仅做入池，不下单",
+            system_prompt=PAPERTRADE_POOL_REFRESH_PROMPT,
+            match_keywords=["AI操盘刷新候选池", "刷新自选池", "papertrade_pool_refresh"],
+            tool_names=[
+                # 仅只读 + 刷新两个极简工具，不挂任何交易/决策/持仓写入工具
+                "papertrade_agent_pool_list",
+                "papertrade_candidate_refresh",
+                "stock_is_trading_day",
+            ],
+            max_iterations=4,
+            max_tokens=8000,
         )
     )
     register_capability_agent(

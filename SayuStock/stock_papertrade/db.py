@@ -1149,6 +1149,31 @@ class PaperAgentPoolRepo:
 
     @classmethod
     @with_session
+    async def list_by_account(
+        cls,
+        session: AsyncSession,
+        group_id: str,
+        bot_id: str,
+    ) -> List[SayuPaperAgentPool]:
+        """列出非过期的 AI 内部池全量条目（含 name / priority / expires_at）。"""
+        now = datetime.now()
+        stmt = (
+            select(SayuPaperAgentPool)
+            .where(
+                and_(
+                    col(col(SayuPaperAgentPool.group_id)) == group_id,
+                    col(col(SayuPaperAgentPool.bot_id)) == bot_id,
+                    (col(col(SayuPaperAgentPool.expires_at)).is_(None))
+                    | (col(col(SayuPaperAgentPool.expires_at)) > now),
+                )
+            )
+            .order_by(col(col(SayuPaperAgentPool.priority)).desc())
+        )
+        result = await session.execute(stmt)
+        return list(result.scalars().all())
+
+    @classmethod
+    @with_session
     async def cleanup_expired(cls, session: AsyncSession) -> int:
         """清理过期项；返回删除条数"""
         from sqlalchemy import delete as _sa_delete
