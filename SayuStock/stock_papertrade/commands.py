@@ -13,6 +13,7 @@
 """
 
 import re
+import asyncio
 import datetime as _dt
 
 from gsuid_core.bot import Bot
@@ -22,6 +23,7 @@ from . import db as _db, cross_group as _cross
 from .sv import sv_papertrade
 from .render import draw_leaderboard, draw_account_view
 from .permissions import check_admin
+from .trading_calendar import is_trading_time, is_a_share_trading_day
 
 
 # ============================================================
@@ -118,8 +120,54 @@ async def _setup_papertrade_kanban_trees(
     return init_root_id, period_root_id
 
 
+async def _kick_immediate_decision(ev: Event, group_id: str, bot_id: str) -> None:
+    """fire-and-forget 立即触发一次 papertrade_decision_agent。
+
+    决策代理跑完后会通过 ``emit_proactive_message`` 把「📈 AI 模拟盘·操盘播报」
+    推群。这里 ``asyncio.create_task`` 不 await——保持 task 引用防 GC，
+    由框架 event loop 在后台跑完。
+
+    ``session_id_suffix`` 用 ``init_decision_{group_id}`` 和后续 cron 实例的
+    会话串号隔开。
+    """
+    try:
+        from gsuid_core.ai_core.capability_agents.runner import run_capability_agent
+
+        task_prompt = (
+            f"为群{group_id} 在 bot {bot_id} 上立即执行一次 AI 模拟盘心跳决策（init-time 立即触发）。\n"
+            f"Step 1: papertrade_account_query → 拿 cash / mode / enabled\n"
+            f"Step 2: papertrade_position_list → 拿当前持仓\n"
+            f"Step 3: stock_is_trading_day → 确认开盘\n"
+            f"Step 4: 选 1~3 只候选股（自选 / 持仓 / 大盘热股）跑 stock_indicators + stock_financials\n"
+            f"Step 5: 综合决策 action=buy/sell/hold：\n"
+            f"  - buy  → papertrade_match_order → papertrade_trade_insert\n"
+            f"         → papertrade_position_upsert → papertrade_decision_insert\n"
+            f"  - sell → papertrade_match_order → papertrade_trade_insert(realized_pnl)\n"
+            f"         → papertrade_position_upsert(qty=0) → papertrade_decision_insert\n"
+            f"  - hold → 仅 papertrade_decision_insert（reason 详细写为什么不动）\n"
+            f"完成后简短回报：action / 持仓数量 / 决策 ID。决策结果会通过 emit_proactive_message 自动推群。"
+        )
+        # 显式持有 task 引用防 GC（asyncio 不会回收还有强引用的 task）
+        _decision_task: asyncio.Task = asyncio.create_task(
+            run_capability_agent(
+                profile_id="papertrade_decision_agent",
+                task=task_prompt,
+                ev=ev,
+                bot=None,  # type: ignore[arg-type]  -- decision_agent 自己从 ctx.deps.bot 拿
+                session_id_suffix=f"init_decision_{group_id}",
+            )
+        )
+        # 不 await，让它在后台跑；fire-and-forget 失败由 run_capability_agent 内部 logger 兜底
+        _ = _decision_task
+    except Exception as e:
+        # fire-and-forget 失败不阻塞 init 主流程；只记日志，由 Kanban cron 兜底
+        from gsuid_core.logger import logger
+
+        logger.exception(f"[SayuStock][PaperTrade] init 立即决策失败: {e}")
+
+
 @sv_papertrade.on_fullmatch(
-    ("模拟盘初始化"),
+    ("模拟盘初始化",),
     to_ai="""初始化 AI 模拟盘账户（默认 100w 现金，平衡模式）。一次完整流程，包含：
 
 1) SQLModel 建账户（100w 现金，balanced 模式）
@@ -179,11 +227,15 @@ async def send_init_command(bot: Bot, ev: Event):
                     f"⚠️ 账户已存在（id={existing.id}），但补挂 Kanban 心跳失败：{e}\n"
                     f"AI 开盘不会自动决策。请联系 SUPERUSER 通过「AI操盘清盘」重置。"
                 )
+            # 补挂同样立即踢 init + （开盘时）踢一次 decision
+            await _kick_after_kanban_ready(ev, group_id, bot_id, init_id)
+            is_market = _is_market_open_now()
             return await bot.send(
                 f"ℹ️ 账户已存在（id={existing.id}），已补挂 Kanban 心跳：\n"
                 f"  init_root_id   = {init_id or '(空)'}\n"
                 f"  period_root_id = {period_id or '(空)'}\n"
-                f"下一个交易日开盘即开始自主决策。"
+                f"已立即触发 init 验证"
+                f"{' + 一次决策心跳' if is_market else '（非开盘时段，跳过决策）'}。"
             )
         return await bot.send(
             f"ℹ️ 本群已开户 AI 模拟盘（id={existing.id}），无需重复初始化。\n如需重置请用「AI操盘清盘」（master-only）。"
@@ -212,6 +264,13 @@ async def send_init_command(bot: Bot, ev: Event):
             pass
         return await bot.send(f"⚠️ 初始化失败：{e}\n账户已自动回滚。请检查 gsuid_core.ai_core 是否就绪后重试。")
 
+    # ── 步骤 7：fire-and-forget 立即踢 init + （开盘时）踢一次 decision ──
+    #    原因：用户发"AI操盘初始化"在开盘时段，希望 AI 立刻开始看盘，不等到
+    #    下个 30 分钟 tick。踢的过程不阻塞主消息：init 通常 < 5s，decision
+    #    ~30-60s，二者都在后台跑完。
+    await _kick_after_kanban_ready(ev, group_id, bot_id, init_id)
+    is_market: bool = _is_market_open_now()
+
     msg = (
         f"✅ AI 模拟盘已开户\n"
         f"群号: {ev.group_id}\n"
@@ -221,9 +280,48 @@ async def send_init_command(bot: Bot, ev: Event):
         f"Kanban 心跳树：\n"
         f"  init_root   = {init_id[:16] if init_id else '(空)'}…\n"
         f"  period_root = {period_id[:16] if period_id else '(空)'}…\n\n"
-        f"下一个交易日 9:30 起开始自主决策。"
+        f"已立即触发 init 验证"
+        f"{' + 一次决策心跳（开盘中，决策结果稍后推群）' if is_market else '（非开盘时段，跳过决策；等下次 cron）'}。"
     )
     await bot.send(msg)
+
+
+# ============================================================
+# Helpers：init 完成后立即 kick
+# ============================================================
+def _is_market_open_now() -> bool:
+    """是否处于 A 股开盘时段（交易日 + 交易时段）。"""
+    return is_a_share_trading_day() and is_trading_time()
+
+
+async def _kick_after_kanban_ready(ev: Event, group_id: str, bot_id: str, init_id: str | None) -> None:
+    """Kanban 树就绪后立即 fire-and-forget 触发 init 验证 + （开盘时）一次决策。
+
+    - init 树永远踢一次——验证账户 / 回填 root_id / papertrade_setup_agent 自检。
+    - decision 仅在 ``_is_market_open_now()`` 为真时踢——非开盘时段让 cron 兜底，
+      避免浪费 token。
+
+    所有 kick 都是 ``asyncio.create_task``，不阻塞 send 成功消息；失败由
+    Kanban cron + 日志兜底，不影响主流程。
+    """
+    if not init_id:
+        return
+
+    # (a) 永远踢 init 树（fire-and-forget）
+    try:
+        from gsuid_core.ai_core.planning.kanban_executor import kick_root
+
+        _init_task: asyncio.Task = asyncio.create_task(kick_root(init_id))
+        # 显式持有 task 引用防 GC
+        _ = _init_task
+    except Exception as e:
+        from gsuid_core.logger import logger
+
+        logger.exception(f"[SayuStock][PaperTrade] kick init 失败: {e}")
+
+    # (b) 仅在开盘时段踢一次 decision
+    if _is_market_open_now():
+        await _kick_immediate_decision(ev, group_id, bot_id)
 
 
 # ============================================================
