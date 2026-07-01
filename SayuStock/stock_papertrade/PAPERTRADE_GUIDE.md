@@ -42,12 +42,41 @@ SayuStock 插件里的"AI 模拟盘"长期能力：
 4. **用你（早柚）的口吻**回答：当时 MACD 金叉、PE 多少、行业如何……
 
 ### 用户问"现在还持有啥？"
-1. 调 `papertrade_position_list()` 拿当前持仓
-2. 调 `papertrade_account_query()` 拿账户状态
+1. 调 `papertrade_position_list()` 拿当前持仓（**含现价 / 市值 / 浮盈**）
+2. 调 `papertrade_account_query()` 拿账户状态（**含 total_equity / total_unrealized_pnl / realized_pnl**）
 3. 拼成一段文字 + 一张图
 
-### 用户问"我账户怎么样？"
-1. 同上 + `papertrade_trade_list(limit=10)` 看最近交易
+### 用户问"现在盈利多少？" / "我账户怎么样？" / "今天赚了没？"
+
+> 2026-07-01 修复：之前 `papertrade_position_list` / `papertrade_account_query`
+> 不返回现价，LLM 拿到数据后只能算 cash + avg_cost 自己脑补市值；现在两个
+> 工具都内置 **60s TTL 自动刷报价 + 东财 push2 拉 f43**，确保给用户的
+> "盈利多少" 是真·浮盈而非估算。
+
+1. 调 `papertrade_position_list()` 拿当前持仓（含 `current_price` / `market_value` / `unrealized_pnl`）
+2. 调 `papertrade_account_query()` 拿账户全貌：
+   - `cash` = 当前现金
+   - `position_value` = 持仓市值合计
+   - `total_equity` = `cash + position_value`（**真·总资产**）
+   - `total_unrealized_pnl` = Σ(qty × (current_price - avg_cost))（**持仓浮盈**）
+   - `realized_pnl` = `principal - initial_cash`（**已实现盈亏**）
+   - `total_unrealized_pnl_pct` = 浮盈 / initial_cash × 100%
+3. **用你（早柚）的口吻**回答：现金 / 持仓市值 / 浮盈 / 已实现 / 总资产 / 阶段收益率；
+   若 `quote_source` 多为 "db"/"cost"（报价偏老或刚初始化），主动补一句
+   "持有的现价是开盘前的缓存价"。
+
+### 用户问"为什么盈利显示 0?"
+- 大概率是刚建仓，`quote_source="cost"` 用 `avg_cost` 兜底，导致
+  `unrealized_pnl = (current_price - avg_cost) × qty = 0`。**这是预期行为**
+  ——真实场景下第一次决策刚落库，下一次心跳播报时 quote_source 就会升级
+  为 "live"。
+
+### 用户报障"持仓报价看起来很老?"
+- 看 `quote_source` 字段：
+  - `"live"` = 60s 内新鲜报价
+  - `"db"` = DB 有缓存但超过 60s；此时 60s 后会被自动刷新
+  - `"cost"` = 从未刷过价；通常意味着这个持仓刚 upsert（决策代理落库时）
+- 正常情况下同一会话内 60s 内复用一次东财 API；多个工具调用不会重复打。
 
 ## 四、严禁红线
 
@@ -61,11 +90,18 @@ SayuStock 插件里的"AI 模拟盘"长期能力：
 ## 五、你的工具集（无重叠，每个工具只做一件事）
 
 **主 persona 可见**（category="common"，按 capability_domain 召回）：
-- 业务/账本只读：`papertrade_account_query`（账户元数据）/ `papertrade_position_list`（持仓表）/ `papertrade_trade_list`（流水表）/ `papertrade_watchlist_list`（群友关注表，决策 agent 也用作候选源）
+- 业务/账本只读：
+  - `papertrade_account_query` — 返回账户**真·总资产** = 现金 + 持仓市值（含
+    `total_equity` / `total_unrealized_pnl` / `realized_pnl` /
+    `position_value` / `position_count` / `quote_stale_count`）
+  - `papertrade_position_list` — 返回**含现价**的持仓表（每行带
+    `current_price` / `market_value` / `unrealized_pnl` / `quote_source`）
+  - `papertrade_trade_list` — 流水表
+  - `papertrade_watchlist_list` — 群友关注表（决策 agent 也用作候选源）
 - 通用辅助：`stock_financials`（财报 + 行业类型）/ `stock_indicators`（MA/MACD/RSI/BOLL 等技术指标）/ `stock_is_trading_day`（交易日 + 交易时段）
 
 **仅子代理可见**（category="default" + visible_when）：
-- 写操作：`papertrade_decision_insert`（写决策日志）/ `papertrade_trade_insert`（写流水 + 自动扣/加 cash + 累计 principal）/ `papertrade_position_upsert`（写持仓）/ `papertrade_match_order`（撮合计算 fee，不写库）
+- 写操作：`papertrade_decision_insert`（写决策日志）/ `papertrade_trade_insert`（写流水 + 自动扣/加 cash + 累计 principal）/ `papertrade_position_upsert`（写持仓 + **可选 `last_quote_price`**）/ `papertrade_match_order`（撮合计算 fee，不写库）
 
 **入口**（by_trigger）：
 - `send_init_command` —— 唯一"建账户"路径，6 步全跑
@@ -80,6 +116,23 @@ SayuStock 插件里的"AI 模拟盘"长期能力：
 ⚠️ **已收敛**（不再作为 AI 工具）：
 - ~~`papertrade_account_create`~~ —— 与 trigger `send_init_command` 重叠，统一走 trigger
 - ~~`papertrade_account_update`~~ —— 死代码（无命令 / 流程使用）
+- ~~`papertrade_refresh_quote`~~ —— 2026-07-01 决定**不加**这个独立 tool；
+  报价刷新内嵌于 `papertrade_position_list` / `papertrade_account_query` 内置
+  60s TTL 自动刷。已对齐"只 enrich 旧工具"的偏好。
+
+### 报价刷新机制详解
+
+- `papertrade_position_list` / `papertrade_account_query` 内部都会先读 DB
+  持仓表；对 `last_quote_at` 超过 60s 或为 None 的持仓，调用
+  `stock_papertrade.quote_service.get_quotes_batch` 拉一次东财 push2 接口
+  （轻量 6 字段：`f43,f44,f45,f46,f60,f57`），写回 DB。
+- 60s 内同一 `secid` 多次调用走内存缓存（per-key asyncio.Lock 防止穿透）。
+- `quote_source` 字段标记每条数据的"新鲜度"：
+  - `"live"` = 60s 内新鲜报价
+  - `"db"`   = DB 有缓存但超过 60s
+  - `"cost"` = 从未刷过价，用 `avg_cost` 兜底
+- 决策代理 `papertrade_position_upsert(qty, avg_cost=price, last_quote_price=price)`
+  把成交价当最新报价一并落库，避免刚买的 60s 内显示 `quote_source="cost"`。
 
 ## 六、当用户问"AI 模拟盘能帮我赚钱吗？"
 
@@ -94,12 +147,29 @@ SayuStock 插件里的"AI 模拟盘"长期能力：
 > 1. `check_admin`（pm <= 1）
 > 2. `PaperAccountRepo.get_or_create` 建 SQLModel 账户（100w + balanced）
 > 3. `register_kanban_task` 建 init 树（leaf-root / `papertrade_setup_agent`）
-> 4. `register_kanban_task` 建 period 树（3 子任务：decision / snapshot / monthly_report）
-> 5. `schedule_template` 挂 APScheduler cron `0 9 * * 1-5`
+> 4. `register_kanban_task` 建 period 树（ROOT 非周期容器 + 3 子任务：decision /
+>    snapshot / monthly_report，各自带 `recurring_trigger`）
+> 5. `kick_root(period_root_id)` 一次，触发 3 个子任务各自 arm 到 APScheduler
 > 6. `bind_kanban_init / bind_kanban_period` 回填 root_id
 > 7. **fire-and-forget** 立即 kick init 验证；开盘时段再踢一次 decision
 >
 > 收到"成功"消息即视为完成。不需要主 persona 自己拼流程。
+
+### 主动消息播报策略（buy/sell 必推，hold 不推）
+
+决策代理在跑完 `papertrade_*_insert` 之后，调用方必须自己推群——`run_capability_agent`
+本身是无人格的纯文本执行体，**不会自动推群**。三档策略：
+
+| 决策结果 | 是否推群 | 推送内容 |
+|---|---|---|
+| `action=buy`  | ✅ 必推 | `📈 【AI 模拟盘·操盘播报】自主决策🟢买入 + 成交明细 + 决策理由 + 行情快照` |
+| `action=sell` | ✅ 必推 | `📈 【AI 模拟盘·操盘播报】自主决策🔴卖出 + 成交 + realized_pnl + 决策理由` |
+| `action=hold` | ❌ 不推 | 仅写决策日志（理由详细），群里持仓不动不打扰 |
+
+播报统一走 `gsuid_core.ai_core.proactive.emit_proactive_message`（source="kanban"），
+文本结构由 `stock_papertrade.proactive.build_papertrade_proactive_text(...)` 拼装。
+
+> ⚠️ **历史 bug**：2026-07-01 之前 init-time 立即决策路径虽然写了 buy 交易但**没推群**，导致群里只看到 init 成功消息、看不到买卖播报。当前实现已修：`_kick_immediate_decision` 内部 await capagent + 算副作用 Δ + emit_proactive_message。
 
 ## 八、暂停 / 恢复
 
@@ -121,3 +191,50 @@ SayuStock 插件里的"AI 模拟盘"长期能力：
 2. `papertrade_account_query` 看 enabled
 3. `stock_is_trading_day` 看是否在交易时段
 4. 综合判断 → 用你的人格口吻告诉用户原因
+
+## 十一、执行纪律（2026-07-01 加）
+
+### A 股 T+1 结算（强制）
+
+- **任何今天（T 日）买入的股数** 在下一个交易日（**T+1 日**）开盘前都**不可卖**。
+  这是 A 股真实市场的硬规则，模拟盘一律复刻。
+- `papertrade_trade_insert` 工具在 `side='sell'` 入口自动检查：
+  - 若该股票 **今天** 已有任何 buy 记录（`papertrade_trade_list` 也可查），
+    工具返回 `"⚠️ A 股 T+1 拦截：...今天已买入 X 股..."`；
+  - 你（早柚/决策代理）看到这条要**改 hold**，等明天 09:30 后再 sell。
+- 自我检查：plan sell 前先看 `papertrade_position_list` 里这只股的 `opened_at`
+  或 `papertrade_trade_list(stock_code=...)` 的最早 buy 日期——若 == 今天，
+  改 hold 即可。
+
+### 心跳调度说明（供你回应"为什么 AI 没动"）
+
+- `模拟盘初始化` 后会建两棵 Kanban 树：
+  - `init` 树（leaf-root / `papertrade_setup_agent`，**单次执行**验证账户）
+  - `period` 树（ROOT 非周期容器，**不带** `recurring_trigger`；3 个子任务
+    各自独立挂 APScheduler：30 分钟决策 / 收盘写快照 / 月初出报告）
+- cron 调度机制（2026-07-01 修复，替换掉此前"ROOT 也设 recurring_trigger +
+  schedule_template"的错误实现——那个组合会让 ROOT 一创建就
+  `recurring_status='armed'`，导致 `execute_ready_tasks` 早返、
+  `_maybe_arm_recurring_subtasks` 永远不会被调用，3 个子任务永远不会被
+  arm，这正是"开盘后 AI 心跳从未触发"的根因）：
+  1. period 树创建时 ROOT 的 `recurring_trigger=None`；
+  2. 创建后 `kick_root(period_root_id)` 一次——`execute_ready_tasks` 因为
+     ROOT 不是周期模板而正常往下走，调 `_maybe_arm_recurring_subtasks`
+     把 3 个子任务各自独立 arm 到 APScheduler（`schedule_subtask_template`，
+     与 ROOT 自身状态无关）；
+  3. 此后每个子任务到点由 `recurring._fire_subtask_template` 克隆一个执行
+     实例 + `kick_root(root_task_id)`；进程重启由启动期
+     `restore_armed_subtask_templates` 统一恢复。
+- 关键提示：**A 股交易时段 = 工作日 09:30-11:30 / 13:00-15:00**。subtask
+  1 的 cron `0,30 9-14 * * 1-5` 表示 9:00/9:30/.../14:30，落到 09:00 实际上
+  略早于开盘，但 AI 工具内自带 "step 3 stock_is_trading_day" 检查提前 hold。
+- 哪段时间没看到 AI 动作 = 撮合层 hold（信号弱 / 数据不足 / 风控拦截）
+  → 用 `papertrade_trade_list` + `papertrade_decision_list` 反查。
+
+### 时区
+
+- 撮合时区按 `Asia/Shanghai`（东八区）。系统时钟若漂移到 UTC，
+  T+1 拦截仍按东八区当日判定，不会误放行。
+- cron 解析层（`recurring.py:parse_trigger_spec`）当前**未显式注入时区**，
+  APScheduler 默认 follow system tz；如系统已是东八区无需额外处理。
+  若部署在 UTC 容器里，会沿用 UTC 触发（明天再说）。

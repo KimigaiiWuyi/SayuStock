@@ -227,7 +227,7 @@ async def send_dry_run(bot: Bot, ev: Event):
 
         preflight                  — 校验 agent profile 注册、APScheduler 运行
         Kanban init 树             — leaf-root papertrade_setup_agent
-        Kanban period 树           — 3 子任务 + APScheduler cron 周期模板
+        Kanban period 树           — ROOT 非周期容器，3 子任务各自带 recurring_trigger
         ① setup_agent (LLM)       — 调 papertrade_account_create 真建账户
                                      + 重试 bind_kanban_init/period
         ② 自主决策 (LLM，**不强制**) — LLM 自己判断 buy/sell/hold；
@@ -261,7 +261,6 @@ async def send_dry_run(bot: Bot, ev: Event):
 
     # 顶层 lazy import 失败时给清楚报错；不进 preflight
     try:
-        from gsuid_core.ai_core.planning import recurring as kanban_recurring  # noqa: E402  -- 懒加载
         from gsuid_core.ai_core.planning.kanban import (  # noqa: E402  -- 懒加载
             create_kanban_tree,
         )
@@ -429,23 +428,25 @@ async def send_dry_run(bot: Bot, ev: Event):
             user_pm=0,
             broadcast_targets=[group_id],
             subtasks=subtasks,
-            recurring_trigger="cron:0 9 * * 1-5",
+            recurring_trigger=None,
             recurring_until=None,
             root_agent_profile="",
         )
         root_period = root
         await _db.PaperAccountRepo.bind_kanban_period(group_id, bot_id, root.id)
-        ok: bool = kanban_recurring.schedule_template(root.id, "cron:0 9 * * 1-5")
-        if not ok:
-            raise RuntimeError("schedule_template 返回 False，详见框架 logger")
+        # ROOT 不设 recurring_trigger（同 commands._setup_papertrade_kanban_trees
+        # 的 2026-07-01 修复：ROOT 带 recurring_trigger 会让 create_kanban_tree
+        # 直接把 recurring_status 写成 'armed'，随后 execute_ready_tasks 早返，
+        # _maybe_arm_recurring_subtasks 永远不会被调用，3 个子任务永远不会
+        # 被 arm）。kick_root 一次即可让 3 个子任务各自独立挂上 APScheduler。
+        await kick_root(root.id)
 
     try:
         await _build_period_tree()
         period_lines.append("✅ create_kanban_tree OK")
         period_lines.append(f"   root_id = {root_period.id}")
-        period_lines.append("   subtasks = 3 (period / snapshot / monthly_report)")
-        period_lines.append("   recurring_trigger = cron:0 9 * * 1-5")
-        period_lines.append("   ✅ schedule_template → APScheduler")
+        period_lines.append("   subtasks = 3 (period / snapshot / monthly_report)，各自 recurring_trigger")
+        period_lines.append("   ROOT 非周期（容器）；kick_root → 3 个子任务各自 arm")
         period_lines.append("   bind    → PaperAccount.kanban_period_root_id")
     except Exception as e:
         period_lines.append(f"❌ Kanban period 树失败: {type(e).__name__}: {e}")
@@ -514,250 +515,26 @@ async def send_dry_run(bot: Bot, ev: Event):
     sections.append(setup_block)
 
     # ────────────────────────────────────────────────────────────────────
-    # 通用 helper：snapshot 当前 trades / positions / decisions 计数
+    # 真实交易播报 builder + 副作用 Δ 计算：复用 ``stock_papertrade.proactive``
+    # 共享模块——把"📈 AI 模拟盘操盘播报"模板拼装外置，原 200 多行被替换为
+    # 一个 variant 调度 + 一次调用。压测方只走 "force_*" / "kb_web" variant
+    # 自爆身份，生产路径永远走 "auto"。
     # ────────────────────────────────────────────────────────────────────
-    async def _snapshot() -> tuple[int, int, int]:
-        try:
-            t = await _db.PaperTradeRepo.list_by_account(group_id, bot_id, limit=200)
-            p = await _db.PaperPositionRepo.list_by_account(group_id, bot_id)
-            d = await _db.PaperDecisionRepo.list_recent(group_id, bot_id, limit=200)
-            return (len(t), len(p), len(d))
-        except Exception:
-            return (0, 0, 0)
+    from .proactive import (  # noqa: E402  -- 懒加载；外部模块，重构期暂留
+        build_papertrade_proactive_text,
+        snapshot_decision_state,
+        decision_state_delta,
+    )
+    from .proactive import Variant as _Variant
 
-    async def _delta(baseline: tuple[int, int, int]) -> tuple[int, int, int]:
-        cur = await _snapshot()
-        return (cur[0] - baseline[0], cur[1] - baseline[1], cur[2] - baseline[2])
-
-    # ────────────────────────────────────────────────────────────────────
-    # 真实交易播报 builder：从 DB 动态拼"📈 AI 模拟盘操盘播报"格式文本，
-    # 让 master 看到的就是产品形态（不再用 🧪 [DRY_RUN] 元文本）。
-    # ────────────────────────────────────────────────────────────────────
-    async def _build_proactive_text(
-        step_no: str,
-        trades_d: int,
-        positions_d: int,
-        decisions_d: int,
-        fallback_text: str = "",
-    ) -> str:
-        """根据 step_no 从 DB 拼"📈 AI 模拟盘操盘播报"格式文本。
-
-        Args:
-            step_no: 压测段编号 "②" / "③" / "④" / "⑤" / "⑥"
-            trades_d / positions_d / decisions_d: 副作用 Δ 计数
-            fallback_text: DB 查询失败 / 账户不存在时退化到的元文本
-        """
-        try:
-            acc = await _db.PaperAccountRepo.get(group_id, bot_id)
-            latest_decision: SayuPaperDecision | None = None
-            latest_trade: SayuPaperTrade | None = None
-            if decisions_d > 0:
-                ds = await _db.PaperDecisionRepo.list_recent(group_id, bot_id, limit=1)
-                if ds:
-                    latest_decision = ds[0]
-            if trades_d > 0:
-                ts = await _db.PaperTradeRepo.list_by_account(group_id, bot_id, limit=1)
-                if ts:
-                    latest_trade = ts[0]
-            positions_now = await _db.PaperPositionRepo.list_by_account(group_id, bot_id)
-        except Exception:
-            return fallback_text  # 退化到元文本
-
-        if acc is None:
-            return fallback_text
-
-        lines: list[str] = ["📈 【AI 模拟盘 · 操盘播报】", f"群 {group_id} · 模式 {acc.mode}", ""]
-        action_map: dict[str, str] = {"buy": "🟢 买入", "sell": "🔴 卖出", "hold": "⏸️ 持币"}
-
-        # 规范化 reason：删违规嵌入段 + 控制字符归一 + 多空格压缩 + 上限 200 字
-        # （papertrade_decision_insert 在 ai_tools.py 那一层已经限制 reason ≤ 200，
-        #   这里保持一致才能让主动消息展示完整决策逻辑，不再被截到 80 字）
-        import re as _re
-
-        _reason_drops: list[str] = [
-            "账户现金",
-            "📊",
-            "📈",
-            "💰",
-            "当前持仓",
-            "剩余持仓",
-            "持仓已清空",
-            "持仓变动",
-            "decision_id=",
-            "trade_id=",
-            "pos_id=",
-            "\n📋",
-            "\n🔔",
-            "\n## ",
-            "---",
-        ]
-        _REASON_DISPLAY_LIMIT: int = 200
-        clean_reason: str = ""
-        if latest_decision and latest_decision.reason:
-            raw: str = latest_decision.reason
-            for marker in _reason_drops:
-                idx = raw.find(marker)
-                if idx >= 0:
-                    raw = raw[:idx]
-            raw = _re.sub(r"\s+", " ", raw).strip()
-            if len(raw) > _REASON_DISPLAY_LIMIT:
-                clean_reason = raw[:_REASON_DISPLAY_LIMIT].rstrip() + "…"
-            else:
-                clean_reason = raw
-
-        # indicators JSON 摘要：取已知 key 拼一段紧凑文本
-        # 已知白名单 key（覆盖 P0 新增的 BOLL/CCI/BBI + 银行股专属字段）
-        ind_summary: str = ""
-        if latest_decision and latest_decision.indicators:
-            try:
-                import json as _json
-
-                ip = _json.loads(latest_decision.indicators)
-                if isinstance(ip, dict):
-                    # 主白名单：财报 + 技术 + 银行专属
-                    keys_show: list[str] = [
-                        # 财报（标准）
-                        "roe",
-                        "revenue_yoy",
-                        "profit_yoy",
-                        "gross_margin",
-                        "net_margin",
-                        "debt_ratio",
-                        "eps",
-                        "bps",
-                        # 财报（银行专属）
-                        "jroa",
-                        "net_interest_margin",
-                        "npl_ratio",
-                        "provision_coverage",
-                        "core_capital_adequacy_ratio",
-                        # 技术（已有）
-                        "ma5",
-                        "ma20",
-                        "ma60",
-                        "rsi6",
-                        "rsi14",
-                        "macd_dif",
-                        # 技术（P0 新增）
-                        "boll20_mid",
-                        "boll20_upper",
-                        "boll20_lower",
-                        "boll20_bandwidth",
-                        "boll20_pct_b",
-                        "boll60_mid",
-                        "boll60_bandwidth",
-                        "boll_opening_ratio_short_vs_mid",
-                        "cci14",
-                        "bbi",
-                    ]
-                    parts: list[str] = []
-                    for k in keys_show:
-                        if k in ip and ip[k] is not None:
-                            v = ip[k]
-                            if isinstance(v, bool):
-                                parts.append(f"{k}={'✓' if v else '✗'}")
-                            elif isinstance(v, (int, float)):
-                                parts.append(f"{k}={v:.3g}")
-                            else:
-                                # 字符串值（如 'bank' / 'standard'）截断到 20 字
-                                parts.append(f"{k}={str(v)[:20]}")
-                    if parts:
-                        ind_summary = " · ".join(parts[:10])
-                    else:
-                        # Fallback：白名单都没命中（如 LLM 把市场环境 dict 直接塞进
-                        # indicators）。**不再**用 str(dict)[:160] 截断烂尾，改成
-                        # 列键名 + 简短提示，避免显示 'market_breadth={'rise':100...'
-                        extra_keys: list[str] = [k for k in ip.keys() if not str(k).startswith("_")][:8]
-                        if extra_keys:
-                            ind_summary = f"（{len(ip)} 个字段，白名单未命中，键名={','.join(extra_keys)}）"
-                        else:
-                            ind_summary = "（指标为空）"
-            except Exception:
-                pass
-
-        if step_no == "②":
-            action_zh: str = action_map.get(latest_decision.action if latest_decision else "hold", "⏸️ 持币")
-            lines.append(f"【② 自主决策】{action_zh}")
-            if latest_decision:
-                lines.append(f"决策 ID: #{latest_decision.id}")
-                if clean_reason:
-                    lines.append(f"📝 决策理由：{clean_reason}")
-                if ind_summary:
-                    lines.append(f"📈 行情快照：{ind_summary}")
-            lines.append(f"💰 账户现金：¥{acc.cash:,.2f}")
-            lines.append("")
-            if positions_now:
-                lines.append("📊 当前持仓：")
-                for pp in positions_now[:5]:
-                    lines.append(f"  - {pp.stock_code} {pp.stock_name} × {pp.qty:,} @ ¥{pp.avg_cost:.2f}")
-            else:
-                lines.append("📊 当前持仓：无")
-
-        elif step_no == "③":
-            lines.append("【③ 强制买入】🟢")
-            if latest_trade:
-                t = latest_trade
-                lines.append(f"成交：{t.stock_code} {t.stock_name} × {t.qty:,} @ ¥{t.price:.2f}")
-                lines.append(f"买入金额：¥{t.amount:,.2f}")
-                lines.append(f"手续费（佣金 + 印花税）：¥{t.fee:.2f}")
-                lines.append(f"账户现金：¥{acc.cash:,.2f}（已扣 {t.amount + t.fee:,.2f}）")
-            lines.append("")
-            lines.append("📊 持仓变动：")
-            for pp in positions_now[:5]:
-                lines.append(f"  - {pp.stock_code} {pp.stock_name} × {pp.qty:,} @ ¥{pp.avg_cost:.2f}")
-            if latest_decision:
-                lines.append("")
-                lines.append(f"📝 决策记录 #{latest_decision.id}（action=buy）")
-
-        elif step_no == "④":
-            lines.append("【④ 强制平仓】🔴")
-            if latest_trade:
-                t = latest_trade
-                lines.append(f"成交：{t.stock_code} {t.stock_name} × {t.qty:,} @ ¥{t.price:.2f}")
-                lines.append(f"卖出金额：¥{t.amount:,.2f}")
-                lines.append(f"手续费（佣金 + 印花税）：¥{t.fee:.2f}")
-                lines.append(f"已实现盈亏：¥{t.realized_pnl:+,.2f}")
-                lines.append(f"账户现金：¥{acc.cash:,.2f}")
-            lines.append("")
-            if positions_now:
-                lines.append("📊 剩余持仓：")
-                for pp in positions_now[:5]:
-                    lines.append(f"  - {pp.stock_code} {pp.stock_name} × {pp.qty:,} @ ¥{pp.avg_cost:.2f}")
-            else:
-                lines.append("📊 持仓已清空（全部卖出）")
-            if latest_decision:
-                lines.append("")
-                lines.append(f"📝 决策记录 #{latest_decision.id}（action=sell）")
-
-        elif step_no == "⑤":
-            lines.append("【⑤ 强制 HOLD】⏸️")
-            lines.append("LLM 决策：HOLD（不调撮合 / 流水 / 持仓，仅写决策日志）")
-            if latest_decision:
-                lines.append(f"决策 ID: #{latest_decision.id}")
-                if clean_reason:
-                    lines.append(f"📝 决策理由：{clean_reason}")
-                if ind_summary:
-                    lines.append(f"📈 行情快照：{ind_summary}")
-            lines.append(f"💰 账户现金：¥{acc.cash:,.2f}（无变动）")
-            lines.append("")
-            if positions_now:
-                lines.append("📊 当前持仓（维持）：")
-                for pp in positions_now[:5]:
-                    lines.append(f"  - {pp.stock_code} {pp.stock_name} × {pp.qty:,} @ ¥{pp.avg_cost:.2f}")
-            else:
-                lines.append("📊 当前持仓：无")
-
-        elif step_no == "⑥":
-            lines.append("【⑥ KB + Web 通路验证】✅")
-            lines.append("已验证 search_knowledge / web_search_tool / get_latest_news / papertrade_account_query")
-            lines.append(f"账户现金：¥{acc.cash:,.2f}（不变）")
-
-        else:
-            return fallback_text
-
-        lines.append("")
-        lines.append("🔔 DRY_RUN · 仅压测链路验证，非投资建议")
-        return "\n".join(lines)
+    # variant 调度：段编号 → 共享模块 variant 字面量
+    _STEP_VARIANT: dict[str, _Variant] = {
+        "②": "auto",
+        "③": "force_buy",
+        "④": "force_sell",
+        "⑤": "force_hold",
+        "⑥": "kb_web",
+    }
 
     # ────────────────────────────────────────────────────────────────────
     # 通用 runner：跑一次 decision_agent + 副作用 Δ + emit 主动消息
@@ -779,7 +556,7 @@ async def send_dry_run(bot: Bot, ev: Event):
         positions_d: int = 0
         decisions_d: int = 0
         proactive_ok: bool = False
-        baseline = await _snapshot()
+        baseline = await snapshot_decision_state(group_id, bot_id)
 
         try:
             result = await run_capability_agent(
@@ -800,25 +577,30 @@ async def send_dry_run(bot: Bot, ev: Event):
             lines.append(f"❌ LLM 调用失败: {type(e).__name__}: {e}")
 
         try:
-            trades_d, positions_d, decisions_d = await _delta(baseline)
+            trades_d, positions_d, decisions_d = await decision_state_delta(
+                baseline, group_id, bot_id
+            )
         except Exception as e:
             lines.append(f"❌ 副作用查询失败: {type(e).__name__}: {e}")
 
         # 每段后 emit_proactive_message（即使 LLM 失败也推，验证链路）
         # 真实播报：从 DB 动态拼"📈 AI 模拟盘操盘播报"，让 master 看到的就是产品形态。
         #   ②/③/④/⑤ 都会拼 — ⑥ (KB/Web 通路) 保留元文本因为没有真实交易可播
-        #   fallback_text 传给 _build_proactive_text：DB 异常 / 账户不存在时退化用
-        text: str = (
-            await _build_proactive_text(
-                step_no,
-                trades_d,
-                positions_d,
-                decisions_d,
-                fallback_text=proactive_text,
-            )
-            if step_no in ("②", "③", "④", "⑤", "⑥")
-            else proactive_text
-        )
+        #   fallback_text 传给 build_papertrade_proactive_text：DB 异常 / 账户不存在时退化用
+        text: str = proactive_text
+        if step_no in _STEP_VARIANT:
+            try:
+                text = await build_papertrade_proactive_text(
+                    group_id,
+                    bot_id,
+                    variant=_STEP_VARIANT[step_no],
+                    trades_d=trades_d,
+                    positions_d=positions_d,
+                    decisions_d=decisions_d,
+                    fallback_text=proactive_text,
+                )
+            except Exception as e:
+                lines.append(f"❌ build_proactive_text 失败: {type(e).__name__}: {e}，回退到 proactive_text")
         try:
             proactive_ok = await emit_proactive_message(
                 ev,

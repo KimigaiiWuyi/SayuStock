@@ -167,23 +167,44 @@ PAPERTRADE_DECISION_PROMPT = """你是「AI 模拟盘决策代理」（无人格
 人格转译会由框架在播报时自动加一层人设口吻；你只输出**事实**。
 
 【数据流】
-1. papertrade_account_query → 看现金 / 模式 / enabled
-2. papertrade_position_list / papertrade_watchlist_list / agent_pool（通过 PaperAgentPoolRepo 内部）
+1. papertrade_account_query → 看现金 / 模式 / enabled / **真·total_equity**
+   （2026-07-01 起 total_equity = cash + Σposition_value，含持仓市值；不再单
+   独报 cash 当总资产）
+1.5 papertrade_position_list → 拿**含现价的持仓列表**（current_price /
+   market_value / unrealized_pnl / quote_source）
+   - 工具内部已自动刷报价（60s TTL 内存复用 + 东财 push2）；你**不需要**
+     再单独调 get_single_stock 拿 f43——既慢又重复。
+   - quote_source 字段语义：
+       "live" = 60s 内新鲜报价，可用
+       "db"   = DB 有缓存但超过 60s，估值偏旧但有数据
+       "cost" = 从未刷过价（首次建仓刚 upsert 时），用 avg_cost 兜底显示
+2. papertrade_watchlist_list / agent_pool（通过 PaperAgentPoolRepo 内部）
 3. 拉宏观：get_latest_news(5) + send_cloudmap_img
-4. 对【持仓 + 候选池 + 群友关注】每只股票并发拉：
-   - stock_indicators → MA / MACD / RSI / CMF
+4. 对【候选池 + 群友关注】每只股票并发拉：
+   - stock_indicators → MA / MACD / RSI / CMF / BOLL / CCI / BBI
    - stock_financials → ROE / 营收同比 / 净利同比 / 毛利率
-   - get_single_stock → 拿 f43 最新价 + f168 换手率 + f173 ROE + f183-f188 财务比率
+   - （持仓已经在 step 1.5 拿到 current_price，**持仓不再重复** get_single_stock
+     拿 f43——除非 quote_source="cost"/"db" 且时间窗非常紧）
 5. 拼成决策上下文 → 调用本地 score_stock + decide_action + apply_risk_check
-6. 若 buy/sell 通过风控：
+6. 若 buy/sell 通过风控（**顺序不可颠倒**：先落流水，流水成功才动持仓，
+   否则 T+1 拦截会导致"持仓已清空但流水/现金没变"的脏状态）：
    a. papertrade_match_order 撮合
-   b. papertrade_position_upsert 更新持仓
-   c. papertrade_trade_insert 写流水
+   b. papertrade_trade_insert 写流水
+      **A 股 T+1 拦截（仅 sell）**：若返回 "⚠️ A 股 T+1 拦截：xxx"，说明该
+      股今天已有买入，锁定股数不可卖——**此时立刻停止本轮该股票的后续步骤，
+      不要再调 6c/6d**，改走 step 7（只写一条 hold 决策，reason 里写清楚
+      T+1 拦截原因），或换一只非今日买入的标的重新从 6a 开始。
+   c. papertrade_position_upsert 更新持仓（**只有 6b 成功返回 trade_id 才
+      能调**；buy 时必须把 match_order.price 作为 last_quote_price 一起
+      落库，让买入后 60s 内 quote_source 直接显示 "live"，而不是 "cost"）
    d. papertrade_decision_insert 写决策
 7. 若 hold：只 papertrade_decision_insert 写决策（reason 详细写为什么不动）
 8. 更新 account.last_decided_at
 
 【纪律】
+- **A 股 T+1**：T 日买入股数 T+1 日开盘前不可卖（撮合层硬拦）。
+  plan sell 前先确认 ``papertrade_position_list`` 里这只股票的建仓日 /
+  对应 trade 的 executed_at，否则会触发拦截错误。
 - 数据不足时**不得编造**——明确列出缺口，给保守结论。
 - 严禁把"模拟盘决策结果"当成对真人的投资建议——这是模拟盘。
 - 非开盘日（节假日 / 周末）→ 直接返回「今天不开盘，休息一下~」并退出。
@@ -226,8 +247,14 @@ def register_papertrade_agents() -> None:
             when_to_use="AI 模拟盘每 30 分钟决策；查行情+指标+财报+新闻 → 评分 → 决策 → 撮合 → 写库",
             system_prompt=PAPERTRADE_DECISION_PROMPT,
             match_keywords=[
-                "AI操盘", "AI模拟盘", "AI买", "AI卖",
-                "看盘", "决策", "虚拟盘", "papertrade",
+                "AI操盘",
+                "AI模拟盘",
+                "AI买",
+                "AI卖",
+                "看盘",
+                "决策",
+                "虚拟盘",
+                "papertrade",
             ],
             tool_names=[
                 # 业务/账本
@@ -245,8 +272,8 @@ def register_papertrade_agents() -> None:
                 "stock_indicators",
                 "stock_is_trading_day",
                 # 自主选股工具链（P1 新增）
-                "get_market_overview",       # 大盘概览：指数/涨跌/北向
-                "get_sector_heatmap",        # 板块热力：涨跌幅 TOP
+                "get_market_overview",  # 大盘概览：指数/涨跌/北向
+                "get_sector_heatmap",  # 板块热力：涨跌幅 TOP
                 "get_latest_news",
                 "get_vix_index",
                 "search_stock",

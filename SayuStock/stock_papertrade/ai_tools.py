@@ -35,7 +35,7 @@
 
 import json
 import datetime as _dt
-from typing import TypedDict
+from typing import Any, Dict, TypedDict
 
 from pydantic_ai import RunContext
 
@@ -44,6 +44,7 @@ from gsuid_core.ai_core.register import ai_tools
 
 from . import db
 from .indicators import klines_to_df, klines_to_df_mins, compute_indicators
+from .quote_service import quote_service
 from .trading_calendar import is_trading_time, trading_day_summary, is_a_share_trading_day
 from ..utils.stock.request import get_gg
 from ..utils.eastmoney_finance import (
@@ -53,6 +54,7 @@ from ..utils.eastmoney_finance import (
     get_financial_snapshot,
 )
 from ..utils.stock.request_utils import get_code_id
+from ..utils.database.papertrade_models import SayuPaperPosition
 
 
 # ============================================================
@@ -64,7 +66,13 @@ class _AccountView(TypedDict):
     cash: float
     initial_cash: float
     principal: float
+    position_value: float
     total_equity: float
+    total_unrealized_pnl: float
+    total_unrealized_pnl_pct: float
+    realized_pnl: float
+    position_count: int
+    quote_stale_count: int
     mode: str
     frequency_minutes: int
     enabled: int
@@ -79,6 +87,12 @@ class _PositionItem(TypedDict):
     secid: str
     qty: int
     avg_cost: float
+    current_price: float
+    market_value: float
+    unrealized_pnl: float
+    unrealized_pnl_pct: float
+    quote_age_seconds: int | None
+    quote_source: str  # "live" | "db" | "cost"
     opened_at: str | None
 
 
@@ -158,6 +172,156 @@ def _visible_to_papertrade_agent(ctx: RunContext[ToolContext]) -> bool:
 
 
 # ============================================================
+# 0) Enrich Helper：把持仓补上"现价 / 市值 / 浮盈"
+#
+# 2026-07-01 新增：``papertrade_position_list`` / ``papertrade_account_query``
+# 之前不返回现价，agent 拿到数据后无法算持仓市值 / 浮盈 / 总资产。本 helper
+# 自动：
+#
+#   1. 读 DB 持仓
+#   2. 找出 ``last_quote_at`` 超过 ``max_stale_seconds`` 的行（含 None）
+#   3. 把 secid 喂 ``quote_service.get_quotes_batch``（60s TTL 内存缓存 + 东财 push2）
+#   4. 成功的报价 ``PaperPositionRepo.bulk_set_quote`` 写回 DB（让下次调用立即看到）
+#   5. 失败的报价降级 ``last_quote_price → avg_cost``
+#
+# 返回值每条带 ``quote_source`` 字段："live" / "db" / "cost"，LLM 据此知道
+# 数据新鲜度，避免拿着过期报价瞎决策。
+# ============================================================
+from gsuid_core.logger import logger as _gslogger  # noqa: E402  -- pyright 看不见根包导入
+
+
+async def _get_enriched_positions(
+    group_id: str,
+    bot_id: str,
+    *,
+    max_stale_seconds: int = 60,
+) -> list[tuple[SayuPaperPosition, dict]]:
+    """拿 enriched 后的持仓列表。
+
+    Args:
+        group_id: 群号。
+        bot_id: bot_id。
+        max_stale_seconds: 报价超过多少秒就算 stale，触发刷新。
+
+    Returns:
+        ``[(position, enrichment_dict), ...]`` 其中 ``enrichment_dict``:
+        ``current_price`` / ``market_value`` / ``unrealized_pnl`` /
+        ``unrealized_pnl_pct`` / ``quote_age_seconds`` / ``quote_source``
+        （"live"=60s 内/db=已有缓存但超龄/cost=未刷过用均价兜底）。
+        ``quote_age_seconds`` 为 None 表示从未刷过价。
+    """
+    positions: list[SayuPaperPosition] = await db.PaperPositionRepo.list_by_account(group_id, bot_id)
+    if not positions:
+        return []
+
+    now = _dt.datetime.now()
+    # 1) 找出需要刷新的持仓
+    to_refresh: list[SayuPaperPosition] = []
+    for p in positions:
+        if not p.last_quote_at:
+            to_refresh.append(p)
+            continue
+        try:
+            age = (now - p.last_quote_at).total_seconds()
+        except TypeError:
+            # 老库 last_quote_at 是 None / 字符串乱码等异常情况
+            to_refresh.append(p)
+            continue
+        if age > max_stale_seconds:
+            to_refresh.append(p)
+
+    # 2) 批量拉一次报价（缓存优先；缺失项并发穿透）。结果**就地复用**给"写 DB"
+    #    和"组装 enrichment"，避免双重 HTTP 调用。
+    secid_to_fresh: Dict[str, float] = {}
+    if to_refresh:
+        secids = [p.secid for p in to_refresh if p.secid]
+        if secids:
+            try:
+                fetched = await quote_service.get_quotes_batch(secids)
+            except Exception as e:
+                _gslogger.debug(f"[SayuStock][PaperTrade] quote_service.get_quotes_batch 异常：{e}")
+                fetched = {}
+            secid_to_fresh = {secid: float(price) for secid, price in fetched.items() if price is not None}
+            # 3) 写回 DB（让下一次调用立即看到新价，省一次 API）
+            if secid_to_fresh:
+                writes: list[dict] = [
+                    {
+                        "stock_code": p.stock_code,
+                        "price": secid_to_fresh[p.secid],
+                        "at": now,
+                    }
+                    for p in to_refresh
+                    if p.secid in secid_to_fresh
+                ]
+                if writes:
+                    try:
+                        await db.PaperPositionRepo.bulk_set_quote(writes, group_id, bot_id)
+                    except Exception as e:
+                        # 老库可能列未迁移完；这里 swallow 不影响主流程
+                        _gslogger.debug(f"[SayuStock][PaperTrade] bulk_set_quote 写 DB 失败（降级）：{e}")
+
+    # 4) 拼 enrichment——不再二次读 DB，组合原 position + secid_to_fresh
+    enriched: list[tuple[SayuPaperPosition, dict]] = []
+    for p in positions:
+        fresh = secid_to_fresh.get(p.secid) if p.secid else None
+        if fresh is not None:
+            current_price = fresh
+            quote_source = "live"
+            quote_age = 0
+            last_quote_at = now
+        elif p.last_quote_price is not None and p.last_quote_at is not None:
+            current_price = p.last_quote_price
+            quote_source = "db"
+            try:
+                quote_age = int((now - p.last_quote_at).total_seconds())
+            except TypeError:
+                quote_age = None
+            last_quote_at = p.last_quote_at
+        else:
+            # 用均价兜底；最后兜
+            current_price = p.avg_cost if p.avg_cost else 0.0
+            quote_source = "cost"
+            quote_age = None
+            last_quote_at = None
+
+        cost_basis = p.avg_cost * p.qty if p.avg_cost else 0.0
+        market_value = current_price * p.qty
+        unrealized_pnl = (current_price - p.avg_cost) * p.qty if p.avg_cost else 0.0
+        unrealized_pnl_pct = (unrealized_pnl / cost_basis * 100) if cost_basis else 0.0
+
+        enrichment: dict[str, Any] = {
+            "current_price": round(current_price, 4),
+            "market_value": round(market_value, 2),
+            "unrealized_pnl": round(unrealized_pnl, 2),
+            "unrealized_pnl_pct": round(unrealized_pnl_pct, 4),
+            "quote_age_seconds": quote_age,
+            "quote_source": quote_source,
+            "last_quote_at": last_quote_at.isoformat() if last_quote_at else None,
+        }
+        enriched.append((p, enrichment))
+    return enriched
+
+
+def _aggregate_enriched(
+    enriched: list[tuple[SayuPaperPosition, dict]],
+) -> dict[str, float]:
+    """聚合 enriched 持仓用于 ``papertrade_account_query`` 输出。"""
+    position_value: float = 0.0
+    total_unrealized_pnl: float = 0.0
+    quote_stale_count: int = 0
+    for _, e in enriched:
+        if e["quote_source"] != "live":
+            quote_stale_count += 1
+        position_value += float(e["market_value"])
+        total_unrealized_pnl += float(e["unrealized_pnl"])
+    return {
+        "position_value": round(position_value, 2),
+        "total_unrealized_pnl": round(total_unrealized_pnl, 2),
+        "quote_stale_count": quote_stale_count,
+    }
+
+
+# ============================================================
 # 1) 业务/账本工具（6 个，主人格 + 能力代理共用）
 # ============================================================
 
@@ -170,6 +334,11 @@ async def papertrade_account_query(
 ) -> str:
     """查询 AI 模拟盘账户状态（当前群或指定群）。
 
+    2026-07-01 修复：``total_equity`` 现在是 **真·总资产 = 现金 + Σ持仓市值**，
+    不再返回 cash-only；同时给出 ``total_unrealized_pnl`` / ``realized_pnl`` /
+    ``position_value`` / ``position_count`` / ``quote_stale_count``，agent
+    可以直接做盈亏推算。
+
     Args:
         group_id: 群号；留空用当前会话群号
         bot_id: 平台；留空用当前 bot
@@ -181,6 +350,20 @@ async def papertrade_account_query(
     acc = await db.PaperAccountRepo.get(gid, bid)
     if not acc:
         return f"ℹ️ 群 {gid} 在 {bid} 上尚未开通 AI 模拟盘。发送「AI操盘初始化」开户。"
+
+    # ── enriched 持仓聚合（自动刷报价，含浮盈 / 现价） ──
+    enriched: list[tuple[SayuPaperPosition, dict]] = await _get_enriched_positions(gid, bid)
+    agg: dict[str, float] = _aggregate_enriched(enriched)
+    position_value: float = agg["position_value"]
+    total_unrealized_pnl: float = agg["total_unrealized_pnl"]
+    quote_stale_count: int = int(agg["quote_stale_count"])
+
+    total_equity: float = round(acc.cash + position_value, 2)
+    realized_pnl: float = round(acc.principal - acc.initial_cash, 2)
+    total_unrealized_pnl_pct: float = (
+        round(total_unrealized_pnl / acc.initial_cash * 100, 4) if acc.initial_cash else 0.0
+    )
+
     last_decided: _dt.datetime | None = acc.last_decided_at
     view: _AccountView = {
         "group_id": gid,
@@ -188,7 +371,13 @@ async def papertrade_account_query(
         "cash": acc.cash,
         "initial_cash": acc.initial_cash,
         "principal": acc.principal,
-        "total_equity": acc.cash + 0,  # 简版；详细含持仓市值由调用方补
+        "position_value": position_value,
+        "total_equity": total_equity,
+        "total_unrealized_pnl": total_unrealized_pnl,
+        "total_unrealized_pnl_pct": total_unrealized_pnl_pct,
+        "realized_pnl": realized_pnl,
+        "position_count": len(enriched),
+        "quote_stale_count": quote_stale_count,
         "mode": acc.mode,
         "frequency_minutes": acc.frequency_minutes,
         "enabled": acc.enabled,
@@ -205,17 +394,27 @@ async def papertrade_position_list(
     group_id: str = "",
     bot_id: str = "",
 ) -> str:
-    """列出某群 AI 模拟盘当前持仓。"""
+    """列出某群 AI 模拟盘当前持仓（含现价 / 市值 / 浮盈）。
+
+    2026-07-01 修复：每行新增 ``current_price`` / ``market_value`` /
+    ``unrealized_pnl`` / ``unrealized_pnl_pct`` / ``quote_age_seconds`` /
+    ``quote_source`` 字段。``quote_source`` 语义：
+        ``"live"`` = 60s 内新鲜报价
+        ``"db"``   = DB 有缓存但超过 max_stale_seconds（默认 60s）
+        ``"cost"`` = 从未刷过价，用 avg_cost 兜底
+    """
     gid: str = _resolve_group_id(ctx, group_id)
     bid: str = _resolve_bot_id(ctx, bot_id)
     if not gid or not bid:
         return "⚠️ 无法确定 group_id/bot_id"
-    positions = await db.PaperPositionRepo.list_by_account(gid, bid)
-    if not positions:
+
+    enriched: list[tuple[SayuPaperPosition, dict]] = await _get_enriched_positions(gid, bid)
+    if not enriched:
         return f"ℹ️ 群 {gid} 当前无持仓。"
+
     items: list[_PositionItem] = []
-    for p in positions:
-        opened: _dt.datetime | None = p.opened_at
+    for p, e in enriched:
+        opened_iso = p.opened_at.isoformat() if p.opened_at else None
         items.append(
             {
                 "stock_code": p.stock_code,
@@ -223,7 +422,13 @@ async def papertrade_position_list(
                 "secid": p.secid,
                 "qty": p.qty,
                 "avg_cost": p.avg_cost,
-                "opened_at": opened.isoformat() if opened else None,
+                "current_price": e["current_price"],
+                "market_value": e["market_value"],
+                "unrealized_pnl": e["unrealized_pnl"],
+                "unrealized_pnl_pct": e["unrealized_pnl_pct"],
+                "quote_age_seconds": e["quote_age_seconds"],
+                "quote_source": e["quote_source"],
+                "opened_at": opened_iso,
             }
         )
     return json.dumps(items, ensure_ascii=False)
@@ -414,9 +619,35 @@ async def papertrade_trade_insert(
     avg_cost 记账"的差额在卖出现金里补回来。如果 LLM 在 realized_pnl
     里填 0 但实际上 prices 有差，cash 会累计偏差；调用方请按
     (sell_price - avg_cost) * qty - sell_fee 严格计算后传入。
+
+    **A 股 T+1 拦截**（2026-07-01 加）：``side='sell'`` 时若该股 **今天**
+    有任何买入记录，对应锁定股数即使有也不能卖。A 股 T+1 规则要求 "T 日买
+    入，T+1 日开盘前不可卖"，错误信息直接返回给 LLM 让它调整决策（改 hold
+    或换只老的卖）。其余 sell（昨天的买）合法。
     """
     gid: str = _resolve_group_id(ctx)
     bid: str = _resolve_bot_id(ctx)
+
+    # ── A 股 T+1 拦截 ──
+    if side == "sell":
+        # 用东八区当天日期（系统时钟如果漂移到 UTC，sell 拦截可能误判）
+        try:
+            from zoneinfo import ZoneInfo
+
+            today_cn = _dt.datetime.now(ZoneInfo("Asia/Shanghai")).date()
+        except Exception:
+            today_cn = _dt.date.today()
+        try:
+            locked_qty: int = await db.PaperTradeRepo.locked_qty_today(gid, bid, stock_code, today=today_cn)
+        except Exception:
+            locked_qty = 0  # 防御：DB 异常不要阻塞 sell，让撮合层兜底
+        if locked_qty > 0:
+            return (
+                f"⚠️ A 股 T+1 拦截：{stock_code} {stock_name or ''}今天已买入 "
+                f"{locked_qty} 股，按 A 股结算规则需留仓到下一交易日开盘前才可卖；"
+                f"请改 hold，或换一只非今天买入的标的卖。"
+            )
+
     try:
         t = await db.PaperTradeRepo.append_with_cash_update(
             gid,
@@ -458,6 +689,7 @@ async def papertrade_position_upsert(
     secid: str,
     qty: int,
     avg_cost: float,
+    last_quote_price: float = 0.0,
 ) -> str:
     """更新持仓（qty=0 时删除记录；仅 papertrade_*_agent 调用）。
 
@@ -465,10 +697,15 @@ async def papertrade_position_upsert(
     在同一 session 内自动维护。position_upsert 只操作持仓表
     (SayuPaperPosition)：qty>0 时 upsert，qty=0 时 DELETE 行。
 
+    ``last_quote_price``（2026-07-01 新增，可选）：决策代理在 buy 时把
+    ``match_order.price`` 直接写进 ``SayuPaperPosition.last_quote_price``，
+    让下一次心跳开播时该持仓显示 ``quote_source="live"`` 而不是 "cost"。
+    不传或传 0 时不更新报价字段（保留历史值）。
+
     调用顺序示例（buy 路径）：
-        1. papertrade_match_order(buy)  → 拿 fee_total / actual_qty / amount
+        1. papertrade_match_order(buy)  → 拿 fee_total / actual_qty / amount / price
         2. papertrade_trade_insert(buy)  → 写 trade + 自动扣 cash
-        3. papertrade_position_upsert(qty, avg_cost=price)  → 写持仓
+        3. papertrade_position_upsert(qty, avg_cost=price, last_quote_price=price)  → 写持仓
         4. papertrade_decision_insert(action='buy', trade_id=...)
     """
     gid: str = _resolve_group_id(ctx)
@@ -481,6 +718,8 @@ async def papertrade_position_upsert(
         secid=secid,
         qty=qty,
         avg_cost=avg_cost,
+        last_quote_price=last_quote_price if last_quote_price > 0 else None,
+        last_quote_at=_dt.datetime.now() if last_quote_price and last_quote_price > 0 else None,
     )
     return f"ok pos_id={p.id if p else 0}  （cash 由 trade_insert 自动维护）"
 

@@ -65,6 +65,13 @@ class SayuPaperPosition(BaseIDModel, table=True):
     secid: str = Field(default="", title="东财 secid")
     qty: int = Field(default=0, title="持仓股数（100 整手）")
     avg_cost: float = Field(default=0.0, title="加权平均成本")
+    # 2026-07-01 新增：报价缓存。决策代理 / refresh tool 拿到的最新价
+    # 直接落库，让 ``papertrade_position_list`` / ``papertrade_account_query``
+    # 即使在不开盘 / API 暂时不可达时也能算出持仓市值和浮盈。
+    # - 老库通过文件末尾 ``exec_list`` 的 ALTER TABLE 加列（trans_adapter 兜底）
+    # - 旧数据全为 None；首次刷新前用 ``avg_cost`` 兜底显示（``quote_source='cost'``）
+    last_quote_price: Optional[float] = Field(default=None, title="最新报价缓存")
+    last_quote_at: Optional[datetime] = Field(default=None, title="报价时间戳")
     opened_at: Optional[datetime] = Field(default=None, title="首次建仓时间")
     updated_at: Optional[datetime] = Field(default=None, title="更新时间")
 
@@ -273,5 +280,13 @@ exec_list.extend(
         # PostgreSQL
         'CREATE UNIQUE INDEX IF NOT EXISTS ux_sayupaperaccount_gid_bid '
         'ON sayupaperaccount (group_id, bot_id);',
+        # ─── 2026-07-01 迁移：SayuPaperPosition 加 last_quote_price + last_quote_at ───
+        # SQLite / PostgreSQL 老版本不支持 ADD COLUMN IF NOT EXISTS；trans_adapter 已经
+        # 用 try/except pass 兜底（重复执行 → 第二次失败无害），所以直接 ADD COLUMN 即可。
+        'ALTER TABLE sayupaperposition ADD COLUMN last_quote_price REAL;',
+        'ALTER TABLE sayupaperposition ADD COLUMN last_quote_at DATETIME;',
+        # MySQL 同义（DATETIME 直接用，REAL → DOUBLE 也能存，但保留 REAL 跨方言一致）
+        'ALTER TABLE sayupaperposition ADD COLUMN last_quote_price DOUBLE;',
+        'ALTER TABLE sayupaperposition ADD COLUMN last_quote_at DATETIME;',
     ]
 )

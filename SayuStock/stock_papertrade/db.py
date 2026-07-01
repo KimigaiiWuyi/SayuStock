@@ -354,8 +354,15 @@ class PaperPositionRepo:
         secid: str,
         qty: int,
         avg_cost: float,
+        *,
+        last_quote_price: Optional[float] = None,
+        last_quote_at: Optional[datetime] = None,
     ) -> Optional[SayuPaperPosition]:
         """新建或更新持仓。qty=0 时删除持仓记录。
+
+        ``last_quote_price`` / ``last_quote_at``（2026-07-01 新增）：让决策代理在
+        买入/卖出撮合时把当前 quote 一起落库，省一次单独的报价写回 round-trip；
+        留 None 时不覆盖已有值（保留历史的报价）。
 
         qty=0 分支直接走 DELETE 走当前 session，避开跨会话的 detached instance —
         原写法用 ``await cls.get(...).session.delete(existing)`` 会在外层
@@ -383,6 +390,9 @@ class PaperPositionRepo:
             existing.stock_name = stock_name
             existing.secid = secid
             existing.updated_at = now
+            if last_quote_price is not None:
+                existing.last_quote_price = last_quote_price
+                existing.last_quote_at = last_quote_at or now
             session.add(existing)
             await session.flush()
             return existing
@@ -394,6 +404,8 @@ class PaperPositionRepo:
             secid=secid,
             qty=qty,
             avg_cost=avg_cost,
+            last_quote_price=last_quote_price,
+            last_quote_at=last_quote_at or now if last_quote_price is not None else None,
             opened_at=now,
             updated_at=now,
         )
@@ -401,11 +413,83 @@ class PaperPositionRepo:
         await session.flush()
         return pos
 
+    @classmethod
+    @with_session
+    async def bulk_set_quote(
+        cls,
+        session: AsyncSession,
+        quotes: List[Dict[str, Any]],
+        group_id: str,
+        bot_id: str,
+    ) -> int:
+        """批量写报价。``quotes`` 形如 ``[{stock_code, price, at}, ...]``。
+
+        用于 ``quote_service.get_quotes_batch`` 一次拉多只股票后批量落库。
+        实现上仍是逐条 ``UPDATE``（同一 ``session`` 内），不是单条合并 SQL，
+        但共享一次 ``flush``，比调用方各自开 session 逐条提交更省。
+
+        Returns:
+            受影响总行数；调用方不强制使用。
+        """
+        from sqlalchemy import update as _sa_update
+
+        affected: int = 0
+        for q in quotes:
+            code = q.get("stock_code")
+            price = q.get("price")
+            at = q.get("at")
+            if not code or price is None:
+                continue
+            stmt = _sa_update(SayuPaperPosition).where(
+                and_(
+                    col(col(SayuPaperPosition.group_id)) == group_id,
+                    col(col(SayuPaperPosition.bot_id)) == bot_id,
+                    col(col(SayuPaperPosition.stock_code)) == code,
+                )
+            ).values(last_quote_price=price, last_quote_at=at)
+            result = await session.execute(stmt)
+            affected += int(result.rowcount or 0)
+        await session.flush()
+        return affected
+
 
 # ============================================================
 # Trade Repo（append-only）
 # ============================================================
 class PaperTradeRepo:
+    @classmethod
+    @with_session
+    async def locked_qty_today(
+        cls,
+        session: AsyncSession,
+        group_id: str,
+        bot_id: str,
+        stock_code: str,
+        today: Optional[date] = None,
+    ) -> int:
+        """查某股票今日已买入数量（A 股 T+1 锁定股数）。
+
+        这是 A 股 T+1 结算的核心：在 T 日买入的股数，到 T+1 日开盘前都不能卖。
+        "今天"按调用方传入的 ``today`` 决定（避免在工具里掺入隐式时区），缺省
+        用系统 ``date.today()``。返回 ``>=0``。
+
+        实现：``SELECT SUM(qty) FROM sayupapertrade WHERE side='buy' AND
+        DATE(executed_at)=today AND group_id=? AND bot_id=? AND stock_code=?``。
+        """
+        if today is None:
+            today = date.today()
+        stmt = select(func.coalesce(func.sum(SayuPaperTrade.qty), 0)).where(
+            and_(
+                col(col(SayuPaperTrade.group_id)) == group_id,
+                col(col(SayuPaperTrade.bot_id)) == bot_id,
+                col(col(SayuPaperTrade.stock_code)) == stock_code,
+                col(col(SayuPaperTrade.side)) == "buy",
+                func.date(col(col(SayuPaperTrade.executed_at))) == today,
+            )
+        )
+        result = await session.execute(stmt)
+        return int(result.scalar_one() or 0)
+
     @classmethod
     @with_session
     async def append(
