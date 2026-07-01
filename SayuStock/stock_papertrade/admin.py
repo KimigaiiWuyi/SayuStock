@@ -40,7 +40,7 @@ from ..utils.database.papertrade_models import (
 # AI操盘清盘（master-only）
 # ============================================================
 @sv_papertrade_admin.on_fullmatch(
-    ("AI操盘清盘", "AI操盘清除", "AI操盘重置", "清理模拟盘"),
+    ("模拟盘清盘"),
 )
 async def send_clear_all(bot: Bot, ev: Event):
     """一键清掉 AI 模拟盘在 DB / Kanban / APScheduler 上的所有残留。
@@ -213,7 +213,7 @@ async def send_clear_all(bot: Bot, ev: Event):
 # 真 agent 端到端压测（扩写：全流程覆盖）
 # ============================================================
 @sv_papertrade_admin.on_fullmatch(
-    ("AI操盘压测", "AI操盘压力测试", "AI操盘dryrun"),
+    ("模拟盘模拟测试"),
 )
 async def send_dry_run(bot: Bot, ev: Event):
     """真 agent 端到端压测（master-only，5 段决策流 + auto-cleanup）。
