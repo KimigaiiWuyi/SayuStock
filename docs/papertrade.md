@@ -124,13 +124,15 @@ P3 新闻相关（≤ 10）    ← 雪球 7x24 提及的股票
 
 | 群友说 | 早柚做什么 |
 |--------|-----------|
-| "AI操盘初始化" | 调 evaluate_agent_mesh_capability → register_kanban_task 建 2 棵 Kanban（init + 周期） → papertrade_account_create |
-| "AI操盘查看" | 调 papertrade_account_query + papertrade_position_list → 拼成图 |
+| "模拟盘初始化" | **直接调 trigger `send_init_command`** —— 6 步全跑（DB + Kanban + APScheduler + bind + kick） |
+| "模拟盘查看" | 调 papertrade_account_query + papertrade_position_list → 拼成图 |
 | "你为啥买茅台？" | 调 list_my_kanban_tasks 找树 → artifact_get_recent 拿决策 reasoning → papertrade_trade_list 拿交易记录 → 用早柚口吻回答 |
 | "现在还持有啥？" | 调 papertrade_position_list + papertrade_account_query → 拼成图 |
 | "我的账户怎么样？" | 调 papertrade_account_query + papertrade_trade_list(limit=10) |
 
 > 早柚"知道"这件事：插件通过 `ai_entity(KnowledgeBase("sayustock_papertrade_guide", ...))` 把操作指南注册为 RAG 知识库，群友问到 AI 操盘相关时早柚会主动召回。同时通过 `ai_alias("AI操盘", ["AI模拟盘", "虚拟盘", ...])` 把"AI操盘"等关键词路由到 papertrade 工具族。
+>
+> **工具分层**（无重叠）：主 persona 只能调 7 个 common 工具（4 读 + 3 helper），写操作 4 个只在子代理（visible_when）可见；"建账户"只走 trigger `send_init_command`，没有任何捷径。
 
 ---
 

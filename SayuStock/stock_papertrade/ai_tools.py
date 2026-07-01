@@ -1,11 +1,18 @@
 """AI 模拟盘 ai_tools 集合。
 
-13 个 ai_tools，分三类：
-- 业务/账本（6 个，capability_domain="AI模拟盘"）—— 主人格 + 能力代理共用
-- 能力代理私有（4 个，visible_when 限定）—— 仅 papertrade_*_agent 可见
-- 通用辅助（3 个）—— 财报 / 指标 / 交易日判断
+11 个 ai_tools，分三类（**没有重叠**，每个工具只做一件事）：
+- 业务/账本（**4 个只读**，capability_domain="AI模拟盘"，category="common"）
+  —— 主 persona + 能力代理都能用
+- 能力代理私有（**4 个写**，capability_domain="AI模拟盘"，category="default" + visible_when）
+  —— 仅 papertrade_*_agent 可见；防止主 persona 误调写操作
+- 通用辅助（3 个，capability_domain="AI模拟盘"，category="common"）
+  —— 财报 / 指标 / 交易日判断
 
-所有 group_id 参数：留空时从 ctx.deps.ev.group_id 推断。
+**删除的工具**（已收敛到 trigger 或被废弃）：
+- ~~papertrade_account_create~~ —— 与 trigger ``send_init_command`` 重叠；统一走 trigger
+- ~~papertrade_account_update~~ —— 死代码（没有命令 / 流程使用）
+
+**所有 group_id 参数**：留空时从 ctx.deps.ev.group_id 推断。
 """
 
 # pyright/basedpyright 文件级指令 —— 仅作用于本文件。
@@ -155,7 +162,7 @@ def _visible_to_papertrade_agent(ctx: RunContext[ToolContext]) -> bool:
 # ============================================================
 
 
-@ai_tools(category="default", capability_domain="AI模拟盘")
+@ai_tools(category="common", capability_domain="AI模拟盘")
 async def papertrade_account_query(
     ctx: RunContext[ToolContext],
     group_id: str = "",
@@ -192,82 +199,7 @@ async def papertrade_account_query(
     return json.dumps(view, ensure_ascii=False)
 
 
-@ai_tools(category="default", capability_domain="AI模拟盘")
-async def papertrade_account_create(
-    ctx: RunContext[ToolContext],
-    initial_cash: float = 1_000_000.0,
-    mode: str = "balanced",
-) -> str:
-    """创建 AI 模拟盘账户（已存在则返回原账户）。
-
-    Args:
-        initial_cash: 初始资金（1w~1亿）
-        mode: balanced / aggressive / conservative
-    """
-    gid: str = _resolve_group_id(ctx)
-    bid: str = _resolve_bot_id(ctx)
-    if not gid or not bid:
-        return "⚠️ 无法确定 group_id/bot_id"
-    if initial_cash < 10_000 or initial_cash > 1_000_000_000:
-        return "⚠️ initial_cash 须在 1w~1亿之间"
-    if mode not in ("balanced", "aggressive", "conservative"):
-        return f"⚠️ mode 非法: {mode}"
-    ev = ctx.deps.ev
-    init_by: str | None = str(ev.user_id) if ev else None
-    acc = await db.PaperAccountRepo.get_or_create(
-        gid,
-        bid,
-        initial_cash=initial_cash,
-        mode=mode,
-        initialized_by=init_by,
-    )
-    return f"✅ 账户已就绪 (group={gid}, cash={acc.cash}, mode={acc.mode}, id={acc.id})"
-
-
-@ai_tools(category="default", capability_domain="AI模拟盘")
-async def papertrade_account_update(
-    ctx: RunContext[ToolContext],
-    enabled: int = -1,
-    mode: str = "",
-) -> str:
-    """更新 AI 模拟盘账户的开关/模式。
-
-    Args:
-        enabled: 0=关闭 / 1=开启 / -1=不修改（默认）
-        mode: balanced/aggressive/conservative/""（不修改）
-    """
-    gid: str = _resolve_group_id(ctx)
-    bid: str = _resolve_bot_id(ctx)
-    if not gid or not bid:
-        return "⚠️ 无法确定 group_id/bot_id"
-    # PaperAccountRepo.update 字段白名单：仅 ``int | str`` 是合法入参
-    fields: dict[str, int | str] = {}
-    if enabled in (0, 1):
-        fields["enabled"] = enabled
-    if mode in ("balanced", "aggressive", "conservative"):
-        fields["mode"] = mode
-    if not fields:
-        return "⚠️ 没有要修改的字段"
-    # 显式以关键字调用，避免 dict 展开 + 装饰器隐藏 session 形参的歧义。
-    # 字段集已由上文 if 分支决定每次最多包含 enabled(int) 和 mode(str)。
-    if "enabled" in fields and "mode" in fields:
-        acc = await db.PaperAccountRepo.update(
-            gid,
-            bid,
-            enabled=fields["enabled"],
-            mode=fields["mode"],
-        )
-    elif "enabled" in fields:
-        acc = await db.PaperAccountRepo.update(gid, bid, enabled=fields["enabled"])
-    else:
-        # 此时 fields 中必有 mode（短路语义由前述 if not fields 保证）
-        acc = await db.PaperAccountRepo.update(gid, bid, mode=fields["mode"])
-    if not acc:
-        return f"⚠️ 群 {gid} 尚未开户"
-    return f"✅ 已更新账户 (enabled={acc.enabled}, mode={acc.mode})"
-
-
-@ai_tools(category="default", capability_domain="AI模拟盘")
+@ai_tools(category="common", capability_domain="AI模拟盘")
 async def papertrade_position_list(
     ctx: RunContext[ToolContext],
     group_id: str = "",
@@ -297,7 +229,7 @@ async def papertrade_position_list(
     return json.dumps(items, ensure_ascii=False)
 
 
-@ai_tools(category="default", capability_domain="AI模拟盘")
+@ai_tools(category="common", capability_domain="AI模拟盘")
 async def papertrade_trade_list(
     ctx: RunContext[ToolContext],
     group_id: str = "",
@@ -339,7 +271,7 @@ async def papertrade_trade_list(
     return json.dumps(items, ensure_ascii=False)
 
 
-@ai_tools(category="default", capability_domain="AI模拟盘")
+@ai_tools(category="common", capability_domain="AI模拟盘")
 async def papertrade_watchlist_list(
     ctx: RunContext[ToolContext],
     group_id: str = "",
@@ -412,14 +344,13 @@ async def papertrade_decision_insert(
 
     # 防御：reason 含异常控制字符（\r / \t / 全角空格连用）时归一化，
     #     且长度上限 200 字（超长截断+省略号），避免下游播报挤糊
-    norm_reason: str = "".join(
-        ch if ch.isprintable() else " " for ch in (reason or "")
-    ).strip()
+    norm_reason: str = "".join(ch if ch.isprintable() else " " for ch in (reason or "")).strip()
     if len(norm_reason) > 200:
         norm_reason = norm_reason[:197] + "..."
 
     # 防御：indicators 必须是合法 JSON；非法时降级 '{}'
     import json as _json
+
     if indicators and indicators.strip() and indicators.strip() != "{}":
         try:
             _json.loads(indicators)
@@ -609,7 +540,7 @@ async def papertrade_match_order(
 # ============================================================
 
 
-@ai_tools(category="default", capability_domain="AI模拟盘")
+@ai_tools(category="common", capability_domain="AI模拟盘")
 async def stock_financials(
     ctx: RunContext[ToolContext],
     stock_code: str,
@@ -695,7 +626,7 @@ def _stringify_values(d: dict[str, object]) -> dict[str, str]:
     return out
 
 
-@ai_tools(category="default", capability_domain="AI模拟盘")
+@ai_tools(category="common", capability_domain="AI模拟盘")
 async def stock_indicators(
     ctx: RunContext[ToolContext],
     stock_code: str,
@@ -747,20 +678,14 @@ async def stock_indicators(
     # ``get_gg`` 无返回类型注解；运行时返回 ``str`` (错误) 或 ``dict`` 负载。
     # 显式联合类型让下游 isinstance 有意义，并避免基于 pyright 把它推成
     # ``Dict[str, Any]`` 后报不必要的 isinstance。
-    raw: str | dict[str, object] = await get_gg(
-        code, f"single-stock-kline-{kline_period}", start, end
-    )
+    raw: str | dict[str, object] = await get_gg(code, f"single-stock-kline-{kline_period}", start, end)
     if isinstance(raw, str):
         return f"⚠️ 拉 K 线失败: {raw}"
     payload: dict[str, object] = raw
     data: object = payload.get("data")
     data_dict: dict[str, object] = data if isinstance(data, dict) else {}
     klines_obj: object = data_dict.get("klines")
-    klines: list[str] = (
-        [k for k in klines_obj if isinstance(k, str)]
-        if isinstance(klines_obj, list)
-        else []
-    )
+    klines: list[str] = [k for k in klines_obj if isinstance(k, str)] if isinstance(klines_obj, list) else []
     if not klines:
         return f"⚠️ {name}({code}) 无 K 线数据 (kline_period={kline_period})"
     if is_min_k:
@@ -779,10 +704,14 @@ async def stock_indicators(
         "stock_name": name,
         "kline_period": kline_period,
         "kline_label": (
-            f"{kline_period}m" if is_min_k
-            else "D" if kline_period == 101
-            else "W" if kline_period == 102
-            else "M" if kline_period == 103
+            f"{kline_period}m"
+            if is_min_k
+            else "D"
+            if kline_period == 101
+            else "W"
+            if kline_period == 102
+            else "M"
+            if kline_period == 103
             else "?"
         ),
         "kline_count": len(df),
@@ -790,7 +719,7 @@ async def stock_indicators(
     return json.dumps(result, ensure_ascii=False, default=str)
 
 
-@ai_tools(category="default", capability_domain="AI模拟盘")
+@ai_tools(category="common", capability_domain="AI模拟盘")
 async def stock_is_trading_day(ctx: RunContext[ToolContext]) -> str:
     """判断当前是否 A 股交易日 + 是否在交易时段。"""
     td: bool = is_a_share_trading_day()

@@ -138,14 +138,24 @@ def register_stock_agent() -> None:
 # ============================================================
 PAPERTRADE_SETUP_PROMPT = """你是「AI 模拟盘建账代理」。
 
-只做一件事：在 SQLModel SayuPaperAccount 表中建一个 100w 现金的账户，并把 Kanban
-根任务 ID 回填到 ``kanban_init_root_id`` 字段。
+【你的任务】
+验证当前群 AI 模拟盘账户已就绪 + Kanban 心跳树已挂载。如有缺失，立即通过
+trigger 工具 ``send_init_command`` 触发完整 6 步流程（DB 账户 + Kanban init
+树 + Kanban period 树 + APScheduler cron + bind root_id + 踢 init/decision）。
+
+⚠️ **绝对不要**直接写 DB：trigger 是唯一权威入口，所有"建账户"路径必须走它。
+
+【工作流】
+1. papertrade_account_query → 看账户是否存在、cash / mode / enabled
+2. 看 kanban_init_root_id / kanban_period_root_id 是否有值
+3. 两者都齐全 → 返回"账户 + Kanban 已就绪，等下次 cron"，不写任何东西
+4. 缺任何一个 → 调 send_init_command（by_trigger）让 trigger 跑完整 6 步
+5. 返回 1 段简短确认：群号 + 账户 id + cash + mode + Kanban root_id 前缀
 
 【纪律】
 - 不传群号时，从 ctx.deps.ev.group_id 拿
-- 群已有账户时直接返回，不要再创建
-- 不修改 enabled / mode / 任何其他字段
-- 返回 1 段简短确认：群号 + 初始资金 + 模式 + 数据库 id
+- 不调任何 ai_tools 写 DB；所有持久化都委派给 trigger
+- 重复 init 是无害的（trigger 内部有幂等守卫），无须前置判断
 """
 
 
@@ -196,12 +206,14 @@ def register_papertrade_agents() -> None:
         CapabilityAgentProfile(
             profile_id="papertrade_setup_agent",
             display_name="AI 模拟盘建账代理",
-            when_to_use="需要新建 AI 模拟盘账户；初始化 / 重置场景",
+            when_to_use="需要新建 / 补挂 AI 模拟盘账户的 Kanban 心跳树",
             system_prompt=PAPERTRADE_SETUP_PROMPT,
             match_keywords=["AI操盘初始化", "建模拟盘账户", "建AI账户"],
             tool_names=[
+                # 仅 query 自检；写操作（建账户 + 挂 Kanban）一律走 trigger
                 "papertrade_account_query",
-                "papertrade_account_create",
+                # trigger：主入口，setup_agent 内部也通过它做完整 6 步
+                "send_init_command",
             ],
             max_iterations=5,
             max_tokens=10000,
