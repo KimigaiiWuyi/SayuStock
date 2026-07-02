@@ -1175,12 +1175,40 @@ class PaperAgentPoolRepo:
     @classmethod
     @with_session
     async def cleanup_expired(cls, session: AsyncSession) -> int:
-        """清理过期项；返回删除条数"""
+        """清理过期项（全库）；返回删除条数"""
         from sqlalchemy import delete as _sa_delete
 
         now = datetime.now()
         stmt = _sa_delete(SayuPaperAgentPool).where(
             and_(
+                col(col(SayuPaperAgentPool.expires_at)).is_not(None),
+                col(col(SayuPaperAgentPool.expires_at)) <= now,
+            )
+        )
+        result = await session.execute(stmt)
+        await session.flush()
+        return int(result.rowcount or 0)
+
+    @classmethod
+    @with_session
+    async def cleanup_expired_for(
+        cls,
+        session: AsyncSession,
+        group_id: str,
+        bot_id: str,
+    ) -> int:
+        """物理删除本账户下已过期的候选（refresh 每轮先调，让轮换真正腾出空间）。
+
+        list_codes/list_by_account 只在读时过滤过期行，行仍留库；轮换逻辑要按
+        created_at 排序淘汰最旧 auto 候选，必须先把过期行删掉再统计，否则计数偏高。
+        """
+        from sqlalchemy import delete as _sa_delete
+
+        now = datetime.now()
+        stmt = _sa_delete(SayuPaperAgentPool).where(
+            and_(
+                col(col(SayuPaperAgentPool.group_id)) == group_id,
+                col(col(SayuPaperAgentPool.bot_id)) == bot_id,
                 col(col(SayuPaperAgentPool.expires_at)).is_not(None),
                 col(col(SayuPaperAgentPool.expires_at)) <= now,
             )

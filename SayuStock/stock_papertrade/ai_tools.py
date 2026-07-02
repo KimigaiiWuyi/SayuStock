@@ -590,6 +590,29 @@ async def papertrade_decision_insert(
         trade_id=trade_id if trade_id > 0 else None,
         blocked_by=blocked_by,
     )
+
+    # 决策 → 候选池 反馈闭环：sell 从池移除、buy 促成保留（hold 不动，见
+    # candidate_pool.post_decision_pool_update）。让"卖掉的股不再每轮重复分析、
+    # 买入的股进跟踪池"，配合 candidate_refresh 的轮换一起破锚定。
+    action_lc: str = (action or "").lower().strip()
+    if stock_code and action_lc in ("buy", "sell"):
+        try:
+            from .candidate_pool import post_decision_pool_update
+
+            await post_decision_pool_update(
+                gid,
+                bid,
+                [{
+                    "action": action_lc,
+                    "code": stock_code,
+                    "name": stock_name,
+                    "secid": "",
+                    "score": score,
+                }],
+            )
+        except Exception as e:
+            _gslogger.debug(f"[SayuStock][PaperTrade] decision→pool 反馈失败: {e}")
+
     return f"ok decision_id={d.id}"
 
 
@@ -747,32 +770,50 @@ async def papertrade_candidate_refresh(
     ctx: RunContext[ToolContext],
     group_id: str = "",
     bot_id: str = "",
-    batch_size: int = 5,
+    target_size: int = 0,
+    rotate_out: int = 0,
+    batch_size: int = 0,
 ) -> str:
-    """扫描市场增量补充 AI 候选池（agent_pool），防止"锚定陷阱"。
+    """**轮换** AI 候选池（agent_pool）：淘汰旧标的 + 补充新鲜标的，防"锚定陷阱"。
 
-    仅 papertrade_*_agent 可见（visible_when 限定）。决策代理在每轮开头调
-    ``papertrade_agent_pool_list`` 看池子是否充盈；若 < 3 只则调本工具扫一笔
-    新鲜标的进来（**增量、小批量**，默认 batch_size=5，最大 10，避免一次性填
-    满 50 只堵塞后续选股）。
+    仅 papertrade_*_agent 可见。**每轮都应调一次**（不要再用"池 <3 才刷"的旧门槛——
+    那会让池子一旦填满就永远冻结、每轮嚼同一批）。本工具一次做完 4 件事：
 
-    数据源（跳过已在持仓 / watchlist / agent_pool 的股票）：
-      P2: 行业板块龙头（EastMoney 涨幅 TOP3 板块 × 成分股 TOP3）
-      P3: 大盘热股 TOP10（EastMoney 热度）
-      P3: 雪球新闻提及的股票
+      1. 清理已过期候选（物理删除）。
+      2. **淘汰**：删掉最旧的 ``rotate_out`` 只 auto 扫描候选（持仓 / 群友关注中的
+         标的永不淘汰）——这是"剔除股票池"。
+      3. **补蓝筹底仓**：把池中蓝筹底仓补到 ``BASE_KEEP`` 只（跨行业大盘蓝筹，
+         保证池里始终有可交易的优质标的，而非全是超买微盘 → 决策代理只能一直
+         hold → 账户永远空仓）。
+      4. **补动量标的**：从 板块龙头 / 大盘热股 / 雪球新闻 扫新鲜标的补到
+         ``target_size``；入池前用一次批量报价**过滤涨停 / 过热标的**
+         （当日涨幅 ≥ 本板涨停 × 0.8）。
 
-    每只入池后给 3 天过期时间 + priority=1（低优先级，仅作"待评估"标记），
-    真正的 buy/sell 决策仍由决策代理深度分析后产出。
+    去重：跳过已在 持仓 / 群友关注 / 现池 中的标的。auto 候选 ``AUTO_EXPIRE_HOURS``
+    后过期、每轮再淘汰最旧几只 → 日内自然轮换；蓝筹底仓每轮随机补入不同名，
+    既保质量又不长期锚定同一批。真正 buy/sell 仍由决策代理深度分析后产出。
 
     Args:
-        batch_size: 本回合最多入池几只（默认 5，上限 10）。超出会被截断。
+        target_size: 轮换后候选池目标只数（0=用默认 ``POOL_TARGET_SIZE``）。
+        rotate_out: 本轮强制淘汰几只最旧 auto 候选（0=用默认 ``ROTATE_OUT_PER_REFRESH``）。
+        batch_size: 兼容旧调用；>0 时额外限制本轮动量补入上限。
 
     Returns:
-        JSON 字典：{"added": [...], "pool_size_before": N, "pool_size_after": M,
-        "sources": {"sector": K, "hotmap": J, "news": I, "deduped": X}}
+        JSON：{"expired": E, "evicted": [...], "base_added": [...], "added": [...],
+        "sources": {"sector","hotmap","news","deduped","overheated"},
+        "pool_size_before": N, "pool_size_after": M}
     """
     from datetime import timedelta
     from .candidate_pool import (
+        POOL_TARGET_SIZE,
+        BASE_KEEP,
+        ROTATE_OUT_PER_REFRESH,
+        AUTO_EXPIRE_HOURS,
+        BASE_EXPIRE_HOURS,
+        derive_secid,
+        pick_base_slice,
+        filter_overheated,
+        BLUECHIP_BASE,
         _from_position,
         _from_watchlist,
         _from_sector_top_picks,
@@ -785,84 +826,141 @@ async def papertrade_candidate_refresh(
     if not gid or not bid:
         return "⚠️ 无法确定 group_id/bot_id"
 
-    # ── clamp batch_size ──
-    batch_size = max(1, min(int(batch_size), 10))
-
-    # ── 1) 算池子当前大小（刷新前） ──
-    pool_before: list[str] = []
-    try:
-        pool_before = await db.PaperAgentPoolRepo.list_codes(gid, bid)
-    except Exception as e:
-        _gslogger.debug(f"[SayuStock][PaperTrade] candidate_refresh 查池失败（降级0）: {e}")
-
-    # ── 2) 读持仓 + watchlist，去重 ──
-    seen: Set[str] = set(pool_before)
-    try:
-        seen.update(await _from_position(gid, bid))
-    except Exception:
-        pass
-    try:
-        seen.update(await _from_watchlist(gid, bid))
-    except Exception:
-        pass
-
+    tgt: int = target_size if target_size > 0 else POOL_TARGET_SIZE
+    tgt = max(5, min(tgt, 50))
+    rot: int = rotate_out if rotate_out > 0 else ROTATE_OUT_PER_REFRESH
+    rot = max(0, min(rot, tgt))
     now = _dt.datetime.now()
-    sources: dict[str, int] = {"sector": 0, "hotmap": 0, "news": 0, "deduped": 0}
-    added: list[dict[str, str]] = []
 
-    async def _try_add(codes: list[str], src: str) -> None:
-        nonlocal added
-        for c in codes:
-            if len(added) >= batch_size:
+    # ── 0) 清过期（物理删除，腾出轮换空间） ──
+    expired: int = 0
+    try:
+        expired = await db.PaperAgentPoolRepo.cleanup_expired_for(gid, bid)
+    except Exception as e:
+        _gslogger.debug(f"[SayuStock][PaperTrade] candidate_refresh 清过期失败: {e}")
+
+    # ── 保护集：持仓 + 群友关注（永不淘汰） ──
+    protected: Set[str] = set()
+    try:
+        protected.update(await _from_position(gid, bid))
+    except Exception:
+        pass
+    try:
+        protected.update(await _from_watchlist(gid, bid))
+    except Exception:
+        pass
+
+    entries = await db.PaperAgentPoolRepo.list_by_account(gid, bid)
+    pool_size_before: int = len(entries)
+
+    # ── 1) 淘汰最旧的 rot 只 auto 候选（"剔除"） ──
+    autos = sorted(
+        [e for e in entries if e.added_by == "auto_refresh" and e.stock_code not in protected],
+        key=lambda e: e.created_at,
+    )
+    evicted: list[str] = []
+    for e in autos[:rot]:
+        try:
+            if await db.PaperAgentPoolRepo.remove(gid, bid, e.stock_code):
+                evicted.append(e.stock_code)
+        except Exception as ex:
+            _gslogger.debug(f"[SayuStock][PaperTrade] candidate_refresh 淘汰 {e.stock_code} 失败: {ex}")
+
+    # 淘汰后重算 seen（现池 + 保护集）
+    seen: Set[str] = set(await db.PaperAgentPoolRepo.list_codes(gid, bid)) | protected
+    base_now: int = sum(
+        1 for e in entries if e.added_by == "base" and e.stock_code not in evicted
+    )
+
+    # ── 2) 补蓝筹底仓到 BASE_KEEP ──
+    base_added: list[str] = []
+    base_slots: int = max(0, min(BASE_KEEP - base_now, tgt - len(seen)))
+    if base_slots > 0:
+        for code, name in pick_base_slice(len(BLUECHIP_BASE)):
+            if len(base_added) >= base_slots:
                 break
+            if code in seen:
+                continue
+            secid = derive_secid(code)
+            try:
+                await db.PaperAgentPoolRepo.upsert(
+                    gid, bid,
+                    stock_code=code, stock_name=name, secid=secid,
+                    reason="蓝筹底仓（大盘蓝筹/指数成分，质量地基）",
+                    added_by="base", priority=2,
+                    expires_at=now + timedelta(hours=BASE_EXPIRE_HOURS),
+                )
+            except Exception as ex:
+                _gslogger.debug(f"[SayuStock][PaperTrade] candidate_refresh 补底仓 {code} 失败: {ex}")
+                continue
+            seen.add(code)
+            base_added.append(code)
+
+    # ── 3) 补动量标的（板块/热股/新闻）到 target，入池前过滤涨停/过热 ──
+    sources: dict[str, int] = {"sector": 0, "hotmap": 0, "news": 0, "deduped": 0, "overheated": 0}
+    added: list[dict[str, str]] = []
+    momentum_cap: int = max(0, tgt - len(seen))
+    if batch_size > 0:
+        momentum_cap = min(momentum_cap, batch_size)
+
+    if momentum_cap > 0:
+        raw_pairs: list[tuple[str, str]] = []
+        try:
+            for c in await _from_sector_top_picks(top_sectors=3, per_sector=3):
+                raw_pairs.append((c, "sector"))
+        except Exception as ex:
+            _gslogger.debug(f"[SayuStock][PaperTrade] candidate_refresh sector 失败: {ex}")
+        try:
+            for c in await _from_hotmap_top_n(n=10):
+                raw_pairs.append((c, "hotmap"))
+        except Exception as ex:
+            _gslogger.debug(f"[SayuStock][PaperTrade] candidate_refresh hotmap 失败: {ex}")
+        try:
+            for c in await _from_news_extract_tickers():
+                raw_pairs.append((c, "news"))
+        except Exception as ex:
+            _gslogger.debug(f"[SayuStock][PaperTrade] candidate_refresh news 失败: {ex}")
+
+        # 去重（保留首次出现的 source），过滤非法 + 已 seen
+        uniq: list[tuple[str, str]] = []
+        useen: Set[str] = set()
+        for c, s in raw_pairs:
             if not (c and len(c) == 6 and c.isdigit()):
                 continue
             if c in seen:
                 sources["deduped"] += 1
                 continue
-            seen.add(c)
-            # 推定 secid（沪市 6 开头 → 1.xxx；其余 → 0.xxx）
-            secid = f"1.{c}" if c.startswith("6") else f"0.{c}"
+            if c in useen:
+                continue
+            useen.add(c)
+            uniq.append((c, s))
+
+        # 一次批量报价过滤涨停/过热
+        kept: Set[str] = set(await filter_overheated([c for c, _ in uniq]))
+        sources["overheated"] = len(uniq) - len(kept)
+
+        for c, s in uniq:
+            if len(added) >= momentum_cap:
+                break
+            if c not in kept:
+                continue
+            secid = derive_secid(c)
             try:
                 await db.PaperAgentPoolRepo.upsert(
-                    gid,
-                    bid,
-                    stock_code=c,
-                    stock_name="",  # 刷新时暂不查 get_code_id，决策代理深度分析时再补
+                    gid, bid,
+                    stock_code=c, stock_name="",
                     secid=secid,
-                    reason=f"sector/hotmap/news 自动扫描 (priority=1)",
-                    added_by="auto_refresh",
-                    priority=1,
-                    expires_at=now + timedelta(days=3),
+                    reason="板块/热度/新闻扫描（已过滤涨停/过热，priority=1）",
+                    added_by="auto_refresh", priority=1,
+                    expires_at=now + timedelta(hours=AUTO_EXPIRE_HOURS),
                 )
-            except Exception as e:
-                _gslogger.debug(f"[SayuStock][PaperTrade] candidate_refresh 写入 {c} 失败: {e}")
+            except Exception as ex:
+                _gslogger.debug(f"[SayuStock][PaperTrade] candidate_refresh 写入 {c} 失败: {ex}")
                 continue
-            added.append({"stock_code": c, "secid": secid, "source": src})
-            sources[src] += 1
+            seen.add(c)
+            added.append({"stock_code": c, "secid": secid, "source": s})
+            sources[s] += 1
 
-    # ── 3) P2: 板块龙头 ──
-    try:
-        sector_codes = await _from_sector_top_picks(top_sectors=3, per_sector=3)
-        await _try_add(sector_codes, "sector")
-    except Exception as e:
-        _gslogger.debug(f"[SayuStock][PaperTrade] candidate_refresh sector 失败: {e}")
-
-    # ── 4) P3: 热股 ──
-    try:
-        hot_codes = await _from_hotmap_top_n(n=10)
-        await _try_add(hot_codes, "hotmap")
-    except Exception as e:
-        _gslogger.debug(f"[SayuStock][PaperTrade] candidate_refresh hotmap 失败: {e}")
-
-    # ── 5) P3: 新闻 ticker ──
-    try:
-        news_codes = await _from_news_extract_tickers()
-        await _try_add(news_codes, "news")
-    except Exception as e:
-        _gslogger.debug(f"[SayuStock][PaperTrade] candidate_refresh news 失败: {e}")
-
-    # ── 6) 算池子刷新后大小 ──
     pool_after: list[str] = []
     try:
         pool_after = await db.PaperAgentPoolRepo.list_codes(gid, bid)
@@ -871,10 +969,13 @@ async def papertrade_candidate_refresh(
 
     return json.dumps(
         {
+            "expired": expired,
+            "evicted": evicted,
+            "base_added": base_added,
             "added": added,
-            "pool_size_before": len(pool_before),
-            "pool_size_after": len(pool_after),
             "sources": sources,
+            "pool_size_before": pool_size_before,
+            "pool_size_after": len(pool_after),
         },
         ensure_ascii=False,
     )

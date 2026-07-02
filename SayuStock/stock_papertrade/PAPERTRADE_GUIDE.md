@@ -155,21 +155,29 @@ SayuStock 插件里的"AI 模拟盘"长期能力：
 >
 > 收到"成功"消息即视为完成。不需要主 persona 自己拼流程。
 
-### 主动消息播报策略（buy/sell 必推，hold 不推）
+### 主动消息播报策略（buy/sell 冒泡，hold 静默）
 
-决策代理在跑完 `papertrade_*_insert` 之后，调用方必须自己推群——`run_capability_agent`
-本身是无人格的纯文本执行体，**不会自动推群**。三档策略：
+模拟真人：**只有真买卖才在群里冒个泡，全 hold 就不吭声**。三档策略：
 
 | 决策结果 | 是否推群 | 推送内容 |
 |---|---|---|
-| `action=buy`  | ✅ 必推 | `📈 【AI 模拟盘·操盘播报】自主决策🟢买入 + 成交明细 + 决策理由 + 行情快照` |
-| `action=sell` | ✅ 必推 | `📈 【AI 模拟盘·操盘播报】自主决策🔴卖出 + 成交 + realized_pnl + 决策理由` |
-| `action=hold` | ❌ 不推 | 仅写决策日志（理由详细），群里持仓不动不打扰 |
+| `action=buy`  | ✅ 冒泡 | 极简一行 `🟢 买入 平安银行(000001) 500 股 @¥10.50`（多笔多行） |
+| `action=sell` | ✅ 冒泡 | 极简一行 `🔴 卖出 …（+¥1,234 已实现盈亏）` |
+| `action=hold` | ❌ 静默 | 仅写决策日志（理由详细），群里持仓不动不打扰 |
 
-播报统一走 `gsuid_core.ai_core.proactive.emit_proactive_message`（source="kanban"），
-文本结构由 `stock_papertrade.proactive.build_papertrade_proactive_text(...)` 拼装。
+两条播报路径：
 
-> ⚠️ **历史 bug**：2026-07-01 之前 init-time 立即决策路径虽然写了 buy 交易但**没推群**，导致群里只看到 init 成功消息、看不到买卖播报。当前实现已修：`_kick_immediate_decision` 内部 await capagent + 算副作用 Δ + emit_proactive_message。
+1. **init-time 立即决策**（`_kick_immediate_decision`，用户刚发"初始化"时）：调用方
+   算副作用 Δ 后走 `emit_proactive_message` + `build_papertrade_proactive_text`，
+   buy/sell 才推、hold 早返回不推。
+2. **周期心跳**（每 30 分钟 cron，走框架 kanban `_run_one_task_node` 自动 relay）：
+   决策代理**全 hold / 无成交时最终消息只输出 `<<NO_BROADCAST>>`**，框架
+   `_strip_no_broadcast` 据此**跳过 relay/notify**，群里零打扰；真买卖时输出极简
+   一行冒泡，框架照常 relay 推群。
+
+> ⚠️ **历史 bug**：
+> - 2026-07-01 之前 init-time 决策写了 buy 却**没推群**——已修（`_kick_immediate_decision` 内部 await capagent + Δ + emit）。
+> - 2026-07-02 之前**周期心跳每轮都把决策简报（含全 hold）原样推群刷屏**——框架 kanban relay 对任何子任务产出都无脑推。已修：新增 `<<NO_BROADCAST>>` 静默标记（`kanban_executor._strip_no_broadcast`），决策代理全 hold 时输出它即可静默。
 
 ## 八、暂停 / 恢复
 

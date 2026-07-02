@@ -202,6 +202,20 @@ class QuoteService:
 
         return {s: result.get(s) for s in secids}
 
+    async def get_details_batch(
+        self, secids: List[str]
+    ) -> Dict[str, Optional[QuoteCacheEntry]]:
+        """批量取完整条目（含 change_pct / last_close），供候选池过滤涨停/过热用。
+
+        先走 ``get_quotes_batch`` 把缓存喂满（并发 + per-secid 锁复用），再从缓存
+        取整条目。只关心 change_pct 一类元数据时用它，避免调用方拿 price 后还得
+        自己回查缓存。
+        """
+        if not secids:
+            return {}
+        await self.get_quotes_batch(secids)
+        return {s: self._cache.get(s) for s in secids}
+
     # ----------------------------------------------------------------
     # 内部：单次 HTTP
     # ----------------------------------------------------------------

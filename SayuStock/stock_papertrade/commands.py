@@ -73,8 +73,9 @@ async def _setup_papertrade_kanban_trees(
             {
                 "description": (
                     "每 30 分钟决策心跳：\n"
-                    "Phase 0: papertrade_agent_pool_list 看 AI 候选池充盈度"
-                    " → 若 <3 只则 papertrade_candidate_refresh(batch_size=5) 扫新标的入池；\n"
+                    "Phase 0: **每轮必调** papertrade_candidate_refresh() 轮换候选池"
+                    "（淘汰最旧 auto 候选 + 补蓝筹底仓/板块/热股/新闻 + 过滤涨停过热），"
+                    "再 papertrade_agent_pool_list 看轮换后的池；\n"
                     "Phase 1: papertrade_account_query + papertrade_position_list"
                     " → 看账户+持仓；\n"
                     "Phase 2: papertrade_watchlist_list + papertrade_agent_pool_list"
@@ -82,8 +83,11 @@ async def _setup_papertrade_kanban_trees(
                     "Phase 3: 拉宏观 news/cloudmap；\n"
                     "Phase 4: 对候选集每只跑 stock_indicators + stock_financials；\n"
                     "Phase 5: 评分 → 决策 buy/sell/hold → 如有交易走撮合→流水→持仓→决策；\n"
-                    "关键纪律：即使持仓只有 1 只也必须评估 agent_pool/watchlist 的标的，"
-                    "防锚定陷阱。hold 仅写 decision_insert，不调撮合。"
+                    "关键纪律：候选池每轮必须轮换（不用'<3 才刷'的旧门槛，否则池子填满后"
+                    "永远冻结、每轮嚼同一批）；即使有持仓也要评估轮换进来的新标的。"
+                    "hold 仅写 decision_insert，不调撮合。\n"
+                    "播报纪律（模拟真人）：只有真成交(buy/sell)才发群、且只发极简一行冒泡；"
+                    "本轮全 hold / 无成交时最终消息只输出 <<NO_BROADCAST>> 一个标记，框架据此不推群。"
                 ),
                 "agent_profile": "papertrade_decision_agent",
                 "recurring_trigger": "cron:0,30 9-14 * * 1-5",
@@ -100,10 +104,11 @@ async def _setup_papertrade_kanban_trees(
             },
             {
                 "description": (
-                    "候选池刷新（独立于 decision，每 2 小时跑一次）：\n"
-                    "papertrade_agent_pool_list → 若池 <3 只则 "
-                    "papertrade_candidate_refresh(batch_size=5) 从 sector/hotmap/news 入池;\n"
-                    "**本轮仅做入池，不调任何撮合/流水/持仓/决策工具，不做 buy/sell 判断**。"
+                    "候选池轮换（独立于 decision，每 2 小时跑一次）：\n"
+                    "直接调 papertrade_candidate_refresh() 做一次轮换"
+                    "（淘汰最旧 auto 候选 + 补蓝筹底仓/板块/热股/新闻 + 过滤涨停过热），"
+                    "再 papertrade_agent_pool_list 看轮换后的池;\n"
+                    "**本轮仅做轮换，不调任何撮合/流水/持仓/决策工具，不做 buy/sell 判断**。"
                 ),
                 "agent_profile": "papertrade_pool_refresh_agent",
                 "recurring_trigger": "cron:30 10,12,14 * * 1-5",
@@ -331,7 +336,7 @@ async def _kick_immediate_decision(ev: Event, group_id: str, bot_id: str) -> Non
    - 决策代理（cron:0,30 9-14 * * 1-5，工作日每 30 分钟看盘）
    - 决策代理（cron:35 15 * * 1-5，工作日收盘写当日快照）
    - 复盘代理（cron:0 9 1 * *，每月 1 日 09:00 出月报）
-   - 候选池刷新浪俭代理（cron:30 10,12,14 * * 1-5，每 2 小时刷新候选池防锚定）
+   - 候选池轮换代理（cron:30 10,12,14 * * 1-5，每 2 小时轮换候选池防锚定）
 4) kick_root 一次，触发 4 个子任务各自 arm 到 APScheduler
 
 仅群主/管理员可触发；已开户直接返回原账户。

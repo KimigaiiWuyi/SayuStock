@@ -299,18 +299,24 @@ def test_post_decision_pool_update_sell():
 
 
 def test_post_decision_pool_update_hold_strong_signal():
-    """hold + 强信号 → 加入 agent_pool（3 天过期，priority=3）"""
+    """hold（含强信号）→ 不动 agent_pool（2026-07-02 修正）。
+
+    旧行为：hold+score>0.1 会 upsert 续期 3 天 → 反而把标的钉死在池里，成为
+    "每轮嚼同一批"锚定的成因之一。现在 hold 一律不动池，让 auto 候选自然老化 +
+    被 candidate_refresh 轮换淘汰。
+    """
     import asyncio
-    from datetime import datetime, timedelta
 
     async def _check():
         upserted = []
+        removed = []
 
         async def fake_upsert(*a, **kw):
             upserted.append((a, kw))
             return None
 
         async def fake_remove(*a, **kw):
+            removed.append((a, kw))
             return True
 
         db.PaperAgentPoolRepo.upsert = classmethod(lambda cls, *a, **kw: fake_upsert(*a, **kw))
@@ -320,13 +326,9 @@ def test_post_decision_pool_update_hold_strong_signal():
             {"action": "hold", "code": "600519", "name": "茅台", "score": 0.15},
         ]
         await post_decision_pool_update("g1", "b1", decisions)
-        assert len(upserted) == 1
-        # expires_at 应在 3 天后
-        args, kwargs = upserted[0]
-        exp = kwargs["expires_at"]
-        delta = exp - datetime.now()
-        assert timedelta(days=2, hours=23) < delta < timedelta(days=3, hours=1)
-        print("[OK] hold(强信号) → 加入 agent_pool (expires_in ~3d)")
+        assert len(upserted) == 0
+        assert len(removed) == 0
+        print("[OK] hold(强信号) → 不动 agent_pool（不再续期锚定）")
 
     asyncio.run(_check())
 
