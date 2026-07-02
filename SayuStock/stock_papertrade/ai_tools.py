@@ -1,10 +1,12 @@
 """AI 模拟盘 ai_tools 集合。
 
-13 个 ai_tools，分三类（**没有重叠**，每个工具只做一件事）：
+14 个 ai_tools，分三类（**没有重叠**，每个工具只做一件事）：
 - 业务/账本（**5 个只读**，capability_domain="AI模拟盘"，category="common"）
   —— 主 persona + 能力代理都能用
-- 能力代理私有（**5 个写**，capability_domain="AI模拟盘"，category="default" + visible_when）
+- 能力代理私有（**6 个写**，capability_domain="AI模拟盘"，category="default" + visible_when）
   —— 仅 papertrade_*_agent 可见；防止主 persona 误调写操作
+  —— decision_insert / trade_insert / position_upsert / candidate_refresh /
+     match_order / snapshot_write
 - 通用辅助（3 个，capability_domain="AI模拟盘"，category="common"）
   —— 财报 / 指标 / 交易日判断
 
@@ -1062,9 +1064,12 @@ async def papertrade_match_order(
 ) -> str:
     """撮合一笔订单（A 股真实费率 + 涨跌停拦截）；返回 MatchResult JSON 字符串。
 
-    内置涨跌停板拦截：本工具自动从 quote_service 拉取目标股票的昨收价比对。
-    当买入价触及涨停 或 卖出价触及跌停 时直接返回 ok=False，**不会**下真正的单。
-    调用方（LLM）判断到 ok=False + reason 含"涨停"或"跌停"后应改 hold。
+    内置涨跌停板拦截：本工具自动从 quote_service 拉取目标股票的昨收价 + 名称。
+    **为保险起见按名义涨跌停 × 0.9 拦截**：主板普通股涨跌幅达 ±9%、ST/*ST 达
+    ±4.5%、科创/创业板达 ±18%、北交所达 ±27% 即视为触及涨跌停——买入价触及涨停
+    或卖出价触及跌停时直接返回 ok=False，**不会**下真正的单。
+    （留 10% 缓冲是因为低价股涨停价四舍五入后实际涨幅常不到名义 10%，且 ST 只有
+    ±5%。）调用方（LLM）判断到 ok=False + reason 含"涨停"或"跌停"后应改 hold。
 
     Args:
         side: buy / sell
@@ -1076,9 +1081,10 @@ async def papertrade_match_order(
     """
     from .matcher import match_order
 
-    # ── 拉取昨收价 & 涨跌幅，用于涨跌停拦截 ──
+    # ── 拉取昨收价 & 涨跌幅 & 名称，用于涨跌停 / ST 拦截 ──
     last_close: Optional[float] = None
     change_pct: Optional[float] = None
+    name: Optional[str] = None
     try:
         # secid 格式：沪市(6开头) → "1.xxxxxx"；深市/北交所 → "0.xxxxxx"
         secid = f"1.{stock_code}" if stock_code.startswith("6") else f"0.{stock_code}"
@@ -1086,6 +1092,7 @@ async def papertrade_match_order(
         if entry is not None:
             last_close = entry.last_close
             change_pct = entry.change_pct
+            name = entry.name  # f57 名称，含 ST/*ST 前缀，供撮合层判风险警示股
     except Exception as e:
         _gslogger.debug(f"[SayuStock][PaperTrade] match_quote_fetch failed stock={stock_code}: {e}")
 
@@ -1098,6 +1105,7 @@ async def papertrade_match_order(
         position_qty=position_qty,
         last_close=last_close,
         change_pct=change_pct,
+        name=name,
     )
     view: _MatchResultView = {
         "ok": res.ok,
@@ -1113,6 +1121,89 @@ async def papertrade_match_order(
         "reason": res.reason,
     }
     return json.dumps(view, ensure_ascii=False)
+
+
+@ai_tools(
+    category="default",
+    capability_domain="AI模拟盘",
+    visible_when=_visible_to_papertrade_agent,
+)
+async def papertrade_snapshot_write(
+    ctx: RunContext[ToolContext],
+    group_id: str = "",
+    bot_id: str = "",
+) -> str:
+    """写当日收盘净值快照（现金 + Σ持仓实时市值），按 trade_date 幂等 upsert。
+
+    ⚠️ 仅 papertrade_*_agent 可见，**收盘快照代理专用**。一次做完：
+      1. 读账户 + enriched 持仓（自动刷实时报价算 market_value）；
+      2. total_equity = cash + Σmarket_value；
+         total_pnl = total_equity - initial_cash；
+         total_pnl_pct = total_pnl / initial_cash × 100；
+         day_pnl = total_equity - 上一交易日快照的 total_equity（无历史则相对 initial_cash）；
+      3. ``PaperSnapshotRepo.upsert_for_date`` 幂等写入（同一 trade_date 重跑只更新不新增）。
+
+    这是**纯记账**，不做任何买卖 / 撮合 / 决策，收盘后（非交易时段）调用。
+    trade_date 取东八区当天。
+    """
+    gid: str = _resolve_group_id(ctx, group_id)
+    bid: str = _resolve_bot_id(ctx, bot_id)
+    if not gid or not bid:
+        return "⚠️ 无法确定 group_id/bot_id"
+
+    acc = await db.PaperAccountRepo.get(gid, bid)
+    if not acc:
+        return f"ℹ️ 群 {gid} 尚未开通 AI 模拟盘，无法写快照。"
+
+    # 东八区当天作为 trade_date（系统时钟漂到 UTC 时避免快照记错日）
+    try:
+        from zoneinfo import ZoneInfo
+
+        today_cn: _dt.date = _dt.datetime.now(ZoneInfo("Asia/Shanghai")).date()
+    except Exception:
+        today_cn = _dt.date.today()
+
+    enriched: list[tuple[SayuPaperPosition, dict]] = await _get_enriched_positions(gid, bid)
+    agg: dict[str, float] = _aggregate_enriched(enriched)
+    position_value: float = agg["position_value"]
+    total_equity: float = round(acc.cash + position_value, 2)
+    total_pnl: float = round(total_equity - acc.initial_cash, 2)
+    total_pnl_pct: float = round(total_pnl / acc.initial_cash * 100, 4) if acc.initial_cash else 0.0
+
+    # day_pnl：相对上一交易日快照的 total_equity；无历史则相对初始本金
+    prev = await db.PaperSnapshotRepo.prev_before(gid, bid, today_cn)
+    baseline_equity: float = prev.total_equity if prev is not None else acc.initial_cash
+    day_pnl: float = round(total_equity - baseline_equity, 2)
+    day_pnl_pct: float = round(day_pnl / baseline_equity * 100, 4) if baseline_equity else 0.0
+
+    snap = await db.PaperSnapshotRepo.upsert_for_date(
+        gid,
+        bid,
+        today_cn,
+        cash=round(acc.cash, 2),
+        position_value=position_value,
+        total_equity=total_equity,
+        day_pnl=day_pnl,
+        day_pnl_pct=day_pnl_pct,
+        total_pnl=total_pnl,
+        total_pnl_pct=total_pnl_pct,
+    )
+    return json.dumps(
+        {
+            "ok": True,
+            "snapshot_id": snap.id,
+            "trade_date": today_cn.isoformat(),
+            "cash": round(acc.cash, 2),
+            "position_value": position_value,
+            "position_count": len(enriched),
+            "total_equity": total_equity,
+            "day_pnl": day_pnl,
+            "day_pnl_pct": day_pnl_pct,
+            "total_pnl": total_pnl,
+            "total_pnl_pct": total_pnl_pct,
+        },
+        ensure_ascii=False,
+    )
 
 
 # ============================================================
@@ -1132,50 +1223,35 @@ async def stock_financials(
         stock_code: 6 位股票代码
         report: ``main``（最新一期主要指标）/ ``income`` / ``balance`` / ``cashflow``
 
-    返回 ``report='main'`` 时是一段 JSON 字典，重点字段：
-
-        **标准行业**（制造业 / 消费 / 科技等）：
-            ``roe`` / ``revenue_yoy`` / ``profit_yoy`` / ``gross_margin`` /
-            ``net_margin`` / ``debt_ratio`` / ``eps`` / ``bps`` /
-            ``report_date`` / ``_industry_type`` / ``_gap`` / ``_raw_keys_present``
+    返回 ``report='main'`` 时是一段 JSON 字典，字段（跨行业通用，本就是一张
+    跨行业主指标表）：
+        ``roe``（加权净资产收益率 %）/ ``revenue_yoy``（营收同比 %）/
+        ``profit_yoy``（归母净利同比 %）/ ``gross_margin``（毛利率 %）/
+        ``net_margin``（净利率 %）/ ``debt_ratio``（资产负债率 %）/
+        ``eps``（基本每股收益 元）/ ``bps``（每股净资产 元）/
+        ``report_date`` / ``_industry_type`` / ``_gap`` / ``_raw_keys_present``
 
         **银行股专属**（``_industry_type='bank'`` 时追加）：
-            ``jroa``（扣非 ROE，银行偏好口径）/
-            ``net_interest_margin``（净息差）/
-            ``npl_ratio``（不良率）/
-            ``provision_coverage``（拨备覆盖率）/
-            ``core_capital_adequacy_ratio``（核心一级资本充足率）
+            ``net_interest_margin``（净息差 %，本报表唯一给到的银行特色指标）
 
-        **保险股专属**（``_industry_type='insurance'`` 时追加）：
-            ``solvency_ar``（偿付能力充足率）/
-            ``premium_income``（保费收入）
+    ⚠️ **行业识别**：本报表里只有银行会给 ``NET_INTEREST_MARGIN``（净息差），
+       据此判 bank，其余判 standard。NPL / 拨备 / 资本充足率 / 偿付能力等
+       **不在本接口**（在专门的 F10 银行/保险指标表里），本工具不返回。
 
-        **券商专属**（``_industry_type='broker'`` 时追加）：
-            ``main_business_income``（主营营收）
+    ⚠️ **银行股典型返回**（如 000001 平安银行，2026Q1）：
+        '{"_industry_type": "bank", "roe": 2.83, "revenue_yoy": 4.65,
+          "profit_yoy": 3.03, "gross_margin": null, "net_margin": 41.17,
+          "debt_ratio": 90.98, "eps": 0.67, "bps": 23.91,
+          "net_interest_margin": 1.79, "report_date": "2026-03-31",
+          "_gap": ["gross_margin"]}'
 
-    ⚠️ **行业识别自动判断**（基于东财 main_financial 表特征字段）：
-       - 看到 JROA / NPL_RATIO → 银行
-       - 看到 SOLVENCY_AR / PREMIUM_INCOME → 保险
-       - 看到 MAIN_BUSINESS_INCOME 但缺 XSMLL → 券商
-       - 其余 → standard
-
-    ⚠️ **银行股典型返回**（如 000001 平安银行）：
-        '{"_industry_type": "bank", "roe": null, "revenue_yoy": null, "gross_margin": null,
-          "net_margin": null, "debt_ratio": 90.98, "bps": 23.91, "report_date": "2026-03-31",
-          "jroa": 8.5, "net_interest_margin": 1.83, "npl_ratio": 1.06,
-          "provision_coverage": 246.0, "core_capital_adequacy_ratio": 9.42,
-          "_raw_keys_present": ["JROA", "ZCFZL", "BPS", "NPL_RATIO", ...],
-          "_gap": ["roe", "revenue_yoy", "gross_margin", "net_margin"]}'
-
-        → 这是银行股正常形态，**不要**因 ``roe`` 为 null 就说"数据缺失"。
-          银行股评估口径改为：jroa ≥ 行业均值 / npl_ratio < 1.5% /
-          provision_coverage > 150% / core_capital_adequacy_ratio > 8.5% /
-          net_interest_margin 趋势向上。
+        → 银行股 ``gross_margin`` 为 null 是正常（银行没有毛利率口径），
+          但 ``roe`` / ``net_margin`` / ``net_interest_margin`` 都有值，
+          **不要**因 gross_margin 缺失就说"数据缺失"。
 
     在 ``papertrade_decision_insert(reason=...)`` 里的推荐写法：
-        标准股：'ROE 同比+0.5pct 至 12.3%，毛利率 38.7% 创近 4 季新高'
-        银行股：'银行股口径——jroa=8.5% 持平行业均值，npl=1.06% 较年初降 4bp，
-                拨备覆盖率 246% 充足，资本充足率 9.42% 偏紧需关注分红能力'
+        标准股：'ROE 10.6%（同比-3.2pct），毛利率 89.8% 稳定，资产负债率 12.1% 极低'
+        银行股：'ROE 2.83%（单季）、净息差 1.79%、净利率 41.2%、资产负债率 90.98%'
     """
     if not stock_code or len(stock_code) != 6 or not stock_code.isdigit():
         return f"⚠️ stock_code 需为 6 位数字代码: {stock_code!r}"

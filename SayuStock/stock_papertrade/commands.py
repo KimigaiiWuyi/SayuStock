@@ -90,12 +90,22 @@ async def _setup_papertrade_kanban_trees(
                     "本轮全 hold / 无成交时最终消息只输出 <<NO_BROADCAST>> 一个标记，框架据此不推群。"
                 ),
                 "agent_profile": "papertrade_decision_agent",
-                "recurring_trigger": "cron:0,30 9-14 * * 1-5",
+                # 只在实际交易时段的整/半点触发：9:30/10:00/10:30/11:00/11:30 +
+                # 13:00/13:30/14:00/14:30/15:00。cron 的分/时是笛卡尔积，9-11,13-15
+                # 会多出 9:00（开盘前）和 15:30（收盘后）两个点——由决策代理开头的
+                # stock_is_trading_day 交易时段守卫直接 NO_BROADCAST 退出，不误动。
+                # 午休 12:00/12:30 已被 hour 列表（跳过 12）排除。
+                "recurring_trigger": "cron:0,30 9-11,13-15 * * 1-5",
             },
             {
-                "description": "收盘后写当日快照（position_value / total_equity / pnl_pct）",
-                "agent_profile": "papertrade_decision_agent",
-                "recurring_trigger": "cron:35 15 * * 1-5",
+                "description": (
+                    "收盘后写当日净值快照：直接调 papertrade_snapshot_write() 一次"
+                    "（现金 + Σ持仓实时市值 → total_equity / total_pnl / pnl_pct，"
+                    "按 trade_date 幂等 upsert），然后按代理规约输出 NO_BROADCAST。"
+                ),
+                "agent_profile": "papertrade_snapshot_agent",
+                # 15:05：收盘（15:00）后 5 分钟，等东财 EOD 价落定即写，不再拖到 15:35。
+                "recurring_trigger": "cron:5 15 * * 1-5",
             },
             {
                 "description": "月初出复盘报告（月收益 / 胜率 / 最大回撤）",
@@ -111,7 +121,8 @@ async def _setup_papertrade_kanban_trees(
                     "**本轮仅做轮换，不调任何撮合/流水/持仓/决策工具，不做 buy/sell 判断**。"
                 ),
                 "agent_profile": "papertrade_pool_refresh_agent",
-                "recurring_trigger": "cron:30 10,12,14 * * 1-5",
+                # 10:15 / 14:15：均落在交易时段内，避开午休（原 12:30 在午休且不可靠）。
+                "recurring_trigger": "cron:15 10,14 * * 1-5",
             },
         ]
         period_root, _ = await create_kanban_tree(
@@ -333,10 +344,10 @@ async def _kick_immediate_decision(ev: Event, group_id: str, bot_id: str) -> Non
 1) SQLModel 建账户（100w 现金，balanced 模式）
 2) Kanban init 树（leaf-root / papertrade_setup_agent，单次执行把账户建好）
 3) Kanban period 树（ROOT 非周期，仅容器；4 个子任务各自独立挂 APScheduler）：
-   - 决策代理（cron:0,30 9-14 * * 1-5，工作日每 30 分钟看盘）
-   - 决策代理（cron:35 15 * * 1-5，工作日收盘写当日快照）
+   - 决策代理（cron:0,30 9-11,13-15 * * 1-5，工作日交易时段每 30 分钟看盘）
+   - 快照代理（cron:5 15 * * 1-5，工作日 15:05 收盘写当日净值快照）
    - 复盘代理（cron:0 9 1 * *，每月 1 日 09:00 出月报）
-   - 候选池轮换代理（cron:30 10,12,14 * * 1-5，每 2 小时轮换候选池防锚定）
+   - 候选池轮换代理（cron:15 10,14 * * 1-5，交易时段轮换候选池防锚定）
 4) kick_root 一次，触发 4 个子任务各自 arm 到 APScheduler
 
 仅群主/管理员可触发；已开户直接返回原账户。

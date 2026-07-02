@@ -81,14 +81,15 @@ _REASON_DROPS: tuple[str, ...] = (
 _REASON_DISPLAY_LIMIT: int = 200
 
 # 白名单 indicator key（财报 + 技术 + 银行股专属）
-# 2026-07-01 调整：覆盖 P0 新增 BOLL/CCI/BBI + 银行股专属字段
+# 2026-07-02 调整：财报字段与 get_financial_snapshot 真实输出对齐（旧的
+# jroa/npl_ratio/provision_coverage/core_capital_adequacy_ratio 在东财
+# MAINFINADATA 接口里根本没有，永远 None，已从财报 snapshot 移除）。
 _INDICATOR_KEYS_WHITELIST: tuple[str, ...] = (
-    # 财报（标准）
+    # 财报（跨行业通用）
     "roe", "revenue_yoy", "profit_yoy", "gross_margin", "net_margin",
     "debt_ratio", "eps", "bps",
-    # 财报（银行专属）
-    "jroa", "net_interest_margin", "npl_ratio",
-    "provision_coverage", "core_capital_adequacy_ratio",
+    # 财报（银行专属：净息差）
+    "net_interest_margin",
     # 技术（已有）
     "ma5", "ma20", "ma60", "rsi6", "rsi14", "macd_dif",
     # 技术（P0 新增）

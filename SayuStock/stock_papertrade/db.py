@@ -893,6 +893,92 @@ class PaperSnapshotRepo:
 
     @classmethod
     @with_session
+    async def prev_before(
+        cls,
+        session: AsyncSession,
+        group_id: str,
+        bot_id: str,
+        trade_date: date,
+    ) -> Optional[SayuPaperSnapshot]:
+        """取 ``trade_date`` **之前**最近的一条快照（用于算 day_pnl 的基准）。"""
+        stmt = (
+            select(SayuPaperSnapshot)
+            .where(
+                and_(
+                    col(col(SayuPaperSnapshot.group_id)) == group_id,
+                    col(col(SayuPaperSnapshot.bot_id)) == bot_id,
+                    col(col(SayuPaperSnapshot.trade_date)) < trade_date,
+                )
+            )
+            .order_by(col(col(SayuPaperSnapshot.trade_date)).desc())
+            .limit(1)
+        )
+        result = await session.execute(stmt)
+        return result.scalar_one_or_none()
+
+    @classmethod
+    @with_session
+    async def upsert_for_date(
+        cls,
+        session: AsyncSession,
+        group_id: str,
+        bot_id: str,
+        trade_date: date,
+        cash: float,
+        position_value: float,
+        total_equity: float,
+        day_pnl: float = 0.0,
+        day_pnl_pct: float = 0.0,
+        total_pnl: float = 0.0,
+        total_pnl_pct: float = 0.0,
+    ) -> SayuPaperSnapshot:
+        """按 ``(group_id, bot_id, trade_date)`` 幂等写快照：已存在则更新，否则新建。
+
+        表本身是 append-only（无唯一约束），同一天收盘快照若重跑一次会产生重复行；
+        这里先查当天行，命中就原地更新，避免排行/复盘取到重复日的净值。
+        """
+        stmt = (
+            select(SayuPaperSnapshot)
+            .where(
+                and_(
+                    col(col(SayuPaperSnapshot.group_id)) == group_id,
+                    col(col(SayuPaperSnapshot.bot_id)) == bot_id,
+                    col(col(SayuPaperSnapshot.trade_date)) == trade_date,
+                )
+            )
+            .limit(1)
+        )
+        existing = (await session.execute(stmt)).scalar_one_or_none()
+        if existing is not None:
+            existing.cash = cash
+            existing.position_value = position_value
+            existing.total_equity = total_equity
+            existing.day_pnl = day_pnl
+            existing.day_pnl_pct = day_pnl_pct
+            existing.total_pnl = total_pnl
+            existing.total_pnl_pct = total_pnl_pct
+            existing.created_at = datetime.now()
+            session.add(existing)
+            await session.flush()
+            return existing
+        snap = SayuPaperSnapshot(
+            group_id=group_id,
+            bot_id=bot_id,
+            trade_date=trade_date,
+            cash=cash,
+            position_value=position_value,
+            total_equity=total_equity,
+            day_pnl=day_pnl,
+            day_pnl_pct=day_pnl_pct,
+            total_pnl=total_pnl,
+            total_pnl_pct=total_pnl_pct,
+        )
+        session.add(snap)
+        await session.flush()
+        return snap
+
+    @classmethod
+    @with_session
     async def list_latest_all_groups(cls, session: AsyncSession, limit: int = 20) -> List[SayuPaperSnapshot]:
         """跨群排行：返回每个群最新一条快照 + total_pnl_pct。"""
         # SQL: 取每组 (group_id, bot_id) 最新 trade_date 那一行

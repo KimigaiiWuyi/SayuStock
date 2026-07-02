@@ -245,7 +245,7 @@ async def send_dry_run(bot: Bot, ev: Event):
                                      推主动消息
         ⑦ DB 状态 + delta 校验     — cash 变动 / fee 总和 / realized_pnl 必须非零；
                                      不达标即标 ❌
-        ⑧ 写快照（手工模拟 15:35） — db.PaperSnapshotRepo.append
+        ⑧ 写快照（手工模拟 15:05） — db.PaperSnapshotRepo.upsert_for_date（幂等）
         ⑨ auto-cleanup             — reset_account + unschedule_template +
                                      hard_delete_task_tree × 2 + APScheduler
                                      job 移除（双保险）
@@ -401,12 +401,12 @@ async def send_dry_run(bot: Bot, ev: Event):
             {
                 "description": "查询账户/候选池/持仓 → 决策 → papertrade_*_insert/upsert 写入",
                 "agent_profile": "papertrade_decision_agent",
-                "recurring_trigger": "cron:0,30 9-14 * * 1-5",
+                "recurring_trigger": "cron:0,30 9-11,13-15 * * 1-5",
             },
             {
-                "description": "收盘后写当日快照（position_value / total_equity / pnl_pct）",
-                "agent_profile": "papertrade_decision_agent",
-                "recurring_trigger": "cron:35 15 * * 1-5",
+                "description": "收盘后写当日快照：papertrade_snapshot_write() 幂等 upsert",
+                "agent_profile": "papertrade_snapshot_agent",
+                "recurring_trigger": "cron:5 15 * * 1-5",
             },
             {
                 "description": "月初出复盘报告（月收益 / 胜率 / 最大回撤）",
@@ -661,7 +661,7 @@ async def send_dry_run(bot: Bot, ev: Event):
             f"        7.3 stock_indicators(stock_code, periods=60, kline_period=60) → 60 分钟 K\n"
             f"        7.4 stock_indicators(stock_code, periods=80, kline_period=15) → 15 分钟 K\n"
             f"        7.5 stock_financials(stock_code, report='main') → 财报 + 行业类型\n"
-            f"            重点：_industry_type；银行股看 jroa/npl/provision；其余看 roe/revenue_yoy/gross_margin\n"
+            f"            重点：roe/revenue_yoy/profit_yoy/net_margin/debt_ratio；银行股另看 net_interest_margin（无毛利率）\n"
             f"        7.6 跨周期共振判断：\n"
             f"            - 日 K MACD 金叉 + 60m K MACD 金叉 + 15m K MACD 金叉 = 强买信号\n"
             f"            - 日 K BOLL20 带宽 / BOLL60 带宽 > 1.3 = 短期波动放大\n"
@@ -669,7 +669,7 @@ async def send_dry_run(bot: Bot, ev: Event):
             f"\n"
             f"━━━ 第三阶段：行业横向对比（如果你选了某板块）━━━\n"
             f"Step 8: 选 1~2 只同板块龙头 / 竞品跑相同 Step 7 流程\n"
-            f"        8.1 横向比：jroa/roe、毛利率、MACD 趋势、BOLL 位置\n"
+            f"        8.1 横向比：roe/net_margin、毛利率、MACD 趋势、BOLL 位置\n"
             f"        8.2 找出板块内最强个股 vs 你候选的个股\n"
             f"\n"
             f"━━━ 第四阶段：综合决策 ━━━\n"
@@ -996,7 +996,7 @@ async def send_dry_run(bot: Bot, ev: Event):
     delta_dt: float = _time.perf_counter() - t0
     sections.append("─── ⑥.5 delta 校验 ───\n" + "\n".join(delta_lines) + f"\n⏱ {delta_dt:.2f}s")
 
-    # ─── ⑦ 写快照（手工模拟 15:35 收盘后写） ───
+    # ─── ⑦ 写快照（手工模拟 15:05 收盘后写，幂等 upsert） ───
     t0 = _time.perf_counter()
     snap_lines: list[str] = []
     try:
@@ -1014,7 +1014,7 @@ async def send_dry_run(bot: Bot, ev: Event):
             day_pnl: float = float(realized_pnl) if "realized_pnl" in dir() else 0.0
             total_pnl: float = total_equity - acc_snap.initial_cash
             total_pnl_pct: float = total_pnl / acc_snap.initial_cash * 100 if acc_snap.initial_cash else 0.0
-            snap = await PaperSnapshotRepo.append(
+            snap = await PaperSnapshotRepo.upsert_for_date(
                 group_id,
                 bot_id,
                 today,
@@ -1026,7 +1026,7 @@ async def send_dry_run(bot: Bot, ev: Event):
                 total_pnl=total_pnl,
                 total_pnl_pct=total_pnl_pct,
             )
-            snap_lines.append("✅ PaperSnapshotRepo.append OK")
+            snap_lines.append("✅ PaperSnapshotRepo.upsert_for_date OK")
             snap_lines.append(f"   trade_date = {today.isoformat()}")
             snap_lines.append(f"   cash       = {acc_snap.cash:,.2f}")
             snap_lines.append(f"   position   = {position_value:,.2f}")

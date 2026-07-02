@@ -22,9 +22,18 @@ LOT_SIZE = 100  # A 股最小 100 股整手
 # 688xxx 科创板 / 300xxx 301xxx 创业板 → ±20%
 # 830xxx+ 920xxx 北交所 → ±30%
 # 其余（沪主板 60xxxx / 深主板 00xxxx）→ ±10%
+# ST / *ST（风险警示）主板 → ±5%
 LIMIT_THRESHOLD_MAIN = 10.0  # 主板 ±10%
 LIMIT_THRESHOLD_STAR_CHINEXT = 20.0  # 科创 / 创业 ±20%
 LIMIT_THRESHOLD_BSE = 30.0  # 北交所 ±30%
+LIMIT_THRESHOLD_ST = 5.0  # ST / *ST 主板 ±5%
+
+# 保险拦截系数：实际涨跌幅达到"本板涨停幅度 × 此系数"即视为触及涨跌停，
+# 禁止 agent 买入（涨停）/ 卖出（跌停）。留 10% 缓冲是因为：
+#   1. 低价股涨停价四舍五入后实际涨幅可能只有 +9.7%（不到名义 10%）；
+#   2. 盘中封板前后有细微跳动。
+# 于是：主板 9% / ST 4.5% / 科创创业 18% / 北交所 27% 就按涨跌停处理。
+LIMIT_BLOCK_RATIO = 0.9
 
 
 @dataclass(slots=True)
@@ -58,24 +67,46 @@ def round_lot(qty: int) -> int:
     return (qty // LOT_SIZE) * LOT_SIZE
 
 
-def _limit_threshold_for_code(code: str) -> float:
-    """按股票代码前缀确定涨跌停阈值（%）。
+def _is_st(name: Optional[str]) -> bool:
+    """判断是否为 ST / *ST / SST / S*ST（风险警示股，涨跌停 ±5%）。
 
-    688xxx / 689xxx → 科创板 ±20%
-    300xxx / 301xxx → 创业板 ±20%
-    830xxx ~ 87xxx / 920xxx → 北交所 ±30%
-    其余 → 主板 ±10%
+    A 股风险警示标记恒为名称前缀（"ST" / "*ST" / "SST" / "S*ST" / "PT"），
+    正常股票名不会以这些字母开头，故按前缀匹配不会误伤。
+    """
+    if not name:
+        return False
+    nm = name.upper().replace(" ", "").replace("　", "")
+    return nm.startswith(("ST", "*ST", "SST", "S*ST", "PT"))
+
+
+def _limit_threshold_for(code: str, name: Optional[str] = None) -> float:
+    """按股票代码前缀 + ST 标记确定名义涨跌停阈值（%）。
+
+    ST / *ST 主板 → ±5%
+    688xxx / 689xxx 科创板、300xxx / 301xxx 创业板 → ±20%（含创业板 ST）
+    830xxx ~ 87xxx / 920xxx 北交所 → ±30%
+    其余主板 → ±10%
     """
     if not code or len(code) < 6:
         return LIMIT_THRESHOLD_MAIN
-    prefix3 = code[:3]
-    if code.startswith("688") or code.startswith("689"):
-        return LIMIT_THRESHOLD_STAR_CHINEXT
-    if prefix3 in ("300", "301"):
+    if code.startswith(("688", "689")) or code[:3] in ("300", "301"):
         return LIMIT_THRESHOLD_STAR_CHINEXT
     if code.startswith(("83", "87", "920")):
         return LIMIT_THRESHOLD_BSE
+    # 主板：ST 收窄到 ±5%
+    if _is_st(name):
+        return LIMIT_THRESHOLD_ST
     return LIMIT_THRESHOLD_MAIN
+
+
+def _board_label(threshold: float, is_st: bool) -> str:
+    if is_st:
+        return "ST 主板"
+    if threshold == LIMIT_THRESHOLD_STAR_CHINEXT:
+        return "科创板/创业板"
+    if threshold == LIMIT_THRESHOLD_BSE:
+        return "北交所"
+    return "主板"
 
 
 def _is_at_limit(
@@ -84,46 +115,48 @@ def _is_at_limit(
     code: str,
     last_close: Optional[float],
     change_pct: Optional[float],
+    name: Optional[str] = None,
 ) -> tuple[bool, str]:
-    """检测是否触及涨跌停。
+    """检测是否触及（或逼近）涨跌停。
+
+    为保险起见按"名义涨跌停 × LIMIT_BLOCK_RATIO"拦截：主板普通股 ±9%、ST ±4.5%、
+    科创/创业 ±18%、北交所 ±27% 即视为涨跌停，禁止 buy（涨停）/ sell（跌停）。
 
     Args:
         side: "buy" / "sell"
         price: 当前成交价
-        last_close: 昨收价
-        change_pct: 涨跌幅（%，如 9.99）
+        code: 股票代码（判板块）
+        last_close: 昨收价（有则用它算实际涨跌幅，比 push2 f45 更可靠）
+        change_pct: 涨跌幅（%，如 9.99）；last_close 缺失时降级用它
+        name: 股票名称（判 ST）
 
     Returns:
         ``(blocked, reason)`` —— blocked=True 时 reason 描述具体板子
     """
-    if last_close is None or last_close <= 0:
-        # 拿不到昨收，只能降级用 change_pct 推算
-        if change_pct is None:
-            return False, ""
-        threshold = 9.5  # 保守阈值（10% 板）或 19.5（20% 板）
-        if side == "buy" and change_pct >= threshold:
-            return True, f"逼近涨停 (涨跌幅={change_pct:.2f}% ≥ {threshold}%，无昨收兜底保守拦截)"
-        if side == "sell" and change_pct <= -threshold:
-            return True, f"逼近跌停 (涨跌幅={change_pct:.2f}% ≤ -{threshold}%，无昨收兜底保守拦截)"
+    threshold = _limit_threshold_for(code, name)
+    block_at = threshold * LIMIT_BLOCK_RATIO
+    board = _board_label(threshold, _is_st(name) and threshold == LIMIT_THRESHOLD_ST)
+
+    # 优先用昨收价直接算实际涨跌幅；拿不到就降级用 push2 的 change_pct
+    if last_close is not None and last_close > 0:
+        actual_chg = (price - last_close) / last_close * 100.0
+        src = ""
+    elif change_pct is not None:
+        actual_chg = change_pct
+        src = "（无昨收，用行情涨跌幅兜底）"
+    else:
         return False, ""
 
-    threshold = _limit_threshold_for_code(code)
-    # 用昨收价直接计算涨跌幅，比 push2 的 f45 更可靠
-    actual_chg = (price - last_close) / last_close * 100.0
-    if side == "buy" and actual_chg >= threshold - 0.05:
-        board = (
-            "科创板/创业板" if threshold == LIMIT_THRESHOLD_STAR_CHINEXT
-            else "北交所" if threshold == LIMIT_THRESHOLD_BSE
-            else "主板"
+    if side == "buy" and actual_chg >= block_at:
+        return True, (
+            f"涨停板买入拦截 ({board} 涨幅={actual_chg:.2f}% ≥ {block_at:.1f}%"
+            f"（名义涨停 {threshold:.0f}%），接近或触及涨停){src}"
         )
-        return True, f"涨停板买入拦截 ({board} 涨幅={actual_chg:.2f}% ≥ {threshold}%，接近或触及涨停)"
-    if side == "sell" and actual_chg <= -threshold + 0.05:
-        board = (
-            "科创板/创业板" if threshold == LIMIT_THRESHOLD_STAR_CHINEXT
-            else "北交所" if threshold == LIMIT_THRESHOLD_BSE
-            else "主板"
+    if side == "sell" and actual_chg <= -block_at:
+        return True, (
+            f"跌停板卖出拦截 ({board} 跌幅={actual_chg:.2f}% ≤ -{block_at:.1f}%"
+            f"（名义跌停 {threshold:.0f}%），接近或触及跌停){src}"
         )
-        return True, f"跌停板卖出拦截 ({board} 跌幅={actual_chg:.2f}% ≤ -{threshold}%，接近或触及跌停)"
     return False, ""
 
 
@@ -136,6 +169,7 @@ def match_order(
     position_qty: int,
     last_close: Optional[float] = None,
     change_pct: Optional[float] = None,
+    name: Optional[str] = None,
 ) -> MatchResult:
     """撮合一笔订单（A 股真实费率）。
 
@@ -148,6 +182,7 @@ def match_order(
         position_qty: 当前持仓股数（sell 时校验）
         last_close: 昨收价；非 None 时启用涨跌停板拦截
         change_pct: 涨跌幅（%，如 9.99）；仅当 last_close=None 时使用保守兜底
+        name: 股票名称；用于识别 ST / *ST（涨跌停 ±5%）
 
     Returns:
         MatchResult —— ok=False 时 reason 写明原因
@@ -183,7 +218,7 @@ def match_order(
 
     # ── 涨跌停板拦截 ──
     if last_close is not None or change_pct is not None:
-        blocked, block_reason = _is_at_limit(side, price, code, last_close, change_pct)
+        blocked, block_reason = _is_at_limit(side, price, code, last_close, change_pct, name)
         if blocked:
             return MatchResult(
                 ok=False,
