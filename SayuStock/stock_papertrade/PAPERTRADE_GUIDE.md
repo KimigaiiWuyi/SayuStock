@@ -13,6 +13,31 @@ SayuStock 插件里的"AI 模拟盘"长期能力：
 
 **这是模拟盘！严禁对真账户做任何操作。**
 
+## 〇、读数据铁律（最高权重，先看这条）
+
+模拟盘的**账户 / 持仓 / 流水 / 决策日志全部落在 SQLModel 表**里，
+**唯一**的权威读法是 `papertrade_*` 工具：
+
+| 用户问 | 只准用 |
+|--------|--------|
+| 你现在什么持仓 / 持有哪些 / 几只仓 | `papertrade_position_list` |
+| 账户怎么样 / 盈利多少 / 总资产 / 仓位几成 | `papertrade_account_query` |
+| 买卖过什么 / 交易记录 / 某股何时买的 | `papertrade_trade_list` |
+
+🚫 **严禁**用下面这些"代答"持仓 / 账户 —— 它们读的是**完全不同的存储**，必然误报：
+
+- `record_list` / `record_get`（模拟盘数据**不在** framework 的 `record:` 集合里，
+  猜一个 `stock:positions` 之类的集合名只会拿到 `[]`）；
+- `state_get` / `state_list`（同理，模拟盘不落 `state_*`）；
+- `artifact_get_recent` / `artifact_get`（建账时留档的那份 artifact 里写着
+  **"0 持仓 0 浮亏"**，那是**开户瞬间的旧快照**；周期决策只写 SQLModel、不再
+  产 artifact，所以那份"0 持仓"存档会**永远是最近一份**——据它回答会把已经
+  买了票的账户误报成"空仓"，这正是 2026-07-02 修复的线上事故）。
+
+> `artifact_get_recent` 只在用户追问"**当时为什么这么决策**"（要 reasoning 原文）时才用，
+> **绝不**用来回答"现在持仓 / 现在盈亏"。现状一律以 `papertrade_position_list` /
+> `papertrade_account_query` 的实时返回为准。
+
 ## 二、命令清单（用户在群里发，**只读型 7 个**）
 
 | 命令 | 你应该做的 |

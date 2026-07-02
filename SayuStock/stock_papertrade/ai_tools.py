@@ -17,7 +17,7 @@
 
 import json
 import datetime as _dt
-from typing import Any, Dict, Optional, Set, TypedDict
+from typing import Any, Set, Dict, Optional, TypedDict
 
 from pydantic_ai import RunContext
 
@@ -37,6 +37,33 @@ from ..utils.eastmoney_finance import (
 )
 from ..utils.stock.request_utils import get_code_id
 from ..utils.database.papertrade_models import SayuPaperPosition
+
+# ============================================================
+# 语境工具池标签（context_tags）
+#
+# 2026-07-02 修复"@早柚问持仓却答空仓"的召回断链：主 persona 的工具是按用户
+# 这句话**语义召回**装配的，"持仓 / 账户 / 收益"很容易被 send_my_stock（查
+# 用户**个人自选股**的 trigger 命令）+ 通用 record_* 抢走名额，导致真正读
+# SQLModel 三张表的 papertrade_account_query / papertrade_position_list
+# **压根没进主 persona 的工具清单** → persona 只能瞎猜 record_list /
+# artifact_get_recent（读错存储）→ 报"空仓"。
+#
+# 声明 context_tags 后，框架在**金融/股票语境的群**里会把这几个只读账本工具
+# 直接**按群画像标签自动装配**（get_tools_by_context_tags），不再依赖单句
+# 语义召回是否命中——问"你现在什么持仓"时它们已经在工具池里。
+#
+# 标签同时覆盖群画像常见的中英文写法（匹配大小写不敏感、按标签重叠数打分）。
+# ============================================================
+_PAPERTRADE_CTX_TAGS: list[str] = [
+    "Stock",
+    "Finance",
+    "股票",
+    "金融",
+    "投资",
+    "模拟盘",
+    "AI模拟盘",
+    "持仓",
+]
 
 
 # ============================================================
@@ -308,13 +335,23 @@ def _aggregate_enriched(
 # ============================================================
 
 
-@ai_tools(category="common", capability_domain="AI模拟盘")
+@ai_tools(
+    category="common",
+    capability_domain="AI模拟盘",
+    context_tags=_PAPERTRADE_CTX_TAGS,
+)
 async def papertrade_account_query(
     ctx: RunContext[ToolContext],
     group_id: str = "",
     bot_id: str = "",
 ) -> str:
-    """查询 AI 模拟盘账户状态（当前群或指定群）。
+    """查询本群 AI 模拟盘（虚拟盘）账户：现金 / 总资产 / 浮盈 / 已实现盈亏 / 持仓数。
+
+    ⚠️ **这是"你（早柚/AI）自己经营的模拟盘账户"的权威数据源**，不是用户个人
+    自选股。当有人问「你现在账户怎么样 / 盈利多少 / 总资产多少 / 仓位几成 /
+    今天赚了没」时走这个工具。账户与持仓落在 SQLModel 表里，**不在** framework
+    的 ``record:`` 集合、``state_*`` 或 init 阶段的 artifact 里——**严禁**用
+    ``record_list`` / ``state_get`` / ``artifact_get_recent`` 代答账户状态。
 
     2026-07-01 修复：``total_equity`` 现在是 **真·总资产 = 现金 + Σ持仓市值**，
     不再返回 cash-only；同时给出 ``total_unrealized_pnl`` / ``realized_pnl`` /
@@ -370,13 +407,25 @@ async def papertrade_account_query(
     return json.dumps(view, ensure_ascii=False)
 
 
-@ai_tools(category="common", capability_domain="AI模拟盘")
+@ai_tools(
+    category="common",
+    capability_domain="AI模拟盘",
+    context_tags=_PAPERTRADE_CTX_TAGS,
+)
 async def papertrade_position_list(
     ctx: RunContext[ToolContext],
     group_id: str = "",
     bot_id: str = "",
 ) -> str:
-    """列出某群 AI 模拟盘当前持仓（含现价 / 市值 / 浮盈）。
+    """列出本群 AI 模拟盘（虚拟盘）当前持仓：持有哪些股票 / 现价 / 市值 / 浮盈。
+
+    ⚠️ **问「你现在持有什么 / 你的持仓 / 买了哪些股 / 现在几只仓」时走这个**——
+    这是"你（早柚/AI）自己经营的模拟盘"的权威持仓表（SQLModel），**不是**用户
+    个人自选股（那是 ``send_my_stock``）。持仓落在 SQLModel 表里，**不在**
+    framework 的 ``record:`` 集合、``state_*`` 或 init artifact 里；返回
+    ``ℹ️ ...当前无持仓`` 才代表真的空仓。**严禁**用 ``record_list`` /
+    ``artifact_get_recent`` 代答持仓——init artifact 的"0 持仓"是建账时的旧
+    快照，成交后永不更新，据它回答会误报空仓。
 
     2026-07-01 修复：每行新增 ``current_price`` / ``market_value`` /
     ``unrealized_pnl`` / ``unrealized_pnl_pct`` / ``quote_age_seconds`` /
@@ -416,7 +465,11 @@ async def papertrade_position_list(
     return json.dumps(items, ensure_ascii=False)
 
 
-@ai_tools(category="common", capability_domain="AI模拟盘")
+@ai_tools(
+    category="common",
+    capability_domain="AI模拟盘",
+    context_tags=_PAPERTRADE_CTX_TAGS,
+)
 async def papertrade_trade_list(
     ctx: RunContext[ToolContext],
     group_id: str = "",
@@ -424,7 +477,11 @@ async def papertrade_trade_list(
     stock_code: str = "",
     limit: int = 20,
 ) -> str:
-    """查询某群 AI 模拟盘交易流水。"""
+    """查询本群 AI 模拟盘（虚拟盘）历史买卖流水（买入/卖出记录 + 已实现盈亏）。
+
+    问「你都买卖过什么 / 最近成交 / 交易记录 / 某只股什么时候买的」走这个。
+    数据在 SQLModel 流水表，**不在** ``record:`` 集合 / ``state_*``。
+    """
     gid: str = _resolve_group_id(ctx, group_id)
     bid: str = _resolve_bot_id(ctx, bot_id)
     if not gid or not bid:
@@ -602,13 +659,15 @@ async def papertrade_decision_insert(
             await post_decision_pool_update(
                 gid,
                 bid,
-                [{
-                    "action": action_lc,
-                    "code": stock_code,
-                    "name": stock_name,
-                    "secid": "",
-                    "score": score,
-                }],
+                [
+                    {
+                        "action": action_lc,
+                        "code": stock_code,
+                        "name": stock_name,
+                        "secid": "",
+                        "score": score,
+                    }
+                ],
             )
         except Exception as e:
             _gslogger.debug(f"[SayuStock][PaperTrade] decision→pool 反馈失败: {e}")
@@ -804,20 +863,21 @@ async def papertrade_candidate_refresh(
         "pool_size_before": N, "pool_size_after": M}
     """
     from datetime import timedelta
+
     from .candidate_pool import (
-        POOL_TARGET_SIZE,
         BASE_KEEP,
-        ROTATE_OUT_PER_REFRESH,
+        BLUECHIP_BASE,
+        POOL_TARGET_SIZE,
         AUTO_EXPIRE_HOURS,
         BASE_EXPIRE_HOURS,
+        ROTATE_OUT_PER_REFRESH,
         derive_secid,
-        pick_base_slice,
-        filter_overheated,
-        BLUECHIP_BASE,
         _from_position,
         _from_watchlist,
-        _from_sector_top_picks,
+        pick_base_slice,
+        filter_overheated,
         _from_hotmap_top_n,
+        _from_sector_top_picks,
         _from_news_extract_tickers,
     )
 
@@ -868,9 +928,7 @@ async def papertrade_candidate_refresh(
 
     # 淘汰后重算 seen（现池 + 保护集）
     seen: Set[str] = set(await db.PaperAgentPoolRepo.list_codes(gid, bid)) | protected
-    base_now: int = sum(
-        1 for e in entries if e.added_by == "base" and e.stock_code not in evicted
-    )
+    base_now: int = sum(1 for e in entries if e.added_by == "base" and e.stock_code not in evicted)
 
     # ── 2) 补蓝筹底仓到 BASE_KEEP ──
     base_added: list[str] = []
@@ -884,10 +942,14 @@ async def papertrade_candidate_refresh(
             secid = derive_secid(code)
             try:
                 await db.PaperAgentPoolRepo.upsert(
-                    gid, bid,
-                    stock_code=code, stock_name=name, secid=secid,
+                    gid,
+                    bid,
+                    stock_code=code,
+                    stock_name=name,
+                    secid=secid,
                     reason="蓝筹底仓（大盘蓝筹/指数成分，质量地基）",
-                    added_by="base", priority=2,
+                    added_by="base",
+                    priority=2,
                     expires_at=now + timedelta(hours=BASE_EXPIRE_HOURS),
                 )
             except Exception as ex:
@@ -947,11 +1009,14 @@ async def papertrade_candidate_refresh(
             secid = derive_secid(c)
             try:
                 await db.PaperAgentPoolRepo.upsert(
-                    gid, bid,
-                    stock_code=c, stock_name="",
+                    gid,
+                    bid,
+                    stock_code=c,
+                    stock_name="",
                     secid=secid,
                     reason="板块/热度/新闻扫描（已过滤涨停/过热，priority=1）",
-                    added_by="auto_refresh", priority=1,
+                    added_by="auto_refresh",
+                    priority=1,
                     expires_at=now + timedelta(hours=AUTO_EXPIRE_HOURS),
                 )
             except Exception as ex:
