@@ -196,7 +196,7 @@ def build_kline_render_data(raw_data: RawDict) -> KlineRenderData | DataResult:
     if chart_df.empty:
         return ErroText["notData"]
 
-    turnover = _numeric_series(df["换手率"]) if "换手率" in df else pd.Series(dtype=float)
+    turnover = _numeric_series(df["换手率"]) / 100 if "换手率" in df else pd.Series(dtype=float)
     df["is_max"] = turnover == turnover.rolling(window=3, center=True).max()
     max_turnovers = cast(pd.DataFrame, df[df["is_max"] & (turnover > 0)])
 
