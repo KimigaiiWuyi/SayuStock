@@ -53,7 +53,7 @@ def fill_kline(raw_data: Dict):
     # 计算5日和10日移动平均线
     df["5日均线"] = df["收盘"].rolling(window=5).mean()
     df["10日均线"] = df["收盘"].rolling(window=10).mean()
-    df["换手率"] = df["换手率"].astype(float) / 100
+    df["换手率"] = df["换手率"].astype(float)
 
     df["归一化"] = (df["收盘"] / df["收盘"].iloc[0]) - 1
 

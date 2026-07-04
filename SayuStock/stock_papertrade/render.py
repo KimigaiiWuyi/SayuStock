@@ -13,10 +13,7 @@ from ..utils.image import get_footer
 # 工具
 # ============================================================
 def _font(size: int = 22) -> ImageFont.FreeTypeFont:
-    try:
-        return ss_font(size)
-    except Exception:
-        return ImageFont.load_default()
+    return ss_font(size)
 
 
 def _new_canvas(w: int, h: int) -> Image.Image:
@@ -54,37 +51,6 @@ def _paste_footer(img: Image.Image) -> Image.Image:
 
 
 # ============================================================
-# 工具
-# ============================================================
-def _font(size: int = 22) -> ImageFont.FreeTypeFont:
-    try:
-        return ss_font(size)
-    except Exception:
-        return ImageFont.load_default()
-
-
-def _hex(c: tuple) -> str:
-    return "#{:02x}{:02x}{:02x}".format(*c)
-
-
-def _new_canvas(w: int, h: int) -> Image.Image:
-    img = Image.new("RGB", (w, h), (24, 24, 30))
-    return img
-
-
-def _draw_text(
-    img: Image.Image,
-    xy: tuple,
-    text: str,
-    color=(240, 240, 240),
-    size: int = 22,
-    anchor: str = "lt",
-):
-    draw = ImageDraw.Draw(img)
-    draw.text(xy, text, fill=color, font=_font(size), anchor=anchor)
-
-
-# ============================================================
 # 1) 账户视图
 # ============================================================
 async def draw_account_view(
@@ -94,11 +60,9 @@ async def draw_account_view(
     acc = await db.PaperAccountRepo.get(group_id, bot_id)
     positions = await db.PaperPositionRepo.list_by_account(group_id, bot_id)
     recent_trades = await db.PaperTradeRepo.list_by_account(group_id, bot_id, limit=5)
-    snap = await db.PaperSnapshotRepo.latest(group_id, bot_id)
 
     W, H = 900, 1200
     img = _new_canvas(W, H)
-    draw = ImageDraw.Draw(img)
 
     # 标题
     _draw_text(img, (40, 30), "【早柚 AI 模拟盘 · 账户视图】", color=(255, 200, 100), size=30)
@@ -138,7 +102,8 @@ async def draw_account_view(
             _draw_text(
                 img,
                 (60, y),
-                f"{p.stock_name or p.stock_code} ({p.stock_code})  ×{p.qty}股  均价 {p.avg_cost:.2f}  市值 {value:,.0f}",
+                f"{p.stock_name or p.stock_code} ({p.stock_code})  "
+                f"×{p.qty}股  均价 {p.avg_cost:.2f}  市值 {value:,.0f}",
                 color=(200, 220, 255),
                 size=20,
             )
@@ -198,7 +163,6 @@ async def draw_leaderboard() -> bytes:
 
     W, H = 900, 100 + 60 * (len(snaps) + 1)
     img = _new_canvas(W, H)
-    draw = ImageDraw.Draw(img)
 
     _draw_text(img, (40, 30), "【早柚 AI 模拟盘 · 跨群收益排行 TOP 20】", color=(255, 200, 100), size=28)
     y = 90

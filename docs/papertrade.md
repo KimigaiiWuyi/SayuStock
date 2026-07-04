@@ -78,17 +78,29 @@ AI操盘记录              # 看最近 20 笔交易
 
 ---
 
-## 候选池来源（5 路合并，50 只上限）
+## 候选池来源与**轮换**（agent_pool，目标约 10 只）
+
+候选全集 = 持仓 + 群友关注 + AI 内部池（`agent_pool`）。`agent_pool` 由
+`papertrade_candidate_refresh()` **每轮轮换**维护（`candidate_pool.py` +
+`ai_tools.papertrade_candidate_refresh`）：
 
 ```
-P0 持仓（≤ 20）        ← 当前持仓必分析
-P1 内部池（≤ 20）      ← AI 上次决策的"持续关注"
-P2 板块龙头（≤ 15）    ← 当日涨幅 TOP3 板块 × 5 只
-P3 大盘热股（≤ 10）    ← 东方财富热股 TOP10
-P3 新闻相关（≤ 10）    ← 雪球 7x24 提及的股票
+每轮 refresh：
+  0) 清过期（cleanup_expired_for，物理删除）
+  1) 淘汰最旧的 ROTATE_OUT_PER_REFRESH 只 auto 候选   ← "剔除"（持仓/关注永不淘汰）
+  2) 补蓝筹底仓到 BASE_KEEP 只（BLUECHIP_BASE 随机抽） ← 质量地基，保证有可交易标的
+  3) 补动量标的到 POOL_TARGET_SIZE                    ← 板块龙头/大盘热股/雪球新闻
+     入池前用 1 次批量报价 filter_overheated 过滤涨停/过热（涨幅 ≥ 本板涨停 × 0.8）
 ```
 
-> 单心跳成本：50 只 × 4 API = 200 次调用（asyncio.gather 并发 ≈ 5~10 秒）。
+- auto 候选 `AUTO_EXPIRE_HOURS`（默认 6h）后过期，配合每轮淘汰 → **日内自然轮换**。
+- 蓝筹底仓 `BASE_EXPIRE_HOURS`（默认 24h），每轮随机补入不同名，既保质量又不长期锚定。
+- 决策反馈（`post_decision_pool_update`，由 `papertrade_decision_insert` 触发）：
+  `sell` → 从池移除；`buy` → 提权保留（7d）；`hold` → **不动池**（不再续期锚定）。
+
+> ⚠️ **不要**用"池 < N 才刷"的旧门槛——那会让池被填满后永远冻结、每 30 分钟嚼同一批
+> （2026-07-02 修复的锚定根因）。`build_candidate_pool` 的 5 路合并/50 上限逻辑保留，
+> 仅供测试 / 潜在批处理，不在实盘决策路径上。
 
 ---
 
@@ -124,13 +136,15 @@ P3 新闻相关（≤ 10）    ← 雪球 7x24 提及的股票
 
 | 群友说 | 早柚做什么 |
 |--------|-----------|
-| "AI操盘初始化" | 调 evaluate_agent_mesh_capability → register_kanban_task 建 2 棵 Kanban（init + 周期） → papertrade_account_create |
-| "AI操盘查看" | 调 papertrade_account_query + papertrade_position_list → 拼成图 |
+| "模拟盘初始化" | **直接调 trigger `send_init_command`** —— 6 步全跑（DB + Kanban + APScheduler + bind + kick） |
+| "模拟盘查看" | 调 papertrade_account_query + papertrade_position_list → 拼成图 |
 | "你为啥买茅台？" | 调 list_my_kanban_tasks 找树 → artifact_get_recent 拿决策 reasoning → papertrade_trade_list 拿交易记录 → 用早柚口吻回答 |
 | "现在还持有啥？" | 调 papertrade_position_list + papertrade_account_query → 拼成图 |
 | "我的账户怎么样？" | 调 papertrade_account_query + papertrade_trade_list(limit=10) |
 
 > 早柚"知道"这件事：插件通过 `ai_entity(KnowledgeBase("sayustock_papertrade_guide", ...))` 把操作指南注册为 RAG 知识库，群友问到 AI 操盘相关时早柚会主动召回。同时通过 `ai_alias("AI操盘", ["AI模拟盘", "虚拟盘", ...])` 把"AI操盘"等关键词路由到 papertrade 工具族。
+>
+> **工具分层**（无重叠）：主 persona 只能调 7 个 common 工具（4 读 + 3 helper），写操作 4 个只在子代理（visible_when）可见；"建账户"只走 trigger `send_init_command`，没有任何捷径。
 
 ---
 
@@ -208,7 +222,10 @@ P3 新闻相关（≤ 10）    ← 雪球 7x24 提及的股票
 详见 `SayuStock/stock_papertrade/PAPERTRADE_GUIDE.md`（早柚人格操作指南）。
 
 修改建议：
-- 新增候选源：在 `candidate_pool.py` 加一个 `_from_xxx` + `SOURCE_CAPS["xxx"]`，主入口 `build_candidate_pool` 加一行
+- 新增候选源：在 `candidate_pool.py` 加一个 `_from_xxx`，并在 `ai_tools.papertrade_candidate_refresh` 的动量扫描段把它接进 `raw_pairs`（实盘轮换路径）；`build_candidate_pool` 的 5 路合并仅供测试
+- 调轮换节奏：改 `candidate_pool.py` 顶部 `POOL_TARGET_SIZE` / `BASE_KEEP` / `ROTATE_OUT_PER_REFRESH` / `AUTO_EXPIRE_HOURS`
+- 换蓝筹底仓：改 `candidate_pool.py::BLUECHIP_BASE`
+- 调涨停/过热过滤线：改 `OVERHEATED_GAIN_RATIO`（默认 0.8）
 - 新增评分维度：在 `strategy.py::score_stock` 加分支
 - 新增风控规则：在 `strategy.py::MODE_RULES` 加键 + `decide_action` 引用
 - **禁止**：新增"用户能控制 AI 行为"的命令（与设计哲学冲突）

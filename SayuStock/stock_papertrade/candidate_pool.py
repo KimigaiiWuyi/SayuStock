@@ -1,24 +1,30 @@
-"""AI 模拟盘候选池构建（6 路合并 + 50 只上限）。
+"""AI 模拟盘候选池构建 + 轮换。
 
-6 路源（按优先级）：
-P0: 当前持仓
-P0: 群友关注列表
-P1: AI 内部决策池
-P2: 行业板块龙头（当日涨幅 TOP3 板块 × 成分股 TOP3）
-P3: 大盘热股 TOP10
-P3: 雪球新闻提及的股票
+两条职责：
 
-每路有独立上限，总上限 50，去重保序。
+1. ``build_candidate_pool``（程序化，供测试 / 潜在批处理用）——6 路合并 + 50 上限。
+   6 路源（按优先级）：持仓 → 群友关注 → AI 内部池 → 板块龙头 → 大盘热股 → 新闻。
+
+2. 轮换支持（ai_tools.papertrade_candidate_refresh 用）——蓝筹底仓 + 涨停/过热过滤
+   + 决策反馈。这层解决"选完一批后永远只嚼同一批、不扩不减"的锚定：
+   - 蓝筹底仓（``BLUECHIP_BASE``）保证池里始终有一批可交易的大盘股，而非全是
+     超买微盘/北交所票（后者决策代理只会一直 hold → 账户永远空仓）。
+   - ``_filter_overheated`` 在入池前用一次批量报价剔除涨停 / 过热标的（A 股涨停
+     排队也难成交，追高风险大）。
+   - ``post_decision_pool_update`` 让 sell 从池移除、buy 促成保留；hold **不**续期
+     （旧实现 hold+强信号会不断续期 → 反而把标的钉死在池里，这里已修正）。
 """
 
 import re
-from typing import Set, List
+import random
+from typing import Set, List, Tuple
+from datetime import datetime, timedelta
 
 from gsuid_core.logger import logger
 
 from . import db
 
-# 单路上限
+# 单路上限（build_candidate_pool 用）
 SOURCE_CAPS = {
     "position": 20,
     "watchlist": 20,
@@ -28,6 +34,75 @@ SOURCE_CAPS = {
     "news": 10,
 }
 TOTAL_CAP = 50
+
+# ── 轮换参数（papertrade_candidate_refresh 用）────────────────────
+POOL_TARGET_SIZE = 10       # 每轮轮换后候选池目标只数（不含持仓/群友关注）
+BASE_KEEP = 4               # 池中蓝筹底仓维持只数（其余名额留给动量标的）
+ROTATE_OUT_PER_REFRESH = 3  # 每轮强制淘汰最旧的几只 auto 候选（保证新陈代谢）
+AUTO_EXPIRE_HOURS = 6       # auto 扫描候选存活时长（原 3 天 → 日内轮换）
+BASE_EXPIRE_HOURS = 24      # 蓝筹底仓存活时长（更稳定，隔日重新 seed）
+# 入池前过滤：当日涨幅 ≥ 本板涨停幅度 × 此比例 视为涨停/过热，跳过
+OVERHEATED_GAIN_RATIO = 0.8
+
+# 蓝筹底仓池：跨行业大盘蓝筹 / 指数成分，作为候选池的质量地基。
+# 每轮随机抽 BASE_KEEP 只补入，既保证有可交易标的又不长期锚定同一批。
+BLUECHIP_BASE: Tuple[Tuple[str, str], ...] = (
+    ("600519", "贵州茅台"), ("000858", "五粮液"), ("000568", "泸州老窖"),
+    ("600036", "招商银行"), ("601398", "工商银行"), ("601166", "兴业银行"),
+    ("601318", "中国平安"), ("600030", "中信证券"), ("600900", "长江电力"),
+    ("300750", "宁德时代"), ("002594", "比亚迪"), ("601012", "隆基绿能"),
+    ("000333", "美的集团"), ("000651", "格力电器"), ("600887", "伊利股份"),
+    ("600276", "恒瑞医药"), ("603259", "药明康德"), ("002415", "海康威视"),
+    ("002475", "立讯精密"), ("601899", "紫金矿业"), ("601088", "中国神华"),
+    ("600028", "中国石化"), ("600941", "中国移动"), ("600309", "万华化学"),
+)
+
+
+def derive_secid(code: str) -> str:
+    """6 位代码推 东财 secid：沪市(6 开头) → 1.xxx，其余(深/创/北) → 0.xxx。"""
+    return f"1.{code}" if code.startswith("6") else f"0.{code}"
+
+
+def _board_limit_pct(code: str) -> float:
+    """按板块返回当日涨跌停幅度：科创/创业 ±20%，北交所 ±30%，其余主板 ±10%。"""
+    if code.startswith(("300", "301", "688")):
+        return 20.0
+    if code.startswith(("4", "8", "920")):
+        return 30.0
+    return 10.0
+
+
+def pick_base_slice(n: int) -> List[Tuple[str, str]]:
+    """从蓝筹底仓随机抽 n 只 ``(code, name)``（不足 n 则全给）。"""
+    n = max(0, min(n, len(BLUECHIP_BASE)))
+    return random.sample(list(BLUECHIP_BASE), n) if n else []
+
+
+async def filter_overheated(
+    codes: List[str], *, gain_ratio: float = OVERHEATED_GAIN_RATIO
+) -> List[str]:
+    """用一次批量报价剔除涨停/过热标的（当日涨幅 ≥ 本板涨停 × gain_ratio）。
+
+    报价缺失（change_pct=None）的不误杀，交给决策代理深度分析时再判。
+    """
+    if not codes:
+        return []
+    from .quote_service import quote_service
+
+    secids = [derive_secid(c) for c in codes]
+    try:
+        details = await quote_service.get_details_batch(secids)
+    except Exception as e:
+        logger.debug(f"[PaperTrade] filter_overheated 批量报价失败（不过滤）: {e}")
+        return codes
+    out: List[str] = []
+    for c in codes:
+        entry = details.get(derive_secid(c))
+        chg = entry.change_pct if entry is not None else None
+        if chg is not None and chg >= _board_limit_pct(c) * gain_ratio:
+            continue
+        out.append(c)
+    return out
 
 
 # ============================================================
@@ -242,47 +317,39 @@ async def post_decision_pool_update(
     bot_id: str,
     decisions: List[dict],
 ) -> None:
-    """根据本次决策结果维护 agent_pool。
+    """根据本次决策结果维护 agent_pool（决策 → 池 的反馈闭环）。
 
     decisions: [{action, code, name, secid, score, reason}, ...]
-    """
-    from datetime import datetime, timedelta
 
+    语义：
+      - ``buy``  → 加入/提权（priority=5，7 天过期），标记为在跟的建仓标的。
+      - ``sell`` → 从池移除（已离场，不再每轮重复分析；要再进由扫描重新拉入）。
+      - ``hold`` → **不动池**。旧实现 hold+强信号会不断 upsert 续期，等于把标的钉死
+        在池里 → 每轮嚼同一批的锚定根因之一。现在 hold 一律不续期，让 auto 候选
+        按 ``AUTO_EXPIRE_HOURS`` 自然老化、被轮换淘汰。
+    """
     now = datetime.now()
     for d in decisions:
         action = d.get("action", "hold")
         code = d.get("code", "")
         if not code:
             continue
+        secid = d.get("secid", "") or derive_secid(code)
         try:
             if action == "buy":
-                # 买入：加入池，7 天后过期
                 await db.PaperAgentPoolRepo.upsert(
                     group_id,
                     bot_id,
                     stock_code=code,
                     stock_name=d.get("name", ""),
-                    secid=d.get("secid", ""),
+                    secid=secid,
                     reason=f"已建仓，关注后续 (score={d.get('score', 0):.2f})",
                     added_by="ai",
                     priority=5,
                     expires_at=now + timedelta(days=7),
                 )
             elif action == "sell":
-                # 卖出：从池移除
                 await db.PaperAgentPoolRepo.remove(group_id, bot_id, code)
-            elif action == "hold" and d.get("score", 0) > 0.1:
-                # hold 但信号不错，加入候选，3 天后过期
-                await db.PaperAgentPoolRepo.upsert(
-                    group_id,
-                    bot_id,
-                    stock_code=code,
-                    stock_name=d.get("name", ""),
-                    secid=d.get("secid", ""),
-                    reason=f"信号强但未操作 (score={d.get('score', 0):.2f})",
-                    added_by="ai",
-                    priority=3,
-                    expires_at=now + timedelta(days=3),
-                )
+            # hold：不动池（见 docstring）
         except Exception as e:
             logger.debug(f"[PaperTrade] post_decision_pool_update {code} 失败: {e}")
