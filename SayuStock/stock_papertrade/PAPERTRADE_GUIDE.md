@@ -128,6 +128,13 @@ SayuStock 插件里的"AI 模拟盘"长期能力：
 **仅子代理可见**（category="default" + visible_when）：
 - 写操作：`papertrade_decision_insert`（写决策日志）/ `papertrade_trade_insert`（写流水 + 自动扣/加 cash + 累计 principal）/ `papertrade_position_upsert`（写持仓 + **可选 `last_quote_price`**）/ `papertrade_match_order`（撮合计算 fee，不写库）
 
+⚠️ **成交价规则（2026-07-06）**：`papertrade_match_order` **永远按撮合此刻的实时
+行情价成交**——传入的 `price` 只是参考价，可不传；候选池里记的入池价 / 指标快照
+里的旧价**不会**被用来成交。后续 `trade_insert` / `position_upsert` 必须用
+match_order 返回的 `price` / `amount` / `fee_total`（`trade_insert` 会再校验一次，
+与实时价偏差 >3% 直接拒绝落库）。非交易日 / 非交易时段（9:30-11:30、13:00-15:00
+之外）match_order 一律拒单，收到"非交易时段拒绝撮合"就改 hold。
+
 **入口**（by_trigger）：
 - `send_init_command` —— 唯一"建账户"路径，6 步全跑
 

@@ -85,6 +85,37 @@ def _register_papertrade_kb() -> None:
 
 _register_papertrade_kb()
 
+
+# ── 周期触发前置门（recurring gate）注册 ─────────────────────────
+def _register_recurring_gates() -> None:
+    """把 A 股交易日历注册为 Kanban 周期触发的前置门。
+
+    效果：节假日/周末/非交易时段 cron 到点时，框架在克隆实例树**之前**
+    就静默跳过——不派能力代理、不消耗 LLM token（此前 LLM 会被叫醒一句
+    "今天不开盘"再睡回去，周六一天白烧十几次 token）。
+
+    gate 按 agent_profile 注册：
+      - decision / pool_refresh → 交易日 + 交易时段（9:30-11:30 / 13:00-15:00）
+      - snapshot → 仅要求交易日（15:05 收盘后写快照，不在交易时段内）
+      - reporter（月报）→ 不设门，任何日子都可出报告
+
+    旧版框架无 register_recurring_gate 时降级为无门（行为同旧版）。
+    """
+    try:
+        from gsuid_core.ai_core.planning.recurring import register_recurring_gate
+    except ImportError:
+        logger.warning("[SayuStock][PaperTrade] 框架不支持 recurring gate（版本过旧），跳过注册")
+        return
+    from .trading_calendar import should_run_papertrade, is_a_share_trading_day
+
+    register_recurring_gate("papertrade_decision_agent", should_run_papertrade)
+    register_recurring_gate("papertrade_pool_refresh_agent", should_run_papertrade)
+    register_recurring_gate("papertrade_snapshot_agent", is_a_share_trading_day)
+    logger.info("[SayuStock][PaperTrade] A 股交易日历 recurring gate 已注册（decision/pool_refresh/snapshot）")
+
+
+_register_recurring_gates()
+
 # ── SV 实例 + 子模块导入触发装饰器 ───────────────────────────────
 from . import db, admin, ai_tools, commands  # noqa: E402,F401
 from .sv import sv_papertrade, sv_papertrade_admin  # noqa: E402,F401

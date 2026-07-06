@@ -29,7 +29,12 @@ from gsuid_core.ai_core.register import ai_tools
 from . import db
 from .indicators import klines_to_df, klines_to_df_mins, compute_indicators
 from .quote_service import quote_service
-from .trading_calendar import is_trading_time, trading_day_summary, is_a_share_trading_day
+from .trading_calendar import (
+    is_trading_time,
+    trading_day_summary,
+    is_a_share_trading_day,
+    should_run_papertrade,
+)
 from ..utils.stock.request import get_gg
 from ..utils.eastmoney_finance import (
     get_cash_flow,
@@ -136,7 +141,9 @@ class _MatchResultView(TypedDict):
     code: str
     requested_qty: int
     actual_qty: int
-    price: float
+    price: float  # 实际成交价（= 撮合时刻实时行情价，不是调用方传的参考价）
+    requested_price: float  # 调用方传入的参考价（0=未传）
+    price_source: str  # "live"（实时行情） / "caller"（行情不可达时的降级，仅诊断）
     amount: float
     commission: float
     stamp_tax: float
@@ -722,9 +729,29 @@ async def papertrade_trade_insert(
     有任何买入记录，对应锁定股数即使有也不能卖。A 股 T+1 规则要求 "T 日买
     入，T+1 日开盘前不可卖"，错误信息直接返回给 LLM 让它调整决策（改 hold
     或换只老的卖）。其余 sell（昨天的买）合法。
+
+    **实时价校验**（2026-07-06 加）：``price`` **必须**用同轮
+    ``papertrade_match_order`` 返回的实时成交价。本工具会再拉一次实时行情
+    对照：偏差 > 3% 时拒绝落库（说明传入的是入池旧价/隔夜价），返回错误
+    让 LLM 重新走 match_order。行情不可达时放行（match_order 已把过关）。
     """
     gid: str = _resolve_group_id(ctx)
     bid: str = _resolve_bot_id(ctx)
+
+    # ── 实时价偏差校验：拦截"按候选池入池旧价成交"的失真流水 ──
+    try:
+        _secid = f"1.{stock_code}" if stock_code.startswith("6") else f"0.{stock_code}"
+        _live: Optional[float] = await quote_service.get_quote(_secid)
+    except Exception:
+        _live = None
+    if _live is not None and _live > 0 and price > 0:
+        _dev_pct: float = abs(price - _live) / _live * 100.0
+        if _dev_pct > 3.0:
+            return (
+                f"⚠️ trade_insert 拒绝：传入 price={price:.2f} 与实时行情 {_live:.2f} "
+                f"偏差 {_dev_pct:.1f}%（>3%），疑似使用了入池时的旧价。"
+                f"请重新调 papertrade_match_order 并使用其返回的实时成交价。"
+            )
 
     # ── A 股 T+1 拦截 ──
     if side == "sell":
@@ -1058,30 +1085,63 @@ async def papertrade_match_order(
     side: str,
     stock_code: str,
     qty: int,
-    price: float,
+    price: float = 0.0,
     cash_available: float = 0.0,
     position_qty: int = 0,
 ) -> str:
-    """撮合一笔订单（A 股真实费率 + 涨跌停拦截）；返回 MatchResult JSON 字符串。
+    """撮合一笔订单（A 股真实费率 + 涨跌停拦截 + 交易时段守卫）；返回 MatchResult JSON。
 
-    内置涨跌停板拦截：本工具自动从 quote_service 拉取目标股票的昨收价 + 名称。
-    **为保险起见按名义涨跌停 × 0.9 拦截**：主板普通股涨跌幅达 ±9%、ST/*ST 达
-    ±4.5%、科创/创业板达 ±18%、北交所达 ±27% 即视为触及涨跌停——买入价触及涨停
-    或卖出价触及跌停时直接返回 ok=False，**不会**下真正的单。
-    （留 10% 缓冲是因为低价股涨停价四舍五入后实际涨幅常不到名义 10%，且 ST 只有
-    ±5%。）调用方（LLM）判断到 ok=False + reason 含"涨停"或"跌停"后应改 hold。
+    **成交价规则（2026-07-06 修复）**：成交价 = **撮合此刻的实时行情价**
+    （quote_service 60s 内报价），``price`` 参数只是调用方的参考价，可不传。
+    之前实现按调用方传价成交，LLM 常把"股票入候选池当时的旧价"传进来，
+    导致模拟盘成交价严重失真。现在：
+      - 实时价可达 → 一律按实时价成交，返回的 ``price`` 即真实成交价，
+        后续 ``papertrade_trade_insert`` / ``papertrade_position_upsert``
+        **必须**用本工具返回的 price / amount / fee_total；
+      - 实时价不可达 → ok=False 拒绝撮合（宁可不成交，不按旧价成交）。
+
+    **交易时段守卫**：非 A 股交易日或不在 9:30-11:30 / 13:00-15:00 时段内时
+    ok=False 拒绝撮合（真实市场此时也无法成交）。LLM 收到后应改 hold。
+
+    内置涨跌停板拦截：按名义涨跌停 × 0.9 拦截——主板 ±9%、ST/*ST ±4.5%、
+    科创/创业板 ±18%、北交所 ±27% 即视为触及涨跌停，买入触涨停 / 卖出触跌停
+    直接 ok=False。调用方判断到 reason 含"涨停"或"跌停"后应改 hold。
 
     Args:
         side: buy / sell
         stock_code: 股票代码（用于识别主板 / 科创 / 创业板 / 北交所）
         qty: 请求股数
-        price: 成交价
+        price: 参考价（可不传；**实际成交永远按实时行情价**，两者偏差会写进 reason）
         cash_available: 账户可用现金（buy 时必填）
         position_qty: 当前持仓股数（sell 时必填）
     """
     from .matcher import match_order
 
-    # ── 拉取昨收价 & 涨跌幅 & 名称，用于涨跌停 / ST 拦截 ──
+    def _reject(reason: str) -> str:
+        view_rej: _MatchResultView = {
+            "ok": False,
+            "side": side,
+            "code": stock_code,
+            "requested_qty": qty,
+            "actual_qty": 0,
+            "price": 0.0,
+            "requested_price": price,
+            "price_source": "live",
+            "amount": 0.0,
+            "commission": 0.0,
+            "stamp_tax": 0.0,
+            "fee_total": 0.0,
+            "reason": reason,
+        }
+        return json.dumps(view_rej, ensure_ascii=False)
+
+    # ── 交易时段守卫：非交易日 / 非交易时段一律拒单 ──
+    if not should_run_papertrade():
+        _, _, desc = trading_day_summary()
+        return _reject(f"非交易时段拒绝撮合（{desc}）——真实市场此刻无法成交，请改 hold 等开盘")
+
+    # ── 拉实时行情：成交价 + 昨收 + 涨跌幅 + 名称（涨跌停 / ST 拦截用） ──
+    live_price: Optional[float] = None
     last_close: Optional[float] = None
     change_pct: Optional[float] = None
     name: Optional[str] = None
@@ -1090,23 +1150,43 @@ async def papertrade_match_order(
         secid = f"1.{stock_code}" if stock_code.startswith("6") else f"0.{stock_code}"
         entry = await quote_service.get_quote_detail(secid)
         if entry is not None:
+            live_price = entry.price
             last_close = entry.last_close
             change_pct = entry.change_pct
             name = entry.name  # f57 名称，含 ST/*ST 前缀，供撮合层判风险警示股
     except Exception as e:
         _gslogger.debug(f"[SayuStock][PaperTrade] match_quote_fetch failed stock={stock_code}: {e}")
 
+    if live_price is None or live_price <= 0:
+        return _reject(
+            f"实时行情不可达（{stock_code}），拒绝撮合——不允许按参考价/旧价成交，"
+            f"请稍后重试或改 hold"
+        )
+
+    # ── 参考价偏差提示：LLM 传的旧价与实时价差过大时写进 reason 提醒 ──
+    deviation_note: str = ""
+    if price and price > 0:
+        dev_pct: float = (live_price - price) / price * 100.0
+        if abs(dev_pct) >= 0.5:
+            deviation_note = (
+                f"按实时价 {live_price:.2f} 成交（参考价 {price:.2f} 已过时，"
+                f"偏差 {dev_pct:+.2f}%）"
+            )
+
     res = match_order(
         side=side,
         code=stock_code,
         qty=qty,
-        price=price,
+        price=live_price,
         cash_available=cash_available,
         position_qty=position_qty,
         last_close=last_close,
         change_pct=change_pct,
         name=name,
     )
+    reason_out: str = res.reason
+    if res.ok and deviation_note:
+        reason_out = deviation_note if not reason_out else f"{reason_out}；{deviation_note}"
     view: _MatchResultView = {
         "ok": res.ok,
         "side": res.side,
@@ -1114,11 +1194,13 @@ async def papertrade_match_order(
         "requested_qty": res.requested_qty,
         "actual_qty": res.actual_qty,
         "price": res.price,
+        "requested_price": price,
+        "price_source": "live",
         "amount": res.amount,
         "commission": res.commission,
         "stamp_tax": res.stamp_tax,
         "fee_total": res.fee_total,
-        "reason": res.reason,
+        "reason": reason_out,
     }
     return json.dumps(view, ensure_ascii=False)
 

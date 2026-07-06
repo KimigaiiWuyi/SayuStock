@@ -398,8 +398,24 @@ async def send_init_command(bot: Bot, ev: Event):
     # ── 幂等：已有账户则直接返回现状，不重建 Kanban 树 ──
     existing = await _db.PaperAccountRepo.get(group_id, bot_id)
     if existing is not None:
-        # 但如果心跳树丢了（手动清盘 / 升级迁移），顺手补挂
-        if not existing.kanban_init_root_id or not existing.kanban_period_root_id:
+        # 心跳树"丢了"的三种形态都要能自愈重挂：
+        #   1. root_id 为空（手动清盘 / 升级迁移）；
+        #   2. root_id 指向的树已不存在（DB 被清）；
+        #   3. 树还在但已终结（fail_task_tree / 取消）——2026-07-06 踩坑：
+        #      persona 把旧心跳树 fail 掉之后，账户里还挂着死树的 root_id，
+        #      旧逻辑只查"是否为空"就直接返回"已开户"，用户永远无法用
+        #      「模拟盘初始化」修复心跳，只能手工改库。
+        need_rebuild: bool = not existing.kanban_init_root_id or not existing.kanban_period_root_id
+        if not need_rebuild:
+            try:
+                from gsuid_core.ai_core.planning.models import AIAgentTask
+
+                period_root = await AIAgentTask.get_by_id(existing.kanban_period_root_id)
+                if period_root is None or period_root.status in ("failed", "cancelled", "completed"):
+                    need_rebuild = True
+            except Exception:
+                pass  # 框架查询异常时保持旧行为（不误重建）
+        if need_rebuild:
             try:
                 init_id, period_id = await _setup_papertrade_kanban_trees(bot, ev, group_id, bot_id)
             except RuntimeError as e:
