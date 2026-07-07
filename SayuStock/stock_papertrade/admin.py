@@ -291,15 +291,13 @@ async def send_dry_run(bot: Bot, ev: Event):
     preflight_ok: bool = True
     preflight_lines: list[str] = []
 
-    # 1) agent profile 注册检查
+    # 1) agent 节点注册检查（AgentNode 统一后走 agent_node.get_node）
     get_profile: Any = None
     try:
-        from gsuid_core.ai_core.capability_agents.registry import (  # noqa: E402  -- 懒加载
-            get_profile,
-        )
+        from gsuid_core.ai_core.agent_node import get_node as get_profile  # noqa: E402  -- 懒加载
     except Exception as e:
         preflight_ok = False
-        preflight_lines.append(f"❌ 加载 get_profile 失败: {e}")
+        preflight_lines.append(f"❌ 加载 get_node 失败: {e}")
 
     expected_profiles: list[str] = [
         "papertrade_setup_agent",
