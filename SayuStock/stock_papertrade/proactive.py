@@ -1,4 +1,4 @@
-"""AI 模拟盘 · 主动消息播报 builder + 副作用 Δ 计算（共享模块）。
+"""模拟盘 · 主动消息播报 builder + 副作用 Δ 计算（共享模块）。
 
 本模块从原 ``admin.send_dry_run`` 内嵌的 ``_build_proactive_text`` +
 ``_snapshot`` / ``_delta`` 抽出，目的：
@@ -18,7 +18,7 @@
 不覆盖的链路：
   - ``kanban_executor._run_one_task_node`` 在 cron 触发后调
     ``_persona_relay + _notify`` 推群——那条链路走的是 persona 转译而非
-    "📈 AI 模拟盘·操盘播报"结构化文本，本 builder 不参与。
+    "📈 模拟盘·操盘播报"结构化文本，本 builder 不参与。
 
 设计要点：
   - ``variant`` 参数而非 step_no 数字——把"② / ③ / ④ / ⑤ / ⑥"这种"压测段编号"
@@ -206,7 +206,7 @@ async def build_papertrade_proactive_text(
     decisions_d: int,
     fallback_text: str = "",
 ) -> str:
-    """根据 ``variant`` + DB 当前状态拼"📈 AI 模拟盘·操盘播报"格式文本。
+    """根据 ``variant`` + DB 当前状态拼"📈 模拟盘·操盘播报"格式文本。
 
     Args:
         group_id / bot_id: 定位账户。
@@ -245,7 +245,7 @@ async def build_papertrade_proactive_text(
         action = latest_decision.action if latest_decision else "hold"
         title_action = action_map.get(action, "⏸️ 持币")
         header_block = f"【自主决策】{title_action}"
-        footer = "（AI 模拟盘心跳 · 自主决策播报，非投资建议）"
+        footer = "（模拟盘心跳 · 自主决策播报，非投资建议）"
     elif variant == "force_buy":
         header_block = "【强制买入】🟢"
         footer = "🔔 DRY_RUN · 仅压测链路验证，非投资建议"
@@ -257,12 +257,12 @@ async def build_papertrade_proactive_text(
         footer = "🔔 DRY_RUN · 仅压测链路验证，非投资建议"
     elif variant == "kb_web":
         header_block = "【KB + Web 通路验证】✅"
-        footer = "（AI 模拟盘 · KB/Web 通路验证，非投资建议）"
+        footer = "（模拟盘 · KB/Web 通路验证，非投资建议）"
     else:
         return fallback_text
 
     lines: list[str] = [
-        "📈 【AI 模拟盘 · 操盘播报】",
+        "📈 【模拟盘 · 操盘播报】",
         f"群 {group_id} · 模式 {acc.mode}",
         "",
         header_block,

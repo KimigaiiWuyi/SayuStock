@@ -1,4 +1,4 @@
-"""AI 模拟盘交易日判断工具。
+"""模拟盘交易日判断工具。
 
 - :func:`is_a_share_trading_day`  判定今天是否是 A 股交易日（拉 1.000001 上证分时）
 - :func:`is_trading_time`  判定当前是否在 9:30-11:30 / 13:00-15:00 交易时段
@@ -136,7 +136,7 @@ def is_trading_time(dt: Optional[datetime] = None) -> bool:
 
 
 def should_run_papertrade(dt: Optional[datetime] = None) -> bool:
-    """综合判断：是否应该跑一次 AI 模拟盘决策。
+    """综合判断：是否应该跑一次 模拟盘决策。
 
     条件：是 A 股交易日 **且** 在交易时段内。
     """

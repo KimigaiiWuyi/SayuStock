@@ -74,6 +74,7 @@ calc_volume_ratio = ind.calc_volume_ratio
 calc_bias = ind.calc_bias
 calc_atr_pct = ind.calc_atr_pct
 calc_support_resistance = ind.calc_support_resistance
+calc_kdj = ind.calc_kdj
 
 
 # ============================================================
@@ -312,6 +313,50 @@ def test_calc_support_resistance():
     print(f"[OK] support={sup:.2f}, resistance={res:.2f}")
 
 
+def test_calc_kdj_bounds_and_uptrend():
+    """KDJ：K/D 落在 [0,100]，单边上涨时 K/D 高位；J 可越界 100。"""
+    klines = _make_trending_klines(60, daily_pct=0.02)
+    df = klines_to_df(klines)
+    k, d, j, gold, death = calc_kdj(df)
+    assert k is not None and d is not None and j is not None
+    assert 0 <= k <= 100, f"K 越界: {k}"
+    assert 0 <= d <= 100, f"D 越界: {d}"
+    assert k > 70 and d > 70, f"单边上涨 K/D 应高位: k={k:.2f} d={d:.2f}"
+    assert isinstance(gold, bool) and isinstance(death, bool)
+    print(f"[OK] calc_kdj 上涨 k={k:.2f} d={d:.2f} j={j:.2f} gold={gold} death={death}")
+
+
+def test_calc_kdj_matches_recursive_reference():
+    """与独立递归参考实现对拍（通达信/东财口径 9,3,3）。"""
+    np.random.seed(11)
+    klines = _make_klines(80)
+    df = klines_to_df(klines)
+    k, d, j, _, _ = calc_kdj(df)
+
+    n, m1, m2 = 9, 3, 3
+    low_min = df["low"].astype(float).rolling(n, min_periods=1).min()
+    high_max = df["high"].astype(float).rolling(n, min_periods=1).max()
+    span = (high_max - low_min).to_numpy(dtype=float)
+    close_arr = df["close"].astype(float).to_numpy(dtype=float)
+    low_arr = low_min.to_numpy(dtype=float)
+    rsv = np.where(span > 0, (close_arr - low_arr) / span * 100.0, np.nan)
+    kp = dp = 50.0
+    for r in rsv:
+        r = 50.0 if not np.isfinite(r) else float(r)
+        kp = (r + (m1 - 1) * kp) / m1
+        dp = (kp + (m2 - 1) * dp) / m2
+    assert abs(k - kp) < 1e-9 and abs(d - dp) < 1e-9 and abs(j - (3 * kp - 2 * dp)) < 1e-9
+    print(f"[OK] calc_kdj 与参考实现一致 k={k:.4f} d={d:.4f} j={j:.4f}")
+
+
+def test_calc_kdj_insufficient():
+    """< 9 根返回全 None/False。"""
+    df = klines_to_df(_make_klines(5))
+    k, d, j, gold, death = calc_kdj(df)
+    assert k is None and d is None and j is None and gold is False and death is False
+    print("[OK] calc_kdj 数据不足返回 None")
+
+
 def test_compute_indicators_full():
     """完整指标计算（60 根日 K）"""
     np.random.seed(2024)
@@ -324,7 +369,13 @@ def test_compute_indicators_full():
     assert ind_out["rsi6"] is not None
     assert ind_out["cmf20"] is not None
     assert ind_out["last_close"] is not None
-    print(f"[OK] compute_indicators 全套 60 根")
+    # KDJ 已并入指标全集
+    assert ind_out["kdj_k"] is not None
+    assert ind_out["kdj_d"] is not None
+    assert ind_out["kdj_j"] is not None
+    assert "kdj_golden_cross_in_3d" in ind_out
+    assert "kdj_overbought" in ind_out
+    print(f"[OK] compute_indicators 全套 60 根（含 KDJ）")
 
 
 def test_compute_indicators_empty():
@@ -379,8 +430,11 @@ if __name__ == "__main__":
     test_calc_bias()
     test_calc_atr_pct_normal()
     test_calc_support_resistance()
+    test_calc_kdj_bounds_and_uptrend()
+    test_calc_kdj_matches_recursive_reference()
+    test_calc_kdj_insufficient()
     test_compute_indicators_full()
     test_compute_indicators_empty()
     test_compute_indicators_short()
     test_compute_indicators_bull_alignment()
-    print("\n[SUCCESS] indicators 全部 20 个测试通过！")
+    print("\n[SUCCESS] indicators 全部测试通过！")

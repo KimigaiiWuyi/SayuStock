@@ -1,6 +1,6 @@
 """跨群查询辅助。
 
-``AI操盘查询 <group_id>`` / ``AI操盘排行`` 命令用。
+``模拟盘查询 <group_id>`` / ``模拟盘排行`` 命令用。
 所有方法都走 ``.where(group_id == group_id)`` 直接命中索引，
 避免 ``list_all`` 在大表上做 Python-side 全表过滤。
 

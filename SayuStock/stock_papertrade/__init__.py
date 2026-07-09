@@ -1,4 +1,4 @@
-"""AI 模拟盘触发器层入口。
+"""模拟盘触发器层入口。
 
 初始化流程：
 1. 注册 ``ai_alias`` 路由 + ``ai_entity`` 知识库（KB PAPERTRADE_GUIDE.md）
@@ -32,17 +32,17 @@ from gsuid_core.ai_core.register import ai_alias, ai_entity
 # ── ai_alias 路由 ────────────────────────────────────────────────
 ai_alias(
     "papertrade",
-    ["AI操盘", "AI模拟盘", "虚拟盘", "AI模拟", "模拟盘", "模拟炒股"],
+    ["模拟盘", "虚拟盘", "模拟炒股"],
     scope="SayuStock",
 )
 ai_alias(
     "papertrade_setup",
-    ["AI操盘初始化", "AI模拟盘初始化", "建模拟盘"],
+    ["模拟盘初始化", "建模拟盘"],
     scope="SayuStock",
 )
 ai_alias(
     "papertrade_query",
-    ["AI操盘查看", "AI操盘收益", "AI操盘记录", "AI操盘排行"],
+    ["模拟盘查看", "模拟盘收益", "模拟盘记录", "模拟盘排行"],
     scope="SayuStock",
 )
 
@@ -64,13 +64,11 @@ def _register_papertrade_kb() -> None:
             KnowledgeBase(
                 id="sayustock_papertrade_guide",
                 plugin="SayuStock",
-                title="SayuStock AI 模拟盘 · 早柚人格操作指南",
+                title="SayuStock 模拟盘 · 早柚人格操作指南",
                 content=content,
                 tags=[
-                    "AI操盘",
-                    "AI模拟盘",
-                    "虚拟盘",
                     "模拟盘",
+                    "虚拟盘",
                     "SayuStock",
                     "stock_agent",
                     "papertrade",

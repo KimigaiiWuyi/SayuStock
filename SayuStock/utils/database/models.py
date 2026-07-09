@@ -7,7 +7,7 @@ from gsuid_core.utils.database.base_models import Bind, Type, T_Bind
 
 from ..utils import convert_list
 
-# 导入 AI 模拟盘 7 张表 + WebConsole 注册
+# 导入 模拟盘 7 张表 + WebConsole 注册
 from .papertrade_models import (  # noqa: F401
     SayuPaperAccount,
     SayuPaperPosition,

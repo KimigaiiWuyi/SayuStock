@@ -170,52 +170,89 @@ async def get_sector_heatmap(
     用于 AI 决策前确定"今天哪个板块最强 / 最弱"，
     便于从强势板块中选股，或避开弱势板块。
 
+    ⚠️ ``change_pct`` 是**板块自身的聚合涨跌幅**（东财板块指数 f3），正常量级在
+    ±10% 以内（A 股个股涨跌停 ±10%/±20%，但整板块聚合极少超过 ±10%）；它**不是**
+    板块内领涨个股的涨幅。领涨个股单独放在 ``lead_stock`` / ``lead_stock_pct``
+    字段——那才可能出现 +20%（创业板/科创板个股涨停）这类数字，不要把它当成板块涨幅。
+
     返回字段：
-        - top_rise: 涨幅 TOP N 板块，附成分股 TOP3 代码
-        - top_fall: 跌幅 TOP N 板块
+        - top_rise: 涨幅 TOP N 板块，每项含 name / code / change_pct（板块聚合涨跌幅）
+          / up_count / down_count（成分股涨跌家数）/ lead_stock / lead_stock_code /
+          lead_stock_pct（领涨股）/ top_stocks（成分股涨幅 TOP3 代码）
+        - top_fall: 跌幅 TOP N 板块（结构同上）
         - hot_stocks: 热门个股 TOP 5（按成交额）
-        - lead_sectors: 连续 3 日强势板块（占位，实际需额外拉历史）
 
     使用建议：
-        1. 找出 top_rise 第一的板块 → 调 search_stock 拿成分股 → 选股
+        1. 找出 top_rise 第一的板块 → 看 top_stocks / lead_stock → 选股
         2. 找与持仓股所属板块 → 判断板块整体趋势，辅助 hold/sell 决策
     """
     import json as _json
+    import asyncio
 
     from ..utils.eastmoney import EASTMONEY_REQUESTER
 
-    mode: int = 2 if sector_type == "industry" else 3
+    # 东财板块聚合行情市场：m:90 t:2 行业板块 / t:3 概念板块。
+    # 这一层每条 diff 的 f3 就是**板块指数自身涨跌幅**（聚合值），
+    # 而不是旧实现里 diff[0]（板块内龙头个股）的 f3。
+    board_market: str = "m:90+t:2" if sector_type == "industry" else "m:90+t:3"
     out: dict[str, object] = {"sector_type": sector_type, "top_rise": [], "top_fall": [], "hot_stocks": []}
+
+    async def _fetch_boards(po: str) -> list[dict[str, object]]:
+        """拉板块聚合排行。po='1' 涨幅降序（取涨幅榜首部），po='0' 涨幅升序（取跌幅榜首部）。"""
+        url = "http://push2.eastmoney.com/api/qt/clist/get"
+        params = [
+            ("pn", "1"),
+            ("pz", str(max(top_n, 1))),
+            ("po", po),
+            ("np", "1"),
+            ("fltt", "2"),
+            ("invt", "2"),
+            ("fid", "f3"),
+            ("fs", board_market),
+            # f3 板块聚合涨跌幅 / f12 板块代码 / f14 板块名 / f104 涨家数 / f105 跌家数
+            # f128 领涨股名 / f136 领涨股涨跌幅 / f140 领涨股代码
+            ("fields", "f3,f12,f14,f104,f105,f128,f136,f140"),
+        ]
+        resp = await EASTMONEY_REQUESTER.stock_request(url, params=params)
+        if not isinstance(resp, dict) or not resp.get("data"):
+            return []
+        rows: list[dict[str, object]] = []
+        for d in resp["data"].get("diff", []) or []:
+            rows.append(
+                {
+                    "name": str(d.get("f14", "")),
+                    "code": str(d.get("f12", "")),
+                    "change_pct": d.get("f3", 0),  # 板块自身聚合涨跌幅
+                    "up_count": d.get("f104"),
+                    "down_count": d.get("f105"),
+                    "lead_stock": str(d.get("f128", "")),
+                    "lead_stock_code": str(d.get("f140", "")),
+                    "lead_stock_pct": d.get("f136"),  # 领涨股涨幅（可能 +20%，勿当板块涨幅）
+                }
+            )
+        return rows
+
+    async def _top_codes(board_code: str) -> list[str]:
+        """为返回榜单里的板块补成分股涨幅 TOP3 代码（数量受 top_n 限制，并发拉取）。"""
+        try:
+            m = await EASTMONEY_REQUESTER.get_market_list(board_code, False, 1, 3)
+        except Exception:
+            return []
+        if not isinstance(m, dict):
+            return []
+        diff = m.get("data", {}).get("diff", []) or []
+        return [str(d.get("f12", "")) for d in diff[:3] if d.get("f12")]
+
     try:
-        # 拿板块菜单
-        menu = await EASTMONEY_REQUESTER.get_menu(mode)
-        if not menu:
-            return _json.dumps(out, ensure_ascii=False)
-        # 限制拉取板块数（避免太慢）
-        sector_codes = list(menu.values())[:30]
-        # 并发拉行情
-        results: list[tuple[str, str, dict[str, object]]] = []
-        for sec_code, sec_name in zip(sector_codes, list(menu.keys())[:30]):
-            try:
-                m = await EASTMONEY_REQUESTER.get_market_list(sec_code, False, 1, 5)
-                if not isinstance(m, dict):
-                    continue
-                diff = m.get("data", {}).get("diff", [])
-                f3 = diff[0].get("f3", 0) if diff else 0
-                top_codes = [str(d.get("f12", "")) for d in diff[:3] if d.get("f12")]
-                results.append((sec_name, sec_code, {"f3": f3, "top_codes": top_codes}))
-            except Exception:
-                continue
-        # 按涨跌幅排序
-        results.sort(key=lambda x: -(x[2].get("f3", 0) or 0))
-        out["top_rise"] = [
-            {"name": n, "code": c, "change_pct": v.get("f3"), "top_stocks": v.get("top_codes")}
-            for n, c, v in results[:top_n]
-        ]
-        out["top_fall"] = [
-            {"name": n, "code": c, "change_pct": v.get("f3"), "top_stocks": v.get("top_codes")}
-            for n, c, v in sorted(results, key=lambda x: x[2].get("f3", 0) or 0)[:top_n]
-        ]
+        rise_rows, fall_rows = await asyncio.gather(_fetch_boards("1"), _fetch_boards("0"))
+        # 仅为返回榜单的板块并发补 top3 成分股（去重，bounded ≤ 2*top_n 次）
+        picked_codes = list({str(r["code"]) for r in (rise_rows + fall_rows) if r.get("code")})
+        code_lists = await asyncio.gather(*[_top_codes(c) for c in picked_codes])
+        code_to_top: dict[str, list[str]] = dict(zip(picked_codes, code_lists))
+        for r in rise_rows + fall_rows:
+            r["top_stocks"] = code_to_top.get(str(r.get("code", "")), [])
+        out["top_rise"] = rise_rows
+        out["top_fall"] = fall_rows
     except Exception as e:
         out["_error"] = str(e)
 

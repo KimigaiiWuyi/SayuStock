@@ -1,7 +1,7 @@
-"""SayuStock AI 模拟盘数据库表。
+"""SayuStock 模拟盘数据库表。
 
 7 张表全部继承 BaseIDModel（只 id 主键），按 (group_id, bot_id, ...) 分区
-实现多群数据隔离。WebConsole admin 一次性挂到"SayuStock AI操盘"菜单分组下。
+实现多群数据隔离。WebConsole admin 一次性挂到"SayuStock 模拟盘"菜单分组下。
 
 迁移说明：本文件末尾通过 ``exec_list.extend`` 把 ALTER/CREATE INDEX 挂到
 ``on_core_start_before`` 阶段的 ``trans_adapter`` 内执行；既有库会自动补齐。
@@ -22,7 +22,7 @@ from gsuid_core.utils.database.base_models import BaseIDModel
 # 1) 账户表
 # ============================================================
 class SayuPaperAccount(BaseIDModel, table=True):
-    """AI 模拟盘账户（每群每 bot 一份）
+    """模拟盘账户（每群每 bot 一份）
 
     ``(group_id, bot_id)`` 复合唯一约束：
     - 新库由 ``create_all`` 自动挂上 ``ux_sayupaperaccount_gid_bid``；
@@ -54,7 +54,7 @@ class SayuPaperAccount(BaseIDModel, table=True):
 # 2) 持仓表
 # ============================================================
 class SayuPaperPosition(BaseIDModel, table=True):
-    """AI 模拟盘持仓（每群每 bot 每股票最多一行）"""
+    """模拟盘持仓（每群每 bot 每股票最多一行）"""
 
     __table_args__ = {"extend_existing": True}
 
@@ -80,7 +80,7 @@ class SayuPaperPosition(BaseIDModel, table=True):
 # 3) 交易流水表（append-only）
 # ============================================================
 class SayuPaperTrade(BaseIDModel, table=True):
-    """AI 模拟盘交易流水（append-only；不可改、不可删）"""
+    """模拟盘交易流水（append-only；不可改、不可删）"""
 
     __table_args__ = {"extend_existing": True}
 
@@ -107,7 +107,7 @@ class SayuPaperTrade(BaseIDModel, table=True):
 # 4) 决策日志表（append-only）
 # ============================================================
 class SayuPaperDecision(BaseIDModel, table=True):
-    """AI 模拟盘决策日志（每次心跳每个标的写一条；action=hold 也写）"""
+    """模拟盘决策日志（每次心跳每个标的写一条；action=hold 也写）"""
 
     __table_args__ = {"extend_existing": True}
 
@@ -128,7 +128,7 @@ class SayuPaperDecision(BaseIDModel, table=True):
 # 5) 每日净值快照表（append-only）
 # ============================================================
 class SayuPaperSnapshot(BaseIDModel, table=True):
-    """AI 模拟盘每日净值快照（15:30 收盘后写）"""
+    """模拟盘每日净值快照（15:30 收盘后写）"""
 
     __table_args__ = {"extend_existing": True}
 
@@ -149,7 +149,7 @@ class SayuPaperSnapshot(BaseIDModel, table=True):
 # 6) 群友关注列表（公开可查）
 # ============================================================
 class SayuPaperWatchlist(BaseIDModel, table=True):
-    """群友关注列表（@机器人 AI操盘自选 可查）"""
+    """群友关注列表（@机器人 模拟盘自选 可查）"""
 
     __table_args__ = {"extend_existing": True}
 
@@ -184,13 +184,13 @@ class SayuPaperAgentPool(BaseIDModel, table=True):
 
 
 # ============================================================
-# WebConsole 注册（一次性挂到 "SayuStock AI操盘" 菜单分组）
+# WebConsole 注册（一次性挂到 "SayuStock 模拟盘" 菜单分组）
 # ============================================================
 @site.register_admin
 class SayuPaperAccountAdmin(GsAdminModel):
     pk_name = "id"
     page_schema = PageSchema(
-        label="AI操盘·账户",
+        label="模拟盘·账户",
         icon="fa fa-bullhorn",
     )  # type: ignore
     model = SayuPaperAccount
@@ -200,7 +200,7 @@ class SayuPaperAccountAdmin(GsAdminModel):
 class SayuPaperPositionAdmin(GsAdminModel):
     pk_name = "id"
     page_schema = PageSchema(
-        label="AI操盘·持仓",
+        label="模拟盘·持仓",
         icon="fa fa-bullhorn",
     )  # type: ignore
     model = SayuPaperPosition
@@ -210,7 +210,7 @@ class SayuPaperPositionAdmin(GsAdminModel):
 class SayuPaperTradeAdmin(GsAdminModel):
     pk_name = "id"
     page_schema = PageSchema(
-        label="AI操盘·交易流水",
+        label="模拟盘·交易流水",
         icon="fa fa-bullhorn",
     )  # type: ignore
     model = SayuPaperTrade
@@ -220,7 +220,7 @@ class SayuPaperTradeAdmin(GsAdminModel):
 class SayuPaperDecisionAdmin(GsAdminModel):
     pk_name = "id"
     page_schema = PageSchema(
-        label="AI操盘·决策日志",
+        label="模拟盘·决策日志",
         icon="fa fa-bullhorn",
     )  # type: ignore
     model = SayuPaperDecision
@@ -230,7 +230,7 @@ class SayuPaperDecisionAdmin(GsAdminModel):
 class SayuPaperSnapshotAdmin(GsAdminModel):
     pk_name = "id"
     page_schema = PageSchema(
-        label="AI操盘·净值快照",
+        label="模拟盘·净值快照",
         icon="fa fa-bullhorn",
     )  # type: ignore
     model = SayuPaperSnapshot
@@ -240,7 +240,7 @@ class SayuPaperSnapshotAdmin(GsAdminModel):
 class SayuPaperWatchlistAdmin(GsAdminModel):
     pk_name = "id"
     page_schema = PageSchema(
-        label="AI操盘·群友关注",
+        label="模拟盘·群友关注",
         icon="fa fa-bullhorn",
     )  # type: ignore
     model = SayuPaperWatchlist
@@ -250,7 +250,7 @@ class SayuPaperWatchlistAdmin(GsAdminModel):
 class SayuPaperAgentPoolAdmin(GsAdminModel):
     pk_name = "id"
     page_schema = PageSchema(
-        label="AI操盘·内部池",
+        label="模拟盘·内部池",
         icon="fa fa-bullhorn",
     )  # type: ignore
     model = SayuPaperAgentPool

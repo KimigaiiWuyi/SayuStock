@@ -37,13 +37,13 @@ from ..utils.database.papertrade_models import (
 
 
 # ============================================================
-# AI操盘清盘（master-only）
+# 模拟盘清盘（master-only）
 # ============================================================
 @sv_papertrade_admin.on_fullmatch(
     ("模拟盘清盘"),
 )
 async def send_clear_all(bot: Bot, ev: Event):
-    """一键清掉 AI 模拟盘在 DB / Kanban / APScheduler 上的所有残留。
+    """一键清掉 模拟盘在 DB / Kanban / APScheduler 上的所有残留。
 
     清理范围（按顺序）：
         1. **DB**：``PaperAccountRepo.reset_account(group_id, bot_id)`` 一次性清
@@ -75,12 +75,12 @@ async def send_clear_all(bot: Bot, ev: Event):
         )
     except Exception as e:
         return await bot.send(
-            f"⚠️ AI 子系统 import 失败: {type(e).__name__}: {e}\n"
+            f"⚠️ ai_core 子系统 import 失败: {type(e).__name__}: {e}\n"
             f"无法执行 Kanban 树清理；请手动到 webconsole Kanban 页面 disable。"
         )
 
     sections: list[str] = [
-        "🧹 **AI 模拟盘 · 一键清盘**\n"
+        "🧹 **模拟盘 · 一键清盘**\n"
         f"群 {group_id} / bot {bot_id}\n"
         "⚠️ 本操作会清掉该群所有 papertrade 数据 + Kanban 树，不可恢复。"
     ]
@@ -203,7 +203,7 @@ async def send_clear_all(bot: Bot, ev: Event):
     summary_lines.append("Kanban 树: 见上节")
     summary_lines.append("APScheduler: 见上节")
     summary_lines.append("")
-    summary_lines.append("✅ 清理完成。下次发「AI操盘初始化」会重新建一个干净账户。")
+    summary_lines.append("✅ 清理完成。下次发「模拟盘初始化」会重新建一个干净账户。")
     sections.append("─── 5) 总结 ───\n" + "\n".join(summary_lines))
 
     return await bot.send("\n\n".join(sections))
@@ -220,7 +220,7 @@ async def send_dry_run(bot: Bot, ev: Event):
 
     ⚠️ **会真调 LLM API 并烧 token** + **会真调东财/雪球接口** +
     **会真买真卖**过撮合费率，**会持久化测试数据到 DB 与 Kanban**，
-    **末尾自动清理**（同 AI操盘清盘 逻辑）。
+    **末尾自动清理**（同 模拟盘清盘 逻辑）。
 
     流程（事件流叙事）：每个 decision 段都内嵌一次 emit_proactive_message
     推一条 bot 主动消息，让 master 实时看到每段副作用。
@@ -275,13 +275,13 @@ async def send_dry_run(bot: Bot, ev: Event):
         )
     except Exception as e:
         return await bot.send(
-            f"⚠️ AI 子系统 import 失败，框架未就绪: {type(e).__name__}: {e}\n请确认 gsuid_core.ai_core 可正常加载。"
+            f"⚠️ ai_core 子系统 import 失败，框架未就绪: {type(e).__name__}: {e}\n请确认 gsuid_core.ai_core 可正常加载。"
         )
 
     # 报告缓冲区
     sections: list[str] = []
     sections.append(
-        "🧪 **AI 模拟盘 · 真 Agent 端到端压测**\n"
+        "🧪 **模拟盘 · 真 Agent 端到端压测**\n"
         f"群 {group_id} / bot {bot_id} / master uid={ev.user_id}\n"
         f"⚠️ 本压测会调真实 LLM API 并持久化测试数据到 DB + Kanban"
     )
@@ -348,7 +348,7 @@ async def send_dry_run(bot: Bot, ev: Event):
         nonlocal root_init
         # leaf-root 模式：subtasks=None + root_agent_profile="papertrade_setup_agent"
         root, _ = await create_kanban_tree(
-            goal=f"群{group_id} AI模拟盘 init (DRY_RUN {ev.user_id})",
+            goal=f"群{group_id} 模拟盘 init (DRY_RUN {ev.user_id})",
             owner_user_id=str(ev.user_id),
             scope_key=f"papertrade_init_{group_id}_{bot_id}",
             bot_id=bot_id,
@@ -374,7 +374,7 @@ async def send_dry_run(bot: Bot, ev: Event):
         await _build_init_tree()
         init_lines.append("✅ create_kanban_tree OK")
         init_lines.append(f"   root_id = {root_init.id}")
-        init_lines.append(f"   goal    = 群{group_id} AI模拟盘 init (DRY_RUN {ev.user_id})")
+        init_lines.append(f"   goal    = 群{group_id} 模拟盘 init (DRY_RUN {ev.user_id})")
         init_lines.append("   profile = papertrade_setup_agent (leaf-root)")
         init_lines.append("   bind    → PaperAccount.kanban_init_root_id")
         init_lines.append("   kick_root 任务已派发（异步执行）")
@@ -413,7 +413,7 @@ async def send_dry_run(bot: Bot, ev: Event):
             },
         ]
         root, _ = await create_kanban_tree(
-            goal=f"群{group_id} AI模拟盘 周期托管 (DRY_RUN {ev.user_id})",
+            goal=f"群{group_id} 模拟盘 周期托管 (DRY_RUN {ev.user_id})",
             owner_user_id=str(ev.user_id),
             scope_key=f"papertrade_period_{group_id}_{bot_id}",
             bot_id=bot_id,
@@ -462,7 +462,7 @@ async def send_dry_run(bot: Bot, ev: Event):
 
     async def _run_setup_agent() -> str:
         task: str = (
-            f"为群{group_id} 在 bot {bot_id} 上初始化 AI 模拟盘账户（DRY_RUN smoke test by master uid={ev.user_id}）。"
+            f"为群{group_id} 在 bot {bot_id} 上初始化 模拟盘账户（DRY_RUN smoke test by master uid={ev.user_id}）。"
             f"调用 papertrade_account_create 工具建账户："
             f"initial_cash=1000000, mode='balanced', initialized_by='{ev.user_id} (DRY_RUN)'。"
             f"完成后简短报告：账户 id / cash / mode。"
@@ -514,7 +514,7 @@ async def send_dry_run(bot: Bot, ev: Event):
 
     # ────────────────────────────────────────────────────────────────────
     # 真实交易播报 builder + 副作用 Δ 计算：复用 ``stock_papertrade.proactive``
-    # 共享模块——把"📈 AI 模拟盘操盘播报"模板拼装外置，原 200 多行被替换为
+    # 共享模块——把"📈 模拟盘操盘播报"模板拼装外置，原 200 多行被替换为
     # 一个 variant 调度 + 一次调用。压测方只走 "force_*" / "kb_web" variant
     # 自爆身份，生产路径永远走 "auto"。
     # ────────────────────────────────────────────────────────────────────
@@ -582,7 +582,7 @@ async def send_dry_run(bot: Bot, ev: Event):
             lines.append(f"❌ 副作用查询失败: {type(e).__name__}: {e}")
 
         # 每段后 emit_proactive_message（即使 LLM 失败也推，验证链路）
-        # 真实播报：从 DB 动态拼"📈 AI 模拟盘操盘播报"，让 master 看到的就是产品形态。
+        # 真实播报：从 DB 动态拼"📈 模拟盘操盘播报"，让 master 看到的就是产品形态。
         #   ②/③/④/⑤ 都会拼 — ⑥ (KB/Web 通路) 保留元文本因为没有真实交易可播
         #   fallback_text 传给 build_papertrade_proactive_text：DB 异常 / 账户不存在时退化用
         text: str = proactive_text
@@ -686,8 +686,8 @@ async def send_dry_run(bot: Bot, ev: Event):
             "就在报告里列工具缺口，仅 papertrade_decision_insert 写一条对应 action 的决策日志。"
         ),
         session_suffix=f"dry_run_a_free_{group_id}",
-        proactive_text="🧪 [DRY_RUN ②] AI 模拟盘 自主决策完成（详见主报告）",
-        proactive_reason=f"AI操盘压测 · 自主决策段 · master uid={ev.user_id}",
+        proactive_text="🧪 [DRY_RUN ②] 模拟盘 自主决策完成（详见主报告）",
+        proactive_reason=f"模拟盘压测 · 自主决策段 · master uid={ev.user_id}",
     )
     sections.append(block2)
     t0 = _time.perf_counter()
@@ -734,7 +734,7 @@ async def send_dry_run(bot: Bot, ev: Event):
         ),
         session_suffix=f"dry_run_b_forcebuy_{group_id}",
         proactive_text="🧪 [DRY_RUN ③] 强制 BUY 已成交（详见主报告）",
-        proactive_reason=f"AI操盘压测 · 强制 BUY 段 · master uid={ev.user_id}",
+        proactive_reason=f"模拟盘压测 · 强制 BUY 段 · master uid={ev.user_id}",
     )
     sections.append(block3)
     t0 = _time.perf_counter()
@@ -782,7 +782,7 @@ async def send_dry_run(bot: Bot, ev: Event):
         ),
         session_suffix=f"dry_run_c_forcesell_{group_id}",
         proactive_text="🧪 [DRY_RUN ④] 强制 SELL 已平仓（详见主报告）",
-        proactive_reason=f"AI操盘压测 · 强制 SELL 段 · master uid={ev.user_id}",
+        proactive_reason=f"模拟盘压测 · 强制 SELL 段 · master uid={ev.user_id}",
     )
     sections.append(block4)
     t0 = _time.perf_counter()
@@ -820,7 +820,7 @@ async def send_dry_run(bot: Bot, ev: Event):
         ),
         session_suffix=f"dry_run_d_forcehold_{group_id}",
         proactive_text="🧪 [DRY_RUN ⑤] 强制 HOLD 完成（仅决策无交易，详见主报告）",
-        proactive_reason=f"AI操盘压测 · 强制 HOLD 段 · master uid={ev.user_id}",
+        proactive_reason=f"模拟盘压测 · 强制 HOLD 段 · master uid={ev.user_id}",
     )
     sections.append(block5)
     t0 = _time.perf_counter()
@@ -843,7 +843,7 @@ async def send_dry_run(bot: Bot, ev: Event):
         ),
         session_suffix=f"dry_run_e_kbweb_{group_id}",
         proactive_text="🧪 [DRY_RUN ⑥] KB + Web search 通路验证完成（详见主报告）",
-        proactive_reason=f"AI操盘压测 · KB/Web 通路段 · master uid={ev.user_id}",
+        proactive_reason=f"模拟盘压测 · KB/Web 通路段 · master uid={ev.user_id}",
     )
     sections.append(block6)
     # 注：此前的 push_dt 在 ⑤ 后赋过值但未使用，单独保留是为对齐各段耗时统计节奏；
@@ -1040,7 +1040,7 @@ async def send_dry_run(bot: Bot, ev: Event):
     # ─── ⑧ auto-cleanup（压测结束自动清掉所有副作用） ───
     t0 = _time.perf_counter()
     cleanup_lines: list[str] = []
-    cleanup_lines.append("🧹 开始 auto-cleanup（与 AI操盘清盘 同逻辑）")
+    cleanup_lines.append("🧹 开始 auto-cleanup（与 模拟盘清盘 同逻辑）")
     cleanup_lines.append("")
 
     # 8.1 DB（7 张表）
@@ -1111,7 +1111,7 @@ async def send_dry_run(bot: Bot, ev: Event):
         cleanup_lines.append(f"❌ 8.3 APScheduler 清理异常: {type(e).__name__}: {e}")
 
     cleanup_lines.append("")
-    cleanup_lines.append("✅ auto-cleanup 完成。下次发「AI操盘初始化」重新建账。")
+    cleanup_lines.append("✅ auto-cleanup 完成。下次发「模拟盘初始化」重新建账。")
     cleanup_dt: float = _time.perf_counter() - t0
     sections.append("─── ⑧ auto-cleanup ───\n" + "\n".join(cleanup_lines) + f"\n⏱ {cleanup_dt:.2f}s")
 

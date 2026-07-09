@@ -1,7 +1,7 @@
 """用户命令（``sv_papertrade`` 注册，pm=3）。
 
 公开命令：
-1. ``send_init_command``  — ``AI操盘初始化`` (群主 / 管理员权限)
+1. ``send_init_command``  — ``模拟盘初始化`` (群主 / 管理员权限)
 2. ``send_view``          — ``模拟盘查看``
 3. ``send_pnl``           — ``模拟盘收益`` (周期: 日/周/月/季/年/ytd/总)
 4. ``send_records``       — ``模拟盘记录``
@@ -27,7 +27,7 @@ from .trading_calendar import is_trading_time, is_a_share_trading_day
 
 
 # ============================================================
-# 1) AI操盘初始化（完整 6 步：账户 + Kanban init 树 + Kanban period 树 + APScheduler 周期 + 回填）
+# 1) 模拟盘初始化（完整 6 步：账户 + Kanban init 树 + Kanban period 树 + APScheduler 周期 + 回填）
 # ============================================================
 async def _setup_papertrade_kanban_trees(
     bot: Bot, ev: Event, group_id: str, bot_id: str
@@ -44,7 +44,7 @@ async def _setup_papertrade_kanban_trees(
     init_root_id: str | None = None
     try:
         init_root, _ = await create_kanban_tree(
-            goal=f"群{group_id} AI模拟盘 init",
+            goal=f"群{group_id} 模拟盘 init",
             owner_user_id=str(ev.user_id),
             scope_key=f"papertrade_init_{group_id}_{bot_id}",
             bot_id=bot_id,
@@ -126,7 +126,7 @@ async def _setup_papertrade_kanban_trees(
             },
         ]
         period_root, _ = await create_kanban_tree(
-            goal=f"群{group_id} AI模拟盘 周期托管",
+            goal=f"群{group_id} 模拟盘 周期托管",
             owner_user_id=str(ev.user_id),
             scope_key=f"papertrade_period_{group_id}_{bot_id}",
             bot_id=bot_id,
@@ -182,39 +182,28 @@ async def _setup_papertrade_kanban_trees(
 async def _kick_immediate_decision(ev: Event, group_id: str, bot_id: str) -> None:
     """fire-and-forget 立即触发一次 ``papertrade_decision_agent``。
 
-    2026-07-01 修复：之前实现用 ``asyncio.create_task(run_capability_agent(...))``
-    fire-and-forget，把结果丢给 GC——LLM 写完交易 + 决策日志后**没人消费**返回
-    值，群消息没有播报。修法：内部 await 完 capagent → 算副作用 Δ → 通过
-    ``emit_proactive_message`` 把「📈 AI 模拟盘·操盘播报」推群。
-    外层仍然 ``asyncio.create_task(_kick_immediate_decision(...))`` 不阻塞 init
-    主消息（init 成功文案 + 这条决策播报**两条独立推送**，场景和时机都不同）。
+    播报口径（2026-07 起统一）：**成交播报完全交给 ``papertrade_trade_insert`` 工具**
+    在成交那一刻确定性推一行简洁冒泡（🟢 买入 / 🔴 卖出，见 ``ai_tools._broadcast_fill``）；
+    决策代理最终只输出 ``<<NO_BROADCAST>>``、推理只落库。所以这里 await 完 capagent 即
+    结束——**不再**拍快照 / 算 Δ / 拼"操盘播报"结构化文本推群（避免把决策理由 / 账户
+    汇总泄漏到群里）。只有 capagent 整个跑挂时才推一条异常提示。
 
-    三条推群策略（与 ``PAPERTRADE_GUIDE.md §一`` 一致）：
-        buy  → 推 ✅（"📈 自主决策🟢 买入" + 成交明细 + 决策理由 + 行情快照）
-        sell → 推 ✅（"📈 自主决策🔴 卖出" + 成交明细 + realized_pnl + 决策理由）
-        hold → **不推**（设计哲学：持仓不动不必打扰群里，只写决策日志供事后查询）
-
-    ``session_id_suffix`` 用 ``init_decision_{group_id}`` 与后续 cron 实例的会话
-    串号隔开，避免 session_logger 串话。
+    外层仍 ``asyncio.create_task(_kick_immediate_decision(...))`` 不阻塞 init 主消息。
+    ``session_id_suffix`` 用 ``init_decision_{group_id}`` 与后续 cron 实例的会话串号
+    隔开，避免 session_logger 串话。
     """
     from gsuid_core.logger import logger
 
     try:
         from gsuid_core.ai_core.proactive.emitter import emit_proactive_message
         from gsuid_core.ai_core.capability_agents.runner import run_capability_agent
-
-        from .proactive import (
-            decision_state_delta,
-            snapshot_decision_state,
-            build_papertrade_proactive_text,
-        )
     except Exception as e:
         # 这里失败说明 ai_core / proactive 模块未就绪——但不应阻塞 init 主流程
         logger.exception(f"[SayuStock][PaperTrade] init 立即决策：依赖 import 失败: {e}")
         return
 
     task_prompt = (
-        f"为群{group_id} 在 bot {bot_id} 上立即执行一次 AI 模拟盘心跳决策（init-time 立即触发）。\n"
+        f"为群{group_id} 在 bot {bot_id} 上立即执行一次 模拟盘心跳决策（init-time 立即触发）。\n"
         f"Step 1: papertrade_account_query → 拿 cash / mode / enabled\n"
         f"Step 2: papertrade_position_list → 拿当前持仓\n"
         f"Step 3: stock_is_trading_day → 确认开盘\n"
@@ -228,14 +217,8 @@ async def _kick_immediate_decision(ev: Event, group_id: str, bot_id: str) -> Non
         f"完成后简短回报：action / 持仓数量 / 决策 ID。"
     )
 
-    # 1) 拍快照：跑 capagent 前 trades / positions / decisions 各几张表
-    baseline: tuple[int, int, int] = (0, 0, 0)
-    try:
-        baseline = await snapshot_decision_state(group_id, bot_id)
-    except Exception as e:
-        logger.warning(f"[SayuStock][PaperTrade] snapshot_decision_state 失败（用 0 baseline）: {e}")
-
-    # 2) 跑 capagent（**这里 await**——拿结果用于下面 emit）
+    # 跑 capagent（await）；成交时 papertrade_trade_insert 工具会**即时**推一行成交冒泡，
+    # 决策代理最终只输出 <<NO_BROADCAST>>，故这里不再拍快照 / 算 Δ / 拼结构化播报。
     result: str = ""
     try:
         result = await run_capability_agent(
@@ -251,7 +234,7 @@ async def _kick_immediate_decision(ev: Event, group_id: str, bot_id: str) -> Non
         try:
             await emit_proactive_message(
                 event=ev,
-                message=f"⚠️ AI 模拟盘心跳异常：{type(e).__name__}: {str(e)[:200]}",
+                message=f"⚠️ 模拟盘心跳异常：{type(e).__name__}: {str(e)[:200]}",
                 source="kanban",
                 trigger_reason=f"papertrade_init_kick_failed:{group_id}",
                 suppress_when_heartbeat_recent=False,
@@ -260,86 +243,18 @@ async def _kick_immediate_decision(ev: Event, group_id: str, bot_id: str) -> Non
             logger.exception(f"[SayuStock][PaperTrade] 失败播报本身又失败: {ee}")
         return
 
-    # 3) 算副作用 Δ
-    trades_d: int = 0
-    positions_d: int = 0
-    decisions_d: int = 0
-    try:
-        trades_d, positions_d, decisions_d = await decision_state_delta(
-            baseline, group_id, bot_id
-        )
-    except Exception as e:
-        logger.warning(f"[SayuStock][PaperTrade] decision_state_delta 失败: {e}")
-
-    # 4) 决定是否推送 + 推送什么
-    # 推群语义（与 ``PAPERTRADE_GUIDE.md §一·主动消息播报策略`` 一致）：
-    #   - trades_d > 0  → 必有真成交，**必推**（用户明确要求"无论买还是卖都
-    #     应该在群里发主动消息播报"）；哪怕 LLM 没写决策日志也推，因为群里
-    #     已经有真金白银的成交记录
-    #   - decisions_d > 0 且 action in ('buy','sell')  → 必推
-    #   - decisions_d > 0 且 action == 'hold'          → **不推**（设计哲学：
-    #     持仓不动不必打扰群里）
-    #   - decisions_d == 0 且 trades_d == 0           → LLM 啥都没干（或工具
-    #     全不可达 → 业务失败），不推
-    try:
-        latest_action: str = ""
-        if decisions_d > 0:
-            ds = await _db.PaperDecisionRepo.list_recent(group_id, bot_id, limit=1)
-            if ds:
-                latest_action = ds[0].action or ""
-
-        # 先归一 action 字符串大小写（之前发现过 LLM 写 'BUY' 全大写）
-        latest_action_lc: str = latest_action.lower()
-        if latest_action_lc == "hold":
-            logger.info(
-                "[SayuStock][PaperTrade] init 决策 action=hold，按设计不推送（持仓不动）。"
-            )
-            return
-
-        if trades_d <= 0 and latest_action_lc not in ("buy", "sell"):
-            logger.info(
-                f"[SayuStock][PaperTrade] init 决策无成交且 action={latest_action or '(空)'!r}，不推送。"
-            )
-            return
-
-        # ── 真正推送 ──
-        text: str = await build_papertrade_proactive_text(
-            group_id,
-            bot_id,
-            variant="auto",
-            trades_d=trades_d,
-            positions_d=positions_d,
-            decisions_d=decisions_d,
-            fallback_text=(result or "").strip()[:1000]
-            or "（决策 agent 无文本）",
-        )
-        sent: bool = await emit_proactive_message(
-            event=ev,
-            message=text,
-            source="kanban",
-            trigger_reason=(
-                f"papertrade_init_kick:{group_id} action={latest_action_lc or '(trade_only)'}"
-            ),
-            suppress_when_heartbeat_recent=False,  # 关键播报，不被心跳抑制
-        )
-        if sent:
-            logger.info(
-                f"[SayuStock][PaperTrade] init 决策播报已推群 action={latest_action_lc or '(trade_only)'} "
-                f"trades_Δ={trades_d:+d} positions_Δ={positions_d:+d}"
-            )
-        else:
-            logger.warning(
-                f"[SayuStock][PaperTrade] init 决策播报被 C8 网关抑制或 bot 不可用 action={latest_action_lc}"
-            )
-    except Exception as e:
-        # 整段推送链路异常——记日志，绝不抛出（fire-and-forget 任务失败时
-        # 用户不应再看到任何报错）
-        logger.exception(f"[SayuStock][PaperTrade] init 决策推送链路异常: {e}")
+    # 成交播报由 papertrade_trade_insert 工具在成交那一刻确定性推送（🟢 买入 / 🔴 卖出
+    # 一行冒泡，见 ai_tools._broadcast_fill）；决策推理只落库、不进群。故 init-time kick
+    # 到此为止，不再拼"操盘播报"结构化文本推群（那会把决策理由 / 账户汇总泄漏到群里）。
+    _ = result  # 仅供排障，不推群
+    logger.info(
+        f"[SayuStock][PaperTrade] init 决策已跑完（成交由 trade_insert 工具即时播报）group={group_id}"
+    )
 
 
 @sv_papertrade.on_fullmatch(
     ("模拟盘初始化",),
-    to_ai="""初始化 AI 模拟盘账户（默认 100w 现金，平衡模式）。一次完整流程，包含：
+    to_ai="""初始化 模拟盘账户（默认 100w 现金，平衡模式）。一次完整流程，包含：
 
 1) SQLModel 建账户（100w 现金，balanced 模式）
 2) Kanban init 树（leaf-root / papertrade_setup_agent，单次执行把账户建好）
@@ -379,12 +294,12 @@ async def send_init_command(bot: Bot, ev: Event):
     内的详细注释。
     """
     if not await check_admin(ev):
-        return await bot.send("⚠️ 仅群主/管理员可初始化 AI 模拟盘")
+        return await bot.send("⚠️ 仅群主/管理员可初始化模拟盘")
 
     group_id: str = str(ev.group_id)
     bot_id: str = ev.bot_id
 
-    # ── 可选：自定义初始资金（"AI操盘初始化 2000000"） ──
+    # ── 可选：自定义初始资金（"模拟盘初始化 2000000"） ──
     initial_cash: float = 1_000_000.0
     raw_text: str = ev.text.strip() if ev.text else ""
     if raw_text:
@@ -421,7 +336,7 @@ async def send_init_command(bot: Bot, ev: Event):
             except RuntimeError as e:
                 return await bot.send(
                     f"⚠️ 账户已存在（id={existing.id}），但补挂 Kanban 心跳失败：{e}\n"
-                    f"AI 开盘不会自动决策。请联系 SUPERUSER 通过「AI操盘清盘」重置。"
+                    f"开盘后不会自动决策。请联系 SUPERUSER 通过「模拟盘清盘」重置。"
                 )
             # 补挂同样立即踢 init + （开盘时）踢一次 decision
             await _kick_after_kanban_ready(ev, group_id, bot_id, init_id)
@@ -434,7 +349,7 @@ async def send_init_command(bot: Bot, ev: Event):
                 f"{' + 一次决策心跳' if is_market else '（非开盘时段，跳过决策）'}。"
             )
         return await bot.send(
-            f"ℹ️ 本群已开户 AI 模拟盘（id={existing.id}），无需重复初始化。\n如需重置请用「AI操盘清盘」（master-only）。"
+            f"ℹ️ 本群已开户模拟盘（id={existing.id}），无需重复初始化。\n如需重置请用「模拟盘清盘」（master-only）。"
         )
 
     # ── 步骤 2：建 SQLModel 账户 ──
@@ -461,7 +376,7 @@ async def send_init_command(bot: Bot, ev: Event):
         return await bot.send(f"⚠️ 初始化失败：{e}\n账户已自动回滚。请检查 gsuid_core.ai_core 是否就绪后重试。")
 
     # ── 步骤 7：fire-and-forget 立即踢 init + （开盘时）踢一次 decision ──
-    #    原因：用户发"AI操盘初始化"在开盘时段，希望 AI 立刻开始看盘，不等到
+    #    原因：用户发"模拟盘初始化"在开盘时段，希望 AI 立刻开始看盘，不等到
     #    下个 30 分钟 tick。踢的过程不阻塞主消息：init 通常 < 5s，decision
     #    ~30-60s，二者都在后台跑完。
     await _kick_after_kanban_ready(ev, group_id, bot_id, init_id)
@@ -473,7 +388,7 @@ async def send_init_command(bot: Bot, ev: Event):
         else "（非开盘时段，跳过决策；等下次 cron）"
     )
     msg = (
-        f"✅ AI 模拟盘已开户\n"
+        f"✅ 模拟盘已开户\n"
         f"群号: {ev.group_id}\n"
         f"初始资金: {acc.initial_cash:,.0f}\n"
         f"模式: {acc.mode}\n"
@@ -599,7 +514,7 @@ async def send_pnl(bot: Bot, ev: Event):
     )
     period: str = text if text in ("总", "全部", "all") else f"近{text}"
     msg = (
-        f"📊 AI 操盘 · {period}盈亏\n"
+        f"📊 模拟盘 · {period}盈亏\n"
         f"已实现盈亏: {agg['total_pnl']:+,.2f}\n"
         f"总成交额: {agg['total_amount']:,.0f}\n"
         f"总手续费: {agg['total_fee']:,.2f}\n"
@@ -622,7 +537,7 @@ async def send_records(bot: Bot, ev: Event):
     )
     if not rows:
         return await bot.send("ℹ️ 暂无交易记录")
-    lines: list[str] = ["【AI 操盘 · 最近 20 笔交易】"]
+    lines: list[str] = ["【模拟盘 · 最近 20 笔交易】"]
     for t in rows:
         side = "买" if t.side == "buy" else "卖"
         executed_at: _dt.datetime | None = t.executed_at
@@ -659,7 +574,7 @@ async def send_query_group(bot: Bot, ev: Event):
         return await bot.send("⚠️ 群号格式错误（5~15 位数字）")
     acc = await _cross.query_account(target)
     if not acc:
-        return await bot.send(f"ℹ️ 群 {target} 未开通 AI 模拟盘")
+        return await bot.send(f"ℹ️ 群 {target} 未开通模拟盘")
     positions = await _cross.query_positions(target)
     snap = await _cross.query_latest_snapshot(target)
     lines: list[str] = [

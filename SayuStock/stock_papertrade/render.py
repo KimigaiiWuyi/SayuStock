@@ -1,4 +1,4 @@
-"""AI 模拟盘 PIL 渲染（账户视图 / 排行）。"""
+"""模拟盘 PIL 渲染（账户视图 / 排行）。"""
 
 from PIL import Image, ImageDraw, ImageFont
 
@@ -65,11 +65,11 @@ async def draw_account_view(
     img = _new_canvas(W, H)
 
     # 标题
-    _draw_text(img, (40, 30), "【早柚 AI 模拟盘 · 账户视图】", color=(255, 200, 100), size=30)
+    _draw_text(img, (40, 30), "【早柚 模拟盘 · 账户视图】", color=(255, 200, 100), size=30)
     _draw_text(img, (40, 80), f"群 {group_id}  ·  {bot_id}", color=(180, 180, 180), size=18)
 
     if not acc:
-        _draw_text(img, (40, 140), "❌ 该群尚未开户，发送「AI操盘初始化」开户", color=(255, 100, 100), size=22)
+        _draw_text(img, (40, 140), "❌ 该群尚未开户，发送「模拟盘初始化」开户", color=(255, 100, 100), size=22)
         return await convert_img(img)
 
     y = 130
@@ -164,7 +164,7 @@ async def draw_leaderboard() -> bytes:
     W, H = 900, 100 + 60 * (len(snaps) + 1)
     img = _new_canvas(W, H)
 
-    _draw_text(img, (40, 30), "【早柚 AI 模拟盘 · 跨群收益排行 TOP 20】", color=(255, 200, 100), size=28)
+    _draw_text(img, (40, 30), "【早柚 模拟盘 · 跨群收益排行 TOP 20】", color=(255, 200, 100), size=28)
     y = 90
 
     if not snaps:

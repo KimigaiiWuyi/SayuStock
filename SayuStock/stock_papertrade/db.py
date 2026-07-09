@@ -1,4 +1,4 @@
-"""AI 模拟盘数据库 Repo 层（7 张表 CRUD 包装）。
+"""模拟盘数据库 Repo 层（7 张表 CRUD 包装）。
 
 所有方法走 ``@with_session`` 自动管理事务；返回 list / instance / None。
 复杂聚合查询用 ``async_maker`` 手写 session。

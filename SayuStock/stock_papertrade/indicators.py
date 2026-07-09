@@ -1,4 +1,4 @@
-"""AI 模拟盘技术指标计算（纯 pandas/numpy）。
+"""模拟盘技术指标计算（纯 pandas/numpy）。
 
 输入：日 K DataFrame（至少 60 行），列名（与东财 K 线接口一致）：
     - date (str YYYY-MM-DD)
@@ -308,6 +308,63 @@ def calc_bbi(close: pd.Series) -> float | None:
 
 
 # ============================================================
+# 13) KDJ 随机指标（经典 9,3,3，通达信/东财口径）
+#   RSV = (C - LLV_n) / (HHV_n - LLV_n) * 100
+#   K = (RSV + 2K') / 3 ; D = (K + 2D') / 3（K/D 初值取中性 50）; J = 3K - 2D
+#   K/D 常态 0~100（>80 超买 <20 超卖），J 可越界（J>100 超买 / J<0 超卖）。
+#   返回 (K, D, J, golden_cross_in_3d, death_cross_in_3d)
+#   金叉：K 上穿 D（低位金叉偏多）；死叉：K 下穿 D（高位死叉偏空）。
+# ============================================================
+def calc_kdj(
+    df: pd.DataFrame,
+    n: int = 9,
+    m1: int = 3,
+    m2: int = 3,
+) -> tuple[float | None, float | None, float | None, bool, bool]:
+    if len(df) < n:
+        return None, None, None, False, False
+    high = _col_float(df, "high")
+    low = _col_float(df, "low")
+    close = _col_float(df, "close")
+    low_min = low.rolling(window=n, min_periods=1).min()
+    high_max = high.rolling(window=n, min_periods=1).max()
+    span = (high_max - low_min).to_numpy(dtype=float)
+    close_arr = close.to_numpy(dtype=float)
+    low_arr = low_min.to_numpy(dtype=float)
+    with np.errstate(invalid="ignore", divide="ignore"):
+        rsv = np.where(span > 0, (close_arr - low_arr) / span * 100.0, np.nan)
+
+    k_series = np.empty(len(rsv), dtype=float)
+    d_series = np.empty(len(rsv), dtype=float)
+    k_prev = d_prev = 50.0
+    for i, raw in enumerate(rsv):
+        # 区间无波动（涨跌停/停牌）时 RSV 记为中性 50，避免断点
+        cur = 50.0 if not np.isfinite(raw) else float(raw)
+        k_prev = (cur + (m1 - 1) * k_prev) / m1
+        d_prev = (k_prev + (m2 - 1) * d_prev) / m2
+        k_series[i] = k_prev
+        d_series[i] = d_prev
+    j_series = 3.0 * k_series - 2.0 * d_series
+
+    # 近 3 日 K/D 金叉 / 死叉
+    golden = death = False
+    for i in range(-3, 0):
+        try:
+            k_prev_i = float(k_series[i - 1])
+            k_curr_i = float(k_series[i])
+            d_prev_i = float(d_series[i - 1])
+            d_curr_i = float(d_series[i])
+        except IndexError:
+            continue
+        if k_prev_i <= d_prev_i and k_curr_i > d_curr_i:
+            golden = True
+        if k_prev_i >= d_prev_i and k_curr_i < d_curr_i:
+            death = True
+
+    return float(k_series[-1]), float(d_series[-1]), float(j_series[-1]), golden, death
+
+
+# ============================================================
 # 12) 5/15/30/60 分钟 K 线适配器
 #   日 K 内部仍走 klines_to_df；分钟 K 由 get_gg(code, "single-stock-kline-5"|"15"|"30"|"60", ...)
 #   拉到的格式与日 K 略不同（东财分钟 K 列顺序可能多/少），这里做宽松解析：
@@ -388,6 +445,7 @@ def compute_indicators(df: pd.DataFrame) -> dict[str, float | bool | None]:
 
     cci14 = calc_cci(df, 14)
     bbi = calc_bbi(close)
+    kdj_k, kdj_d, kdj_j, kdj_gold, kdj_death = calc_kdj(df)
 
     turnover: float | None = None
     if "turnover_rate" in df.columns:
@@ -430,6 +488,14 @@ def compute_indicators(df: pd.DataFrame) -> dict[str, float | bool | None]:
         "boll_opening_ratio_short_vs_mid": boll_opening_ratio,
         "cci14": cci14,
         "bbi": bbi,
+        # —— KDJ（9,3,3）——
+        "kdj_k": kdj_k,
+        "kdj_d": kdj_d,
+        "kdj_j": kdj_j,
+        "kdj_golden_cross_in_3d": kdj_gold,
+        "kdj_death_cross_in_3d": kdj_death,
+        "kdj_overbought": (kdj_j is not None and kdj_j > 100) or (kdj_k is not None and kdj_k > 80),
+        "kdj_oversold": (kdj_j is not None and kdj_j < 0) or (kdj_k is not None and kdj_k < 20),
         # 形态特征
         "ma_bull_alignment": (ma5 is not None and ma10 is not None and ma20 is not None and ma5 > ma10 > ma20),
         "ma_bear_alignment": (ma5 is not None and ma10 is not None and ma20 is not None and ma5 < ma10 < ma20),
@@ -483,6 +549,14 @@ def _empty_indicators() -> dict[str, float | bool | None]:
         "boll_opening_ratio_short_vs_mid": None,
         "cci14": None,
         "bbi": None,
+        # —— KDJ ——
+        "kdj_k": None,
+        "kdj_d": None,
+        "kdj_j": None,
+        "kdj_golden_cross_in_3d": False,
+        "kdj_death_cross_in_3d": False,
+        "kdj_overbought": False,
+        "kdj_oversold": False,
         # 形态
         "ma_bull_alignment": False,
         "ma_bear_alignment": False,

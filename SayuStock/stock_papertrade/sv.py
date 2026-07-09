@@ -17,6 +17,6 @@ pm=0 + area="GROUP" 在 ``gsuid_core/handler.py`` 框架层做双重门槛：
 
 from gsuid_core.sv import SV
 
-sv_papertrade: SV = SV("AI模拟盘", pm=3, area="GROUP")
+sv_papertrade: SV = SV("模拟盘", pm=3, area="GROUP")
 
-sv_papertrade_admin: SV = SV("AI模拟盘·管理", pm=0, area="GROUP")
+sv_papertrade_admin: SV = SV("模拟盘·管理", pm=0, area="GROUP")

@@ -1,4 +1,4 @@
-"""AI 模拟盘 ai_tools 集合。
+"""模拟盘 ai_tools 集合。
 
 14 个 ai_tools，分三类（**没有重叠**，每个工具只做一件事）：
 - 业务/账本（**5 个只读**，capability_domain="AI模拟盘"，category="common"）
@@ -19,7 +19,7 @@
 
 import json
 import datetime as _dt
-from typing import Any, Set, Dict, Optional, TypedDict
+from typing import Any, Set, Dict, TypedDict
 
 from pydantic_ai import RunContext
 
@@ -33,7 +33,6 @@ from .trading_calendar import (
     is_trading_time,
     trading_day_summary,
     is_a_share_trading_day,
-    should_run_papertrade,
 )
 from ..utils.stock.request import get_gg
 from ..utils.eastmoney_finance import (
@@ -68,7 +67,6 @@ _PAPERTRADE_CTX_TAGS: list[str] = [
     "金融",
     "投资",
     "模拟盘",
-    "AI模拟盘",
     "持仓",
 ]
 
@@ -206,6 +204,46 @@ def _visible_to_papertrade_agent(ctx: RunContext[ToolContext]) -> bool:
 # 数据新鲜度，避免拿着过期报价瞎决策。
 # ============================================================
 from gsuid_core.logger import logger as _gslogger  # noqa: E402  -- pyright 看不见根包导入
+
+
+async def _broadcast_fill(
+    ctx: RunContext[ToolContext],
+    *,
+    side: str,
+    stock_code: str,
+    stock_name: str,
+    qty: int,
+    price: float,
+    realized_pnl: float,
+) -> None:
+    """成交后向群里推一行简洁冒泡（buy/sell 都推）。
+
+    这是**系统级确定性播报**——不依赖决策代理的最终输出（代理最终永远只出
+    ``<<NO_BROADCAST>>``）。每次 ``papertrade_trade_insert`` 成功即调一次，保证
+    "全部买卖都在群里公布"，且只公布这一行、不带任何决策推理 / 账户汇总。
+    失败只记 debug、绝不抛出（已落库的成交不能被播报失败连累）。
+    """
+    ev = ctx.deps.ev
+    if ev is None:
+        return
+    name: str = stock_name or stock_code
+    if side == "sell":
+        sign: str = "+" if realized_pnl >= 0 else "-"
+        line = f"🔴 卖出 {name}({stock_code}) {qty} 股 @¥{price:.2f}（{sign}¥{abs(realized_pnl):,.0f}）"
+    else:
+        line = f"🟢 买入 {name}({stock_code}) {qty} 股 @¥{price:.2f}"
+    try:
+        from gsuid_core.ai_core.proactive.emitter import emit_proactive_message
+
+        await emit_proactive_message(
+            event=ev,
+            message=line,
+            source="tool",
+            trigger_reason=f"papertrade_fill:{stock_code}:{side}",
+            suppress_when_heartbeat_recent=False,  # 成交播报是关键信息，不被心跳抑制
+        )
+    except Exception as e:
+        _gslogger.debug(f"[SayuStock][PaperTrade] 成交播报失败（不影响落库）: {e}")
 
 
 async def _get_enriched_positions(
@@ -354,7 +392,7 @@ async def papertrade_account_query(
     group_id: str = "",
     bot_id: str = "",
 ) -> str:
-    """查询本群 AI 模拟盘（虚拟盘）账户：现金 / 总资产 / 浮盈 / 已实现盈亏 / 持仓数。
+    """查询本群 模拟盘（虚拟盘）账户：现金 / 总资产 / 浮盈 / 已实现盈亏 / 持仓数。
 
     ⚠️ **这是"你（早柚/AI）自己经营的模拟盘账户"的权威数据源**，不是用户个人
     自选股。当有人问「你现在账户怎么样 / 盈利多少 / 总资产多少 / 仓位几成 /
@@ -377,7 +415,7 @@ async def papertrade_account_query(
         return "⚠️ 无法确定 group_id/bot_id"
     acc = await db.PaperAccountRepo.get(gid, bid)
     if not acc:
-        return f"ℹ️ 群 {gid} 在 {bid} 上尚未开通 AI 模拟盘。发送「AI操盘初始化」开户。"
+        return f"ℹ️ 群 {gid} 在 {bid} 上尚未开通模拟盘。发送「模拟盘初始化」开户。"
 
     # ── enriched 持仓聚合（自动刷报价，含浮盈 / 现价） ──
     enriched: list[tuple[SayuPaperPosition, dict]] = await _get_enriched_positions(gid, bid)
@@ -426,7 +464,7 @@ async def papertrade_position_list(
     group_id: str = "",
     bot_id: str = "",
 ) -> str:
-    """列出本群 AI 模拟盘（虚拟盘）当前持仓：持有哪些股票 / 现价 / 市值 / 浮盈。
+    """列出本群 模拟盘（虚拟盘）当前持仓：持有哪些股票 / 现价 / 市值 / 浮盈。
 
     ⚠️ **问「你现在持有什么 / 你的持仓 / 买了哪些股 / 现在几只仓」时走这个**——
     这是"你（早柚/AI）自己经营的模拟盘"的权威持仓表（SQLModel），**不是**用户
@@ -486,7 +524,7 @@ async def papertrade_trade_list(
     stock_code: str = "",
     limit: int = 20,
 ) -> str:
-    """查询本群 AI 模拟盘（虚拟盘）历史买卖流水（买入/卖出记录 + 已实现盈亏）。
+    """查询本群 模拟盘（虚拟盘）历史买卖流水（买入/卖出记录 + 已实现盈亏）。
 
     问「你都买卖过什么 / 最近成交 / 交易记录 / 某只股什么时候买的」走这个。
     数据在 SQLModel 流水表，**不在** ``record:`` 集合 / ``state_*``。
@@ -519,6 +557,67 @@ async def papertrade_trade_list(
                 "reason": t.reason,
                 "decided_at": decided_at.isoformat() if decided_at else None,
                 "executed_at": executed_at.isoformat() if executed_at else None,
+            }
+        )
+    return json.dumps(items, ensure_ascii=False)
+
+
+@ai_tools(
+    category="common",
+    capability_domain="AI模拟盘",
+    context_tags=_PAPERTRADE_CTX_TAGS,
+)
+async def papertrade_decision_list(
+    ctx: RunContext[ToolContext],
+    group_id: str = "",
+    bot_id: str = "",
+    stock_code: str = "",
+    limit: int = 20,
+) -> str:
+    """查询本群模拟盘的**决策日志**（buy/sell/hold 的理由 + 评分 + 指标 + 风控拦截）。
+
+    ⚠️ 问「你最近做了什么决策 / 为什么买/卖/持有 XX / 上一轮怎么想的 / 为什么没动手」
+    时走这个。模拟盘的决策推理**不会在群里主动播报**（只有真成交才由系统自动推一行
+    冒泡），但每一条决策（含 hold）都落在 SQLModel 决策日志里，可随时查。与
+    ``papertrade_trade_list`` 互补：trade_list 是"成交了什么"，decision_list 是"为什么
+    这样决策（含没成交的 hold 理由）"。
+
+    Args:
+        group_id / bot_id: 留空用当前会话群号 / bot
+        stock_code: 只看某只票的决策（留空看全部）
+        limit: 返回最近多少条（默认 20，按时间倒序）
+
+    返回 [{id, action, stock_code, stock_name, score, reason, blocked_by, trade_id,
+    indicators, decided_at}, ...]。
+    """
+    gid: str = _resolve_group_id(ctx, group_id)
+    bid: str = _resolve_bot_id(ctx, bot_id)
+    if not gid or not bid:
+        return "⚠️ 无法确定 group_id/bot_id"
+    rows = await db.PaperDecisionRepo.list_recent(
+        gid,
+        bid,
+        limit=limit,
+        stock_code=stock_code or None,
+    )
+    if not rows:
+        suffix: str = f"（{stock_code}）" if stock_code else ""
+        return f"ℹ️ 群 {gid} 暂无决策记录{suffix}。"
+    items: list[dict[str, Any]] = []
+    for d in rows:
+        created_at: _dt.datetime | None = d.created_at
+        items.append(
+            {
+                "id": d.id,
+                "action": d.action,
+                "stock_code": d.stock_code,
+                "stock_name": d.stock_name,
+                "score": d.score,
+                "reason": d.reason,
+                "blocked_by": d.blocked_by,
+                "trade_id": d.trade_id,
+                "indicators": d.indicators,
+                "decided_at": created_at.isoformat() if created_at else None,
             }
         )
     return json.dumps(items, ensure_ascii=False)
@@ -557,7 +656,7 @@ async def papertrade_agent_pool_list(
     group_id: str = "",
     bot_id: str = "",
 ) -> str:
-    """查询 AI 内部候选池（agent_pool）当前内容（公开只读）。
+    """查询内部候选池（agent_pool）当前内容（公开只读）。
 
     返回 [{stock_code, stock_name, reason, priority, expires_at}, ...]。
     决策代理在每轮开头调此工具候选池充盈度，不足时调 papertrade_candidate_refresh
@@ -735,71 +834,41 @@ async def papertrade_trade_insert(
     对照：偏差 > 3% 时拒绝落库（说明传入的是入池旧价/隔夜价），返回错误
     让 LLM 重新走 match_order。行情不可达时放行（match_order 已把过关）。
     """
+    # 交易执行统一走 TradeExecutor 抽象层（实时价偏差校验 / A 股 T+1 / 写流水
+    # + 现金维护都在 executor 里，模拟盘/实盘可切换）；本工具只透传 + 回传说明。
+    from .trade_executor import get_executor
+
     gid: str = _resolve_group_id(ctx)
     bid: str = _resolve_bot_id(ctx)
-
-    # ── 实时价偏差校验：拦截"按候选池入池旧价成交"的失真流水 ──
-    try:
-        _secid = f"1.{stock_code}" if stock_code.startswith("6") else f"0.{stock_code}"
-        _live: Optional[float] = await quote_service.get_quote(_secid)
-    except Exception:
-        _live = None
-    if _live is not None and _live > 0 and price > 0:
-        _dev_pct: float = abs(price - _live) / _live * 100.0
-        if _dev_pct > 3.0:
-            return (
-                f"⚠️ trade_insert 拒绝：传入 price={price:.2f} 与实时行情 {_live:.2f} "
-                f"偏差 {_dev_pct:.1f}%（>3%），疑似使用了入池时的旧价。"
-                f"请重新调 papertrade_match_order 并使用其返回的实时成交价。"
-            )
-
-    # ── A 股 T+1 拦截 ──
-    if side == "sell":
-        # 用东八区当天日期（系统时钟如果漂移到 UTC，sell 拦截可能误判）
-        try:
-            from zoneinfo import ZoneInfo
-
-            today_cn = _dt.datetime.now(ZoneInfo("Asia/Shanghai")).date()
-        except Exception:
-            today_cn = _dt.date.today()
-        try:
-            locked_qty: int = await db.PaperTradeRepo.locked_qty_today(gid, bid, stock_code, today=today_cn)
-        except Exception:
-            locked_qty = 0  # 防御：DB 异常不要阻塞 sell，让撮合层兜底
-        if locked_qty > 0:
-            return (
-                f"⚠️ A 股 T+1 拦截：{stock_code} {stock_name or ''}今天已买入 "
-                f"{locked_qty} 股，按 A 股结算规则需留仓到下一交易日开盘前才可卖；"
-                f"请改 hold，或换一只非今天买入的标的卖。"
-            )
-
-    try:
-        t = await db.PaperTradeRepo.append_with_cash_update(
-            gid,
-            bid,
+    result = await get_executor().record_trade(
+        group_id=gid,
+        bot_id=bid,
+        stock_code=stock_code,
+        stock_name=stock_name,
+        secid=secid,
+        side=side,
+        price=price,
+        qty=qty,
+        amount=amount,
+        fee=fee,
+        realized_pnl=realized_pnl,
+        reason=reason,
+        snapshot=snapshot,
+        decision_id=decision_id,
+        mode=mode,
+    )
+    # 成交成功 → 系统确定性向群里推一行成交冒泡（不依赖 agent 最终输出）。
+    if result.ok:
+        await _broadcast_fill(
+            ctx,
+            side=side,
             stock_code=stock_code,
             stock_name=stock_name,
-            secid=secid,
-            side=side,
-            price=price,
             qty=qty,
-            amount=amount,
-            fee=fee,
+            price=price,
             realized_pnl=realized_pnl,
-            reason=reason,
-            snapshot=snapshot,
-            decision_id=decision_id if decision_id > 0 else None,
-            mode=mode,
         )
-    except (ValueError, RuntimeError) as e:
-        # side 非法 / 账户不存在——不写库，明示错误给 LLM
-        return f"⚠️ trade_insert 失败: {e}"
-    cash_delta: float = -(amount + fee) if side == "buy" else (amount - fee + realized_pnl)
-    if side == "buy":
-        formula: str = "buy: cash -= amount+fee"
-    else:
-        formula = "sell: cash += amount-fee+realized_pnl, principal += realized_pnl"
-    return f"ok trade_id={t.id}  cash_delta={cash_delta:+,.2f}  ({formula})"
+    return result.message
 
 
 @ai_tools(
@@ -833,20 +902,22 @@ async def papertrade_position_upsert(
         3. papertrade_position_upsert(qty, avg_cost=price, last_quote_price=price)  → 写持仓
         4. papertrade_decision_insert(action='buy', trade_id=...)
     """
+    # 交易执行统一走 TradeExecutor 抽象层（模拟盘/实盘可切换）。
+    from .trade_executor import get_executor
+
     gid: str = _resolve_group_id(ctx)
     bid: str = _resolve_bot_id(ctx)
-    p = await db.PaperPositionRepo.upsert(
-        gid,
-        bid,
+    pos_id: int = await get_executor().update_position(
+        group_id=gid,
+        bot_id=bid,
         stock_code=stock_code,
         stock_name=stock_name,
         secid=secid,
         qty=qty,
         avg_cost=avg_cost,
-        last_quote_price=last_quote_price if last_quote_price > 0 else None,
-        last_quote_at=_dt.datetime.now() if last_quote_price and last_quote_price > 0 else None,
+        last_quote_price=last_quote_price,
     )
-    return f"ok pos_id={p.id if p else 0}  （cash 由 trade_insert 自动维护）"
+    return f"ok pos_id={pos_id}  （cash 由 trade_insert 自动维护）"
 
 
 @ai_tools(
@@ -862,7 +933,7 @@ async def papertrade_candidate_refresh(
     rotate_out: int = 0,
     batch_size: int = 0,
 ) -> str:
-    """**轮换** AI 候选池（agent_pool）：淘汰旧标的 + 补充新鲜标的，防"锚定陷阱"。
+    """**轮换**内部候选池（agent_pool）：淘汰旧标的 + 补充新鲜标的，防"锚定陷阱"。
 
     仅 papertrade_*_agent 可见。**每轮都应调一次**（不要再用"池 <3 才刷"的旧门槛——
     那会让池子一旦填满就永远冻结、每轮嚼同一批）。本工具一次做完 4 件事：
@@ -1115,78 +1186,18 @@ async def papertrade_match_order(
         cash_available: 账户可用现金（buy 时必填）
         position_qty: 当前持仓股数（sell 时必填）
     """
-    from .matcher import match_order
+    # 交易执行统一走 TradeExecutor 抽象层（模拟盘/实盘可切换）；本工具只做
+    # 参数透传 + 把 MatchResult 序列化成工具契约 JSON。
+    from .trade_executor import get_executor
 
-    def _reject(reason: str) -> str:
-        view_rej: _MatchResultView = {
-            "ok": False,
-            "side": side,
-            "code": stock_code,
-            "requested_qty": qty,
-            "actual_qty": 0,
-            "price": 0.0,
-            "requested_price": price,
-            "price_source": "live",
-            "amount": 0.0,
-            "commission": 0.0,
-            "stamp_tax": 0.0,
-            "fee_total": 0.0,
-            "reason": reason,
-        }
-        return json.dumps(view_rej, ensure_ascii=False)
-
-    # ── 交易时段守卫：非交易日 / 非交易时段一律拒单 ──
-    if not should_run_papertrade():
-        _, _, desc = trading_day_summary()
-        return _reject(f"非交易时段拒绝撮合（{desc}）——真实市场此刻无法成交，请改 hold 等开盘")
-
-    # ── 拉实时行情：成交价 + 昨收 + 涨跌幅 + 名称（涨跌停 / ST 拦截用） ──
-    live_price: Optional[float] = None
-    last_close: Optional[float] = None
-    change_pct: Optional[float] = None
-    name: Optional[str] = None
-    try:
-        # secid 格式：沪市(6开头) → "1.xxxxxx"；深市/北交所 → "0.xxxxxx"
-        secid = f"1.{stock_code}" if stock_code.startswith("6") else f"0.{stock_code}"
-        entry = await quote_service.get_quote_detail(secid)
-        if entry is not None:
-            live_price = entry.price
-            last_close = entry.last_close
-            change_pct = entry.change_pct
-            name = entry.name  # f57 名称，含 ST/*ST 前缀，供撮合层判风险警示股
-    except Exception as e:
-        _gslogger.debug(f"[SayuStock][PaperTrade] match_quote_fetch failed stock={stock_code}: {e}")
-
-    if live_price is None or live_price <= 0:
-        return _reject(
-            f"实时行情不可达（{stock_code}），拒绝撮合——不允许按参考价/旧价成交，"
-            f"请稍后重试或改 hold"
-        )
-
-    # ── 参考价偏差提示：LLM 传的旧价与实时价差过大时写进 reason 提醒 ──
-    deviation_note: str = ""
-    if price and price > 0:
-        dev_pct: float = (live_price - price) / price * 100.0
-        if abs(dev_pct) >= 0.5:
-            deviation_note = (
-                f"按实时价 {live_price:.2f} 成交（参考价 {price:.2f} 已过时，"
-                f"偏差 {dev_pct:+.2f}%）"
-            )
-
-    res = match_order(
+    res = await get_executor().match(
         side=side,
-        code=stock_code,
+        stock_code=stock_code,
         qty=qty,
-        price=live_price,
+        price=price,
         cash_available=cash_available,
         position_qty=position_qty,
-        last_close=last_close,
-        change_pct=change_pct,
-        name=name,
     )
-    reason_out: str = res.reason
-    if res.ok and deviation_note:
-        reason_out = deviation_note if not reason_out else f"{reason_out}；{deviation_note}"
     view: _MatchResultView = {
         "ok": res.ok,
         "side": res.side,
@@ -1194,13 +1205,13 @@ async def papertrade_match_order(
         "requested_qty": res.requested_qty,
         "actual_qty": res.actual_qty,
         "price": res.price,
-        "requested_price": price,
+        "requested_price": price,  # 调用方参考价（executor 已按实时价成交）
         "price_source": "live",
         "amount": res.amount,
         "commission": res.commission,
         "stamp_tax": res.stamp_tax,
         "fee_total": res.fee_total,
-        "reason": reason_out,
+        "reason": res.reason,
     }
     return json.dumps(view, ensure_ascii=False)
 
@@ -1235,7 +1246,7 @@ async def papertrade_snapshot_write(
 
     acc = await db.PaperAccountRepo.get(gid, bid)
     if not acc:
-        return f"ℹ️ 群 {gid} 尚未开通 AI 模拟盘，无法写快照。"
+        return f"ℹ️ 群 {gid} 尚未开通模拟盘，无法写快照。"
 
     # 东八区当天作为 trade_date（系统时钟漂到 UTC 时避免快照记错日）
     try:
@@ -1371,7 +1382,12 @@ async def stock_indicators(
     periods: int = 60,
     kline_period: int = 101,
 ) -> str:
-    """计算股票技术指标（MA / MACD / RSI / CMF / BOLL / CCI / BBI / 支撑压力 / 波动率等）。
+    """计算股票技术指标（MA / MACD / RSI / KDJ / CMF / BOLL / CCI / BBI / 支撑压力 / 波动率等）。
+
+    KDJ（9,3,3，通达信/东财口径）返回字段：``kdj_k`` / ``kdj_d`` / ``kdj_j``
+    （K/D 常态 0~100，J 可越界）、``kdj_golden_cross_in_3d`` / ``kdj_death_cross_in_3d``
+    （近 3 日 K 上穿/下穿 D）、``kdj_overbought``（J>100 或 K>80）/ ``kdj_oversold``
+    （J<0 或 K<20）。低位金叉 + 超卖偏多，高位死叉 + 超买偏空。
 
     Args:
         stock_code: 6 位代码或名称（先用 get_code_id 解析）

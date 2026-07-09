@@ -209,7 +209,47 @@ def _format_percent_axis(value: float, _pos: object = None) -> str:
 
 
 def _format_precise_percent_axis(value: float, _pos: object = None) -> str:
-    return f"{value * 100:.2f}%"
+    # 换手率数据本身已是百分比数值（如 5.23 表示 5.23%），无需再乘以 100
+    return f"{value:.2f}%"
+
+
+def _compute_kdj(
+    high: pd.Series,
+    low: pd.Series,
+    close: pd.Series,
+    n: int = 9,
+    m1: int = 3,
+    m2: int = 3,
+) -> tuple[pd.Series, pd.Series, pd.Series]:
+    """计算经典 KDJ 指标（默认参数 9,3,3）。
+
+    采用与通达信/东方财富一致的递归平滑（SMA(x, m, 1)，K/D 初值取中性 50）：
+    RSV = (C - LLV) / (HHV - LLV) * 100，K = (RSV + 2K') / 3，
+    D = (K + 2D') / 3，J = 3K - 2D。
+    """
+    low_min = low.rolling(window=n, min_periods=1).min()
+    high_max = high.rolling(window=n, min_periods=1).max()
+    span = (high_max - low_min).to_numpy(dtype=float)
+    close_arr = close.to_numpy(dtype=float)
+    low_arr = low_min.to_numpy(dtype=float)
+    with np.errstate(invalid="ignore", divide="ignore"):
+        rsv = np.where(span > 0, (close_arr - low_arr) / span * 100.0, np.nan)
+
+    k_vals = np.empty(len(rsv), dtype=float)
+    d_vals = np.empty(len(rsv), dtype=float)
+    k_prev = d_prev = 50.0
+    for i, raw_rsv in enumerate(rsv):
+        # 区间无波动（涨跌停/停牌）时 RSV 记为中性 50，避免出现断点
+        cur_rsv = 50.0 if not np.isfinite(raw_rsv) else float(raw_rsv)
+        k_prev = (cur_rsv + (m1 - 1) * k_prev) / m1
+        d_prev = (k_prev + (m2 - 1) * d_prev) / m2
+        k_vals[i] = k_prev
+        d_vals[i] = d_prev
+
+    k = pd.Series(k_vals, index=close.index)
+    d = pd.Series(d_vals, index=close.index)
+    j = 3.0 * k - 2.0 * d
+    return k, d, j
 
 
 def _style_axis(ax: Axes, *, grid: bool = True) -> None:
@@ -389,6 +429,11 @@ def draw_single_kline_chart(raw_data: JsonDict, sp: str | None = None) -> DrawRe
         return ErroText["notData"]
     prices = cast(pd.DataFrame, prices.sort_index())
 
+    kdj_k, kdj_d, kdj_j = _compute_kdj(prices["high"], prices["low"], prices["close"])
+    prices["kdj_k"] = kdj_k
+    prices["kdj_d"] = kdj_d
+    prices["kdj_j"] = kdj_j
+
     raw_info = _as_dict(raw_data["data"])
     raw_title_name = str(_dict_value(raw_info, "name", "")).strip()
     kline_title = f"{raw_title_name} {kline.freq_label}" if raw_title_name else kline.title
@@ -396,7 +441,7 @@ def draw_single_kline_chart(raw_data: JsonDict, sp: str | None = None) -> DrawRe
     chart = Chart(
         prices,
         title=kline_title,
-        figsize=(25.5, 17.0),
+        figsize=(25.5, 19.5),
         bgcolor=BG_COLOR,
         raw_dates=False,
         color_scheme={
@@ -422,6 +467,10 @@ def draw_single_kline_chart(raw_data: JsonDict, sp: str | None = None) -> DrawRe
         CMF(20) @ LinePlot(label="CMF(20)", color="#2ecc71", width=1.5),
         Pane("below", height_ratio=0.15),
         RSI(14) @ LinePlot(label="RSI(14)", color="#4aa3ff", width=1.6, overbought=80, oversold=20),
+        Pane("below", height_ratio=0.15),
+        LinePlot(lambda frame: frame["kdj_k"], label="K", color="#f5b301", width=1.5),
+        LinePlot(lambda frame: frame["kdj_d"], label="D", color="#2e9bff", width=1.5),
+        LinePlot(lambda frame: frame["kdj_j"], label="J", color="#ff5da2", width=1.4),
         Pane("below", height_ratio=0.18),
         MACD(12, 26, 9) @ BarPlot(item="macdhist", color=AXIS_COLOR, alpha=0.68, width=0.76, label="MACD柱"),
         MACD(12, 26, 9) @ LinePlot(item="macd", label="DIF", color="#f1c40f", width=1.6),
@@ -470,7 +519,7 @@ def draw_single_kline_chart(raw_data: JsonDict, sp: str | None = None) -> DrawRe
                         zorder=5,
                     )
                     ax.annotate(
-                        f"换手率 {turnover_peak_y * 100:.2f}%",
+                        f"换手率 {turnover_peak_y:.2f}%",
                         xy=(turnover_peak_x, turnover_peak_y),
                         xytext=(8, 10),
                         textcoords="offset points",
@@ -558,6 +607,24 @@ def draw_single_kline_chart(raw_data: JsonDict, sp: str | None = None) -> DrawRe
                 va="center",
                 bbox={"facecolor": BG_COLOR, "edgecolor": DOWN_COLOR, "alpha": 0.70, "pad": 3},
             )
+        elif index == 3:
+            ax.set_ylabel("KDJ")
+            kdj_all = np.concatenate(
+                [np.asarray(prices[col], dtype=float) for col in ("kdj_k", "kdj_d", "kdj_j")]
+            )
+            finite_kdj = kdj_all[np.isfinite(kdj_all)]
+            if finite_kdj.size:
+                kdj_low = min(0.0, float(np.min(finite_kdj)))
+                kdj_high = max(100.0, float(np.max(finite_kdj)))
+            else:
+                kdj_low, kdj_high = 0.0, 100.0
+            kdj_pad = max((kdj_high - kdj_low) * 0.08, 4.0)
+            ax.set_ylim(kdj_low - kdj_pad, kdj_high + kdj_pad)
+            ax.axhspan(80, 100, facecolor=UP_COLOR, alpha=0.10, zorder=0.1)
+            ax.axhspan(0, 20, facecolor=DOWN_COLOR, alpha=0.10, zorder=0.1)
+            ax.axhline(80, color=UP_COLOR, linestyle="--", alpha=0.65, linewidth=1.0)
+            ax.axhline(50, color=GRID_COLOR, linestyle="--", alpha=0.5, linewidth=0.9)
+            ax.axhline(20, color=DOWN_COLOR, linestyle="--", alpha=0.65, linewidth=1.0)
         elif index == len(axes) - 1:
             ax.set_ylabel("MACD")
         if index == len(axes) - 1:
