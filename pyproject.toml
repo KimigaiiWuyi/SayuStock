@@ -48,7 +48,7 @@ extraPaths = [
     "../../../",
     "../../../gsuid_core",
     "../../../gsuid_core/ai_core",
-]  
+]
 
 [project]
 name = "SayuStock"

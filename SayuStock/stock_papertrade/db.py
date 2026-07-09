@@ -9,6 +9,7 @@ from datetime import date, datetime
 
 from sqlmodel import col
 from sqlalchemy import and_, func, select
+from sqlalchemy.engine import Result, CursorResult
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from gsuid_core.utils.database.base_models import with_session
@@ -22,6 +23,11 @@ from ..utils.database.papertrade_models import (
     SayuPaperAgentPool,
     SayuPaperWatchlist,
 )
+
+
+def _rowcount(result: Result[Any]) -> int:
+    # execute() 静态返回 Result（无 rowcount），DML 运行时实为 CursorResult
+    return result.rowcount if isinstance(result, CursorResult) else 0
 
 
 # ============================================================
@@ -208,7 +214,7 @@ class PaperAccountRepo:
                 )
             )
         )
-        deleted["position"] = int(r.rowcount or 0)
+        deleted["position"] = _rowcount(r)
 
         # 2. 交易流水
         r = await session.execute(
@@ -219,7 +225,7 @@ class PaperAccountRepo:
                 )
             )
         )
-        deleted["trade"] = int(r.rowcount or 0)
+        deleted["trade"] = _rowcount(r)
 
         # 3. 决策日志
         r = await session.execute(
@@ -230,7 +236,7 @@ class PaperAccountRepo:
                 )
             )
         )
-        deleted["decision"] = int(r.rowcount or 0)
+        deleted["decision"] = _rowcount(r)
 
         # 4. 每日净值
         r = await session.execute(
@@ -241,7 +247,7 @@ class PaperAccountRepo:
                 )
             )
         )
-        deleted["snapshot"] = int(r.rowcount or 0)
+        deleted["snapshot"] = _rowcount(r)
 
         # 5. 群友关注列表
         r = await session.execute(
@@ -252,7 +258,7 @@ class PaperAccountRepo:
                 )
             )
         )
-        deleted["watchlist"] = int(r.rowcount or 0)
+        deleted["watchlist"] = _rowcount(r)
 
         # 6. AI 内部决策池
         r = await session.execute(
@@ -263,7 +269,7 @@ class PaperAccountRepo:
                 )
             )
         )
-        deleted["agent_pool"] = int(r.rowcount or 0)
+        deleted["agent_pool"] = _rowcount(r)
 
         # 7. 账户本身
         r = await session.execute(
@@ -274,7 +280,7 @@ class PaperAccountRepo:
                 )
             )
         )
-        deleted["account"] = int(r.rowcount or 0)
+        deleted["account"] = _rowcount(r)
 
         return deleted
 
@@ -440,15 +446,19 @@ class PaperPositionRepo:
             at = q.get("at")
             if not code or price is None:
                 continue
-            stmt = _sa_update(SayuPaperPosition).where(
-                and_(
-                    col(col(SayuPaperPosition.group_id)) == group_id,
-                    col(col(SayuPaperPosition.bot_id)) == bot_id,
-                    col(col(SayuPaperPosition.stock_code)) == code,
+            stmt = (
+                _sa_update(SayuPaperPosition)
+                .where(
+                    and_(
+                        col(col(SayuPaperPosition.group_id)) == group_id,
+                        col(col(SayuPaperPosition.bot_id)) == bot_id,
+                        col(col(SayuPaperPosition.stock_code)) == code,
+                    )
                 )
-            ).values(last_quote_price=price, last_quote_at=at)
+                .values(last_quote_price=price, last_quote_at=at)
+            )
             result = await session.execute(stmt)
-            affected += int(result.rowcount or 0)
+            affected += _rowcount(result)
         await session.flush()
         return affected
 
@@ -614,16 +624,15 @@ class PaperTradeRepo:
         acc: Optional[SayuPaperAccount] = result.scalar_one_or_none()
         if acc is None:
             raise RuntimeError(
-                f"SayuPaperAccount 不存在 (group={group_id}, bot={bot_id})；"
-                f"请先调 papertrade_account_create 建账户"
+                f"SayuPaperAccount 不存在 (group={group_id}, bot={bot_id})；请先调 papertrade_account_create 建账户"
             )
 
         if side == "buy":
             # buy：现金要付出 amount + fee
-            acc.cash -= (amount + fee)
+            acc.cash -= amount + fee
         else:  # sell
             # sell：现金回 amount - fee；principal 累计 realized_pnl
-            acc.cash += (amount - fee + realized_pnl)
+            acc.cash += amount - fee + realized_pnl
             acc.principal += realized_pnl
             # last_decided_at 由 decision_insert 维护，这里不强写
 
@@ -1077,7 +1086,7 @@ class PaperWatchlistRepo:
         )
         result = await session.execute(stmt)
         await session.flush()
-        return (result.rowcount or 0) > 0
+        return _rowcount(result) > 0
 
     @classmethod
     @with_session
@@ -1210,7 +1219,7 @@ class PaperAgentPoolRepo:
         )
         result = await session.execute(stmt)
         await session.flush()
-        return (result.rowcount or 0) > 0
+        return _rowcount(result) > 0
 
     @classmethod
     @with_session
@@ -1273,7 +1282,7 @@ class PaperAgentPoolRepo:
         )
         result = await session.execute(stmt)
         await session.flush()
-        return int(result.rowcount or 0)
+        return _rowcount(result)
 
     @classmethod
     @with_session
@@ -1301,4 +1310,4 @@ class PaperAgentPoolRepo:
         )
         result = await session.execute(stmt)
         await session.flush()
-        return int(result.rowcount or 0)
+        return _rowcount(result)

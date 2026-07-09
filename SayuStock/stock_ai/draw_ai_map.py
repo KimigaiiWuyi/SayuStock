@@ -1,6 +1,6 @@
 import sys
 import asyncio
-from typing import Dict, Union, Optional, cast
+from typing import Dict, Union, Optional
 from pathlib import Path
 from contextlib import contextmanager
 
@@ -67,7 +67,7 @@ def fill_kline_by_kronos(raw_data: Dict) -> Optional[pd.DataFrame]:
 
     # 解析数据（每行都是逗号分隔）
     rows = [line.split(",") for line in raw_data["data"]["klines"]]
-    df = pd.DataFrame(rows, columns=headers)  # type: ignore
+    df = pd.DataFrame(rows, columns=headers)
 
     # 强制转换数值列
     numeric_cols = ["open", "close", "high", "low", "volume", "amount"]
@@ -93,9 +93,7 @@ def fill_kline_by_kronos(raw_data: Dict) -> Optional[pd.DataFrame]:
     ]
     final_cols = [c for c in final_cols if c in df.columns]
 
-    final_df = df.loc[:, final_cols].copy()
-    final_df = cast(pd.DataFrame, final_df)
-
+    final_df: pd.DataFrame = df.loc[:, final_cols].copy()
     return final_df
 
 
@@ -278,8 +276,8 @@ def gdf(df: pd.DataFrame, raw_data: Dict):
         inferred_freq = pd.Timedelta(days=1)
     elif not isinstance(inferred_freq, pd.Timedelta):
         inferred_freq = pd.Timedelta(inferred_freq)
-
-    inferred_freq = cast(pd.Timedelta, inferred_freq)
+    # Timedelta 构造器静态返回 Timedelta | NaTType；上方已排除 NaN，恒为 Timedelta
+    assert isinstance(inferred_freq, pd.Timedelta)
     freq_minutes = inferred_freq.total_seconds() / 60.0
 
     logger.info(f"[SayuStock] 股票K线周期: {freq_minutes}")
@@ -362,7 +360,13 @@ def gdf(df: pd.DataFrame, raw_data: Dict):
 
     # 未来预测的输出时间
     timestamps = df["timestamps"]
-    freq = timestamps.iloc[-1] - timestamps.iloc[-2] if len(timestamps) >= 2 else pd.Timedelta(days=1)
+    default_freq = pd.Timedelta(days=1)
+    assert isinstance(default_freq, pd.Timedelta)  # 构造器 stub 含 NaTType
+    if len(timestamps) >= 2:
+        diff = timestamps.iloc[-1] - timestamps.iloc[-2]
+        freq = diff if isinstance(diff, pd.Timedelta) else default_freq
+    else:
+        freq = default_freq
     last_timestamp = timestamps.iloc[-1]
     pred_times = generate_trading_times(last_timestamp, pred_len, freq)
 

@@ -202,8 +202,8 @@ async def get_crypto_trend_as_json(
     if client is None:
         mounts = (
             {
-                "http://": httpx.HTTPTransport(proxy=proxy),
-                "https://": httpx.HTTPTransport(proxy=proxy),
+                "http://": httpx.AsyncHTTPTransport(proxy=proxy),
+                "https://": httpx.AsyncHTTPTransport(proxy=proxy),
             }
             if proxy
             else None
@@ -275,12 +275,12 @@ async def get_crypto_trend_as_json(
             ts = int(candle[0])
             c = float(candle[4])
             h = float(candle[2])
-            l = float(candle[3])
+            lo = float(candle[3])
             vol = float(candle[5])
             turnover = float(candle[7])
 
             day_high = max(day_high, h)
-            day_low = min(day_low, l)
+            day_low = min(day_low, lo)
             last_close = c
             total_vol += vol
             total_money += turnover
@@ -296,7 +296,7 @@ async def get_crypto_trend_as_json(
                     "price": c,
                     "open": float(candle[1]),
                     "high": h,
-                    "low": l,
+                    "low": lo,
                     "amount": int(vol),  # 必须转int，部分绘图库不支持float量
                     "money": turnover,
                     "avg_price": round(avg_price, 2),
@@ -470,8 +470,8 @@ async def get_crypto_history_kline_as_json(
     if client is None:
         mounts = (
             {
-                "http://": httpx.HTTPTransport(proxy=proxy),
-                "https://": httpx.HTTPTransport(proxy=proxy),
+                "http://": httpx.AsyncHTTPTransport(proxy=proxy),
+                "https://": httpx.AsyncHTTPTransport(proxy=proxy),
             }
             if proxy
             else None
@@ -540,7 +540,7 @@ async def get_crypto_history_kline_as_json(
             ts = int(candle[0])
             o = float(candle[1])
             h = float(candle[2])
-            l = float(candle[3])
+            lo = float(candle[3])
             c = float(candle[4])
             vol = float(candle[5])
             amount = float(candle[7])
@@ -549,15 +549,12 @@ async def get_crypto_history_kline_as_json(
 
             change_amt = c - pre_close
             change_pct = (change_amt / pre_close * 100) if pre_close != 0 else 0
-            amplitude = ((h - l) / pre_close * 100) if pre_close != 0 else 0
+            amplitude = ((h - lo) / pre_close * 100) if pre_close != 0 else 0
 
-            rate_factor = 1.0
-            if bar_interval in ["1W", "1M", "3M"]:
-                rate_factor = 3.0
             turnover_rate = 0
 
             line_str = (
-                f"{date_str},{o},{c},{h},{l},"
+                f"{date_str},{o},{c},{h},{lo},"
                 f"{int(vol)},{amount:.2f},{amplitude:.2f},"
                 f"{change_pct:.2f},{change_amt:.2f},{turnover_rate}"
             )

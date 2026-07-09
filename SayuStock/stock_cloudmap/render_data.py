@@ -1,4 +1,3 @@
-# pyright: reportMissingTypeStubs=false, reportMissingImports=false, reportUnknownMemberType=false, reportUnknownVariableType=false, reportUnknownArgumentType=false, reportAny=false, reportExplicitAny=false, reportUnusedParameter=false, reportUnusedCallResult=false, reportUnnecessaryCast=false
 """stock_cloudmap 渲染前的数据计算层。
 
 本模块只负责把接口原始数据转换成图表渲染所需的稳定结构，
@@ -7,7 +6,7 @@
 """
 
 import math
-from typing import Any, Dict, List, cast
+from typing import Any, Dict, List
 from collections import defaultdict
 from dataclasses import dataclass
 
@@ -96,23 +95,30 @@ class CloudmapRenderData:
 
 
 def _sort_df(df: pd.DataFrame, by: str, *, ascending: bool = True) -> pd.DataFrame:
-    return cast(pd.DataFrame, df.sort_values(by=by, ascending=ascending, inplace=False))
+    return df.sort_values(by=by, ascending=ascending, inplace=False)
 
 
 def _sort_series(series: pd.Series, *, ascending: bool = True) -> pd.Series:
-    return cast(pd.Series, series.sort_values(ascending=ascending, inplace=False))
+    return series.sort_values(ascending=ascending, inplace=False)
 
 
 def _reset_df(df: pd.DataFrame, *, drop: bool = True) -> pd.DataFrame:
-    return cast(pd.DataFrame, df.reset_index(drop=drop))
+    return df.reset_index(drop=drop)
+
+
+def _frame_column(df: pd.DataFrame, key: str) -> pd.Series:
+    column = df[key]
+    assert isinstance(column, pd.Series), f"列 {key} 存在重复标签"
+    return column
 
 
 def _numeric_series(data: object, *, fill_value: float | None = None) -> pd.Series:
     source = data if isinstance(data, pd.Series) else pd.Series(data)
-    series = cast(pd.Series, pd.to_numeric(source, errors="coerce"))
+    series = pd.to_numeric(source, errors="coerce")
+    assert isinstance(series, pd.Series), "to_numeric(Series) 恒返回 Series"
     if fill_value is None:
         return series
-    return cast(pd.Series, series.fillna(fill_value))
+    return series.fillna(fill_value)
 
 
 def _trend_minute_key(value: object) -> str:
@@ -124,15 +130,17 @@ def _trend_minute_key(value: object) -> str:
     return str(value)
 
 
-def _infer_kline_freq(df: pd.DataFrame) -> tuple[str, str, str, Any]:
-    date_series = cast(pd.Series, df["日期"])
-    sorted_dates = cast(pd.Series, _sort_series(date_series, ascending=True).reset_index(drop=True))
-    deltas = cast(pd.Series, sorted_dates.diff().dropna())
+def _infer_kline_freq(df: pd.DataFrame) -> tuple[str, str, str, pd.Timedelta]:
+    date_series = _frame_column(df, "日期")
+    sorted_dates = _sort_series(date_series, ascending=True).reset_index(drop=True)
+    deltas = sorted_dates.diff().dropna()
     if deltas.empty:
         median_delta = pd.Timedelta(days=1)
     else:
-        median_seconds = cast(float, deltas.dt.total_seconds().median())
-        median_delta = pd.Timedelta(seconds=float(median_seconds))
+        median_seconds = float(deltas.dt.total_seconds().median())
+        median_delta = pd.Timedelta(seconds=median_seconds)
+    # 构造器静态返回 Timedelta | NaTType；deltas 非空时中位秒数恒有限，不会产生 NaT
+    assert isinstance(median_delta, pd.Timedelta)
 
     logger.info(f"[SayuStock] median delta: {median_delta}")
     seconds = median_delta.total_seconds()
@@ -171,14 +179,15 @@ def build_kline_render_data(raw_data: RawDict) -> KlineRenderData | DataResult:
 
     df = df.copy()
     df["日期"] = pd.to_datetime(df["日期"], errors="coerce")
-    df = cast(pd.DataFrame, df.dropna(subset=["日期"]))
+    df = df.dropna(subset=["日期"])
     df = _reset_df(_sort_df(df, "日期"), drop=True)
     if df.empty:
         return ErroText["notData"]
 
     _, freq_label, tickformat, median_delta = _infer_kline_freq(df)
-    x_min = cast(pd.Timestamp, df["日期"].min())
-    x_max = cast(pd.Timestamp, df["日期"].max())
+    date_column = _frame_column(df, "日期")
+    x_min: pd.Timestamp = date_column.min()
+    x_max: pd.Timestamp = date_column.max()
 
     chart_df = pd.DataFrame(
         {
@@ -192,23 +201,22 @@ def build_kline_render_data(raw_data: RawDict) -> KlineRenderData | DataResult:
             "ma10": _numeric_series(df["10日均线"]) if "10日均线" in df else np.nan,
         }
     )
-    chart_df = cast(pd.DataFrame, chart_df.dropna(subset=["open", "high", "low", "close"]))
+    chart_df = chart_df.dropna(subset=["open", "high", "low", "close"])
     if chart_df.empty:
         return ErroText["notData"]
 
     turnover = _numeric_series(df["换手率"]) / 100 if "换手率" in df else pd.Series(dtype=float)
     df["is_max"] = turnover == turnover.rolling(window=3, center=True).max()
-    max_turnovers = cast(pd.DataFrame, df[df["is_max"] & (turnover > 0)])
+    max_turnovers = df[df["is_max"] & (turnover > 0)]
+    assert isinstance(max_turnovers, pd.DataFrame), "布尔掩码索引恒返回 DataFrame"
 
-    dates = cast(pd.Series, df["日期"])
-    diffs = cast(pd.Series, dates.diff())
+    dates = _frame_column(df, "日期")
+    diffs = dates.diff()
     threshold = pd.Timedelta(seconds=median_delta.total_seconds() * 1.5)
     breaks: list[dict[str, list[pd.Timestamp]]] = []
     for index in range(1, len(dates)):
         if pd.notna(diffs.iloc[index]) and diffs.iloc[index] > threshold:
-            breaks.append(
-                dict(bounds=[cast(pd.Timestamp, dates.iloc[index - 1]), cast(pd.Timestamp, dates.iloc[index])])
-            )
+            breaks.append(dict(bounds=[dates.iloc[index - 1], dates.iloc[index]]))
     logger.info(f"[SayuStock] 自动检测到 {len(breaks)} 个时间缺口")
 
     return KlineRenderData(
@@ -268,8 +276,9 @@ def build_single_stock_render_data(raw_data: RawDict) -> SingleStockRenderData |
     price_history_pd["money"] = _numeric_series(price_history_pd["money"], fill_value=0)
     price_history_pd["percentage_change"] = ((price_history_pd["price"] / open_price) - 1) * 100
 
-    max_price = cast(float, price_history_pd["price"].max())
-    min_price = cast(float, price_history_pd["price"].min())
+    price_column = _frame_column(price_history_pd, "price")
+    max_price = float(price_column.max())
+    min_price = float(price_column.min())
     max_fluctuation = max((max_price - open_price) / open_price, (open_price - min_price) / open_price)
     if pd.isna(max_fluctuation) or max_fluctuation <= 0:
         max_fluctuation = 0.01
@@ -292,7 +301,7 @@ def build_single_stock_render_data(raw_data: RawDict) -> SingleStockRenderData |
                 tick_values.append(price)
                 tick_texts.append(f"{item}%")
 
-    prices = cast(pd.Series, price_history_pd["price"])
+    prices = price_column
     bar_colors: list[str] = []
     for index in range(len(prices)):
         if index == 0:
@@ -349,12 +358,12 @@ def build_multi_stock_render_data(raw_data_list: List[RawDict]) -> MultiStockRen
         if not isinstance(raw_data, dict):
             continue
         raw = raw_data["data"]
-        open_price = raw.get("f60")
+        open_price = raw["f60"] if "f60" in raw else None
         if not isinstance(open_price, (int, float)) or open_price == 0:
-            stock_name = raw.get("f58", "Unknown")
+            stock_name = raw["f58"] if "f58" in raw else "Unknown"
             logger.warning(f"[SayuStock] Skipping {stock_name} due to invalid open price: {open_price}.")
             continue
-        code_id = str(raw_data.get("file_name", "")).split("_")[0]
+        code_id = str(raw_data["file_name"] if "file_name" in raw_data else "").split("_")[0]
         if time_array is None:
             time_array = get_trading_datetimes(code_id)
 
@@ -371,8 +380,9 @@ def build_multi_stock_render_data(raw_data_list: List[RawDict]) -> MultiStockRen
         price_history_pd["money"] = _numeric_series(price_history_pd["money"], fill_value=0)
         price_history_pd["percentage_change"] = ((price_history_pd["price"] / float(open_price)) - 1) * 100
 
-        current_max = cast(float, price_history_pd["percentage_change"].max())
-        current_min = cast(float, price_history_pd["percentage_change"].min())
+        change_column = _frame_column(price_history_pd, "percentage_change")
+        current_max = float(change_column.max())
+        current_min = float(change_column.min())
         if not np.isnan(current_max):
             max_fluctuation = max(max_fluctuation, abs(current_max))
         if not np.isnan(current_min):
@@ -381,7 +391,7 @@ def build_multi_stock_render_data(raw_data_list: List[RawDict]) -> MultiStockRen
             MultiStockItem(
                 name=str(raw["f58"]),
                 df=price_history_pd,
-                total_volume=float(cast(pd.Series, price_history_pd["money"]).sum()),
+                total_volume=float(_frame_column(price_history_pd, "money").sum()),
             )
         )
 
@@ -396,7 +406,7 @@ def build_multi_stock_render_data(raw_data_list: List[RawDict]) -> MultiStockRen
     ]
     subtitle_parts: list[str] = []
     for stock in processed_stocks:
-        last_change_series = cast(pd.Series, stock.df["percentage_change"]).dropna()
+        last_change_series = _frame_column(stock.df, "percentage_change").dropna()
         if not last_change_series.empty:
             last_change = float(last_change_series.iloc[-1])
             sign = "+" if last_change >= 0 else ""
@@ -420,7 +430,7 @@ def build_compare_render_data(raw_datas: List[RawDict]) -> CompareRenderData | D
             continue
         df = df.copy()
         df["日期"] = pd.to_datetime(df["日期"], errors="coerce")
-        df = cast(pd.DataFrame, df.dropna(subset=["日期"]))
+        df = df.dropna(subset=["日期"])
         raw_data_map: RawDict = raw_data["data"]
         trace_name = f"{raw_data_map['name'] if 'name' in raw_data_map else f'Trace {index}'}"
         items.append(CompareStockItem(name=trace_name, df=df))
@@ -460,8 +470,8 @@ def build_cloudmap_render_data(
 
     if market == "大盘云图" or market == "概念云图":
         categories_to_process = list(grouped_by_category.keys())
-    elif sector in grouped_by_category:
-        categories_to_process = [cast(str, sector)]
+    elif sector is not None and sector in grouped_by_category:
+        categories_to_process = [sector]
     else:
         categories_to_process = []
         for item in grouped_by_category.keys():

@@ -9,20 +9,20 @@ from ..utils import convert_list
 
 # 导入 模拟盘 7 张表 + WebConsole 注册
 from .papertrade_models import (  # noqa: F401
-    SayuPaperAccount,
-    SayuPaperPosition,
     SayuPaperTrade,
+    SayuPaperAccount,
     SayuPaperDecision,
+    SayuPaperPosition,
     SayuPaperSnapshot,
-    SayuPaperWatchlist,
     SayuPaperAgentPool,
-    SayuPaperAccountAdmin,
-    SayuPaperPositionAdmin,
+    SayuPaperWatchlist,
     SayuPaperTradeAdmin,
+    SayuPaperAccountAdmin,
     SayuPaperDecisionAdmin,
+    SayuPaperPositionAdmin,
     SayuPaperSnapshotAdmin,
-    SayuPaperWatchlistAdmin,
     SayuPaperAgentPoolAdmin,
+    SayuPaperWatchlistAdmin,
 )
 
 
@@ -74,7 +74,7 @@ class SsPushAdmin(GsAdminModel):
     page_schema = PageSchema(
         label="股票自选管理",
         icon="fa fa-bullhorn",
-    )  # type: ignore
+    )
 
     # 配置管理模型
     model = SsBind

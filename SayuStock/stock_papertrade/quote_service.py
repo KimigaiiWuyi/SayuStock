@@ -161,9 +161,7 @@ class QuoteService:
     # ----------------------------------------------------------------
     # 公共 API：批量（缓存优先；并发拉缺失项）
     # ----------------------------------------------------------------
-    async def get_quotes_batch(
-        self, secids: List[str]
-    ) -> Dict[str, Optional[float]]:
+    async def get_quotes_batch(self, secids: List[str]) -> Dict[str, Optional[float]]:
         """批量取价；先查缓存，把缺失的塞 ``gather`` 并发去拉。
 
         缺失项复用 ``get_quote``（而不是直接裸调 ``_fetch_one``），这样批量
@@ -190,21 +188,17 @@ class QuoteService:
                 misses.append(secid)
 
         if misses:
-            fetched = await asyncio.gather(
-                *(self.get_quote(s) for s in misses), return_exceptions=True
-            )
+            fetched = await asyncio.gather(*(self.get_quote(s) for s in misses), return_exceptions=True)
             for secid, item in zip(misses, fetched):
-                if isinstance(item, Exception):
+                if isinstance(item, BaseException):
                     logger.debug(f"[PaperTrade][Quote] secid={secid} failed: {item}")
                     result[secid] = None
                 else:
-                    result[secid] = item  # type: ignore[assignment]
+                    result[secid] = item
 
         return {s: result.get(s) for s in secids}
 
-    async def get_details_batch(
-        self, secids: List[str]
-    ) -> Dict[str, Optional[QuoteCacheEntry]]:
+    async def get_details_batch(self, secids: List[str]) -> Dict[str, Optional[QuoteCacheEntry]]:
         """批量取完整条目（含 change_pct / last_close），供候选池过滤涨停/过热用。
 
         先走 ``get_quotes_batch`` 把缓存喂满（并发 + per-secid 锁复用），再从缓存
@@ -219,9 +213,7 @@ class QuoteService:
     # ----------------------------------------------------------------
     # 内部：单次 HTTP
     # ----------------------------------------------------------------
-    async def _fetch_one(
-        self, secid: str
-    ) -> tuple[Optional[float], Optional[float], Optional[float], Optional[str]]:
+    async def _fetch_one(self, secid: str) -> tuple[Optional[float], Optional[float], Optional[float], Optional[str]]:
         """拉一次；返回 ``(price, last_close, change_pct, name)``，出错返回 ``(None, None, None, None)``。
 
         f43=现价, f45=涨跌幅(%), f60=昨收, f57=名称

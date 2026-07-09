@@ -1,5 +1,4 @@
-# pyright: reportMissingTypeStubs=false, reportMissingImports=false, reportUnknownMemberType=false, reportUnknownVariableType=false, reportUnknownArgumentType=false, reportAny=false, reportExplicitAny=false, reportUnusedParameter=false, reportUnusedCallResult=false, reportUnnecessaryCast=false
-from typing import Any, cast
+from typing import Any
 from pathlib import Path
 from datetime import datetime, timedelta
 
@@ -13,11 +12,6 @@ from gsuid_core.ai_core.trigger_bridge import ai_return
 
 from .data import CLOUDMAP_DATA_SERVICE
 from .render_data import (
-    MultiStockItem,
-    KlineRenderData,
-    CompareRenderData,
-    CloudmapRenderData,
-    SingleStockRenderData,
     build_kline_render_data,
     build_compare_render_data,
     build_cloudmap_render_data,
@@ -42,7 +36,7 @@ async def to_single_fig_kline(raw_data: dict[str, Any], sp: str | None = None):
     data = build_kline_render_data(raw_data)
     if isinstance(data, str):
         return data
-    kline = cast(KlineRenderData, data)
+    kline = data
     df = kline.df
 
     volume_colors = ["red" if close >= open_price else "green" for close, open_price in zip(df["收盘"], df["开盘"])]
@@ -136,7 +130,7 @@ async def to_single_fig(raw_data: dict[str, Any]):
     data = build_single_stock_render_data(raw_data)
     if isinstance(data, str):
         return data
-    stock = cast(SingleStockRenderData, data)
+    stock = data
     df = stock.df
 
     fig = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.05, row_heights=[0.7, 0.3])
@@ -206,8 +200,7 @@ async def to_multi_fig(raw_data_list: list[dict[str, Any]]):
     multi = data
     fig = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.05, row_heights=[0.7, 0.3])
 
-    for index, stock in enumerate(multi.stocks):
-        item = cast(MultiStockItem, stock)
+    for index, item in enumerate(multi.stocks):
         df = item.df
         line_color = PLOTLY_COLORS[index % len(PLOTLY_COLORS)]
         fig.add_trace(
@@ -222,7 +215,9 @@ async def to_multi_fig(raw_data_list: list[dict[str, Any]]):
             row=1,
             col=1,
         )
-        last_valid_index = cast(pd.Series, df["percentage_change"]).last_valid_index()
+        change_series = df["percentage_change"]
+        assert isinstance(change_series, pd.Series), "列 percentage_change 存在重复标签"
+        last_valid_index = change_series.last_valid_index()
         if last_valid_index is not None:
             fig.add_annotation(
                 x=df.loc[last_valid_index, "datetime"],
@@ -253,6 +248,7 @@ async def to_multi_fig(raw_data_list: list[dict[str, Any]]):
         color = "red" if "+" in part else "green"
         subtitle_parts.append(f"<b><span style='color:{color};'>{part}</span></b>")
     final_title = f"<b>分时涨跌幅对比</b><br>{'&nbsp;&nbsp;&nbsp;'.join(subtitle_parts)}"
+    # plotly 将 add_hrect/add_hline 的 row/col 错标为 str，运行时明确支持 int
     fig.add_hrect(
         y0=0,
         y1=multi.y_axis_max,
@@ -260,8 +256,8 @@ async def to_multi_fig(raw_data_list: list[dict[str, Any]]):
         opacity=0.1,
         layer="below",
         line_width=0,
-        row=cast(Any, 1),
-        col=cast(Any, 1),
+        row=1,  # pyright: ignore[reportArgumentType]
+        col=1,  # pyright: ignore[reportArgumentType]
     )
     fig.add_hrect(
         y0=multi.y_axis_min,
@@ -270,10 +266,10 @@ async def to_multi_fig(raw_data_list: list[dict[str, Any]]):
         opacity=0.1,
         layer="below",
         line_width=0,
-        row=cast(Any, 1),
-        col=cast(Any, 1),
+        row=1,  # pyright: ignore[reportArgumentType]
+        col=1,  # pyright: ignore[reportArgumentType]
     )
-    fig.add_hline(y=0, line=dict(color="yellow", width=1, dash="dash"), row=cast(Any, 1), col=cast(Any, 1))
+    fig.add_hline(y=0, line=dict(color="yellow", width=1, dash="dash"), row=1, col=1)  # pyright: ignore[reportArgumentType]
     fig.update_layout(
         title=dict(text=final_title, font=dict(size=60), y=0.96, x=0.5, xanchor="center", yanchor="top"),
         margin=dict(t=200, l=70, r=70, b=80),
@@ -307,7 +303,7 @@ async def to_compare_fig(raw_datas: list[dict[str, Any]]):
     data = build_compare_render_data(raw_datas)
     if isinstance(data, str):
         return data
-    compare = cast(CompareRenderData, data)
+    compare = data
     fig = go.Figure()
     for index, item in enumerate(compare.items):
         color = PLOTLY_COLORS[index % len(PLOTLY_COLORS)]
@@ -332,7 +328,7 @@ async def to_fig(raw_data: dict[str, Any], market: str, sector: str | None = Non
     data = build_cloudmap_render_data(raw_data, market, sector, layer)
     if isinstance(data, str):
         return data
-    cloudmap = cast(CloudmapRenderData, data)
+    cloudmap = data
     df = cloudmap.df.copy()
     df["Category"] = "<b>" + df["category"].astype(str) + "</b>"
     df["StockName"] = df["name"].astype(str)
@@ -394,7 +390,7 @@ async def render_html(
 
     file = get_file(market, "html", sector, data_result.special_cache_key)
     if file.exists():
-        minutes = STOCK_CONFIG.get_config("mapcloud_refresh_minutes").data
+        minutes = int(STOCK_CONFIG.get_config("mapcloud_refresh_minutes").data)
         file_mod_time = datetime.fromtimestamp(file.stat().st_mtime)
         if datetime.now() - file_mod_time < timedelta(minutes=minutes):
             logger.info(f"[SayuStock] html文件在{minutes}分钟内，直接返回文件数据。")
@@ -445,7 +441,9 @@ def _ai_return_single_stock(raw_data: dict[str, Any] | list[dict[str, Any]], is_
             ai_return("【多股分时行情对比】\n" + "\n".join(parts))
         return
 
-    data = cast(dict[str, Any], raw_data)["data"]
+    if isinstance(raw_data, list):
+        return
+    data = raw_data["data"]
     result = (
         f"【{_dict_value(data, 'f58', 'N/A')} 分时行情】\n"
         f"最新价: {_dict_value(data, 'f43', 'N/A')}  涨跌幅: {_dict_value(data, 'f170', 'N/A')}%\n"

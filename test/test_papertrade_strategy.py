@@ -7,10 +7,10 @@
 - 3 种模式（balanced/aggressive/conservative）门槛差异
 """
 
-import importlib.util
 import sys
-from pathlib import Path
+import importlib.util
 from types import ModuleType
+from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent.parent.parent
 sys.path.insert(0, str(REPO_ROOT))
@@ -23,9 +23,11 @@ def _ensure_pkg():
     if PKG_NAME in sys.modules:
         return
     pkg_spec = importlib.util.spec_from_file_location(
-        PKG_NAME, PKG_ROOT / "__init__.py",
+        PKG_NAME,
+        PKG_ROOT / "__init__.py",
         submodule_search_locations=[str(PKG_ROOT)],
     )
+    assert pkg_spec is not None
     pkg = importlib.util.module_from_spec(pkg_spec)
     pkg.__path__ = [str(PKG_ROOT)]
     sys.modules[PKG_NAME] = pkg
@@ -34,6 +36,7 @@ def _ensure_pkg():
         PKG_ROOT / "stock_papertrade" / "__init__.py",
         submodule_search_locations=[str(PKG_ROOT / "stock_papertrade")],
     )
+    assert sub_spec is not None
     sub = importlib.util.module_from_spec(sub_spec)
     sub.__path__ = [str(PKG_ROOT / "stock_papertrade")]
     sys.modules[f"{PKG_NAME}.stock_papertrade"] = sub
@@ -45,6 +48,7 @@ def _load(name: str, file_name: str) -> ModuleType:
         f"{PKG_NAME}.stock_papertrade.{name}",
         PKG_ROOT / "stock_papertrade" / file_name,
     )
+    assert spec is not None and spec.loader is not None
     mod = importlib.util.module_from_spec(spec)
     sys.modules[spec.name] = mod
     spec.loader.exec_module(mod)
@@ -78,10 +82,18 @@ def _empty_tech() -> TechSignals:
 def _neutral_tech() -> TechSignals:
     """中性技术面：所有信号为 None 或 False"""
     return TechSignals(
-        macd_dif=None, macd_dea=None, macd_bar=None,
-        rsi6=50.0, rsi12=50.0, rsi24=50.0,
-        ma5=100.0, ma10=100.0, ma20=100.0,
-        cmf20=0.0, volume_ratio=1.0, turnover_pct=2.0,
+        macd_dif=None,
+        macd_dea=None,
+        macd_bar=None,
+        rsi6=50.0,
+        rsi12=50.0,
+        rsi24=50.0,
+        ma5=100.0,
+        ma10=100.0,
+        ma20=100.0,
+        cmf20=0.0,
+        volume_ratio=1.0,
+        turnover_pct=2.0,
         atr_pct=0.02,
     )
 
@@ -97,53 +109,81 @@ def _empty_news() -> NewsSignals:
 def _strong_buy_tech() -> TechSignals:
     """理想技术面：MACD 金叉 + RSI 超卖 + 均线多头 + CMF 强流入"""
     return TechSignals(
-        macd_dif=2.0, macd_dea=1.0, macd_bar=2.0,
+        macd_dif=2.0,
+        macd_dea=1.0,
+        macd_bar=2.0,
         macd_golden_cross_in_3d=True,
         macd_bar_positive_and_dif_above_dea=True,
-        rsi6=30.0, rsi12=40.0, rsi24=45.0,
-        ma5=110.0, ma10=105.0, ma20=100.0,
+        rsi6=30.0,
+        rsi12=40.0,
+        rsi24=45.0,
+        ma5=110.0,
+        ma10=105.0,
+        ma20=100.0,
         ma_bull_alignment=True,
         close_above_ma20=True,
-        cmf20=0.15, volume_ratio=2.5, turnover_pct=3.0,
+        cmf20=0.15,
+        volume_ratio=2.5,
+        turnover_pct=3.0,
         atr_pct=0.01,  # 低波动
     )
 
 
 def _strong_sell_tech() -> TechSignals:
     return TechSignals(
-        macd_dif=-2.0, macd_dea=-1.0, macd_bar=-2.0,
+        macd_dif=-2.0,
+        macd_dea=-1.0,
+        macd_bar=-2.0,
         macd_death_cross_in_3d=True,
         macd_bar_negative_and_dif_below_dea=True,
-        rsi6=70.0, rsi12=65.0, rsi24=60.0,
-        ma5=90.0, ma10=95.0, ma20=100.0,
+        rsi6=70.0,
+        rsi12=65.0,
+        rsi24=60.0,
+        ma5=90.0,
+        ma10=95.0,
+        ma20=100.0,
         ma_bear_alignment=True,
         close_below_ma20=True,
-        cmf20=-0.15, volume_ratio=0.4, turnover_pct=12.0,
+        cmf20=-0.15,
+        volume_ratio=0.4,
+        turnover_pct=12.0,
         atr_pct=0.04,
     )
 
 
 def _good_fund() -> FundSignals:
     return FundSignals(
-        roe=0.20, revenue_yoy=0.25, profit_yoy=0.35,
-        gross_margin=0.45, net_margin=0.20,
-        debt_ratio=0.30, pe_ttm=15.0, industry_pe_median=25.0,
+        roe=0.20,
+        revenue_yoy=0.25,
+        profit_yoy=0.35,
+        gross_margin=0.45,
+        net_margin=0.20,
+        debt_ratio=0.30,
+        pe_ttm=15.0,
+        industry_pe_median=25.0,
     )
 
 
 def _bad_fund() -> FundSignals:
     return FundSignals(
-        roe=0.02, revenue_yoy=-0.10, profit_yoy=-0.30,
-        gross_margin=0.20, net_margin=0.05,
-        debt_ratio=0.80, pe_ttm=80.0, industry_pe_median=25.0,
+        roe=0.02,
+        revenue_yoy=-0.10,
+        profit_yoy=-0.30,
+        gross_margin=0.20,
+        net_margin=0.05,
+        debt_ratio=0.80,
+        pe_ttm=80.0,
+        industry_pe_median=25.0,
     )
 
 
 def _positive_news() -> NewsSignals:
     items = [{"text": "业绩预增公告"} for _ in range(5)]
     return NewsSignals(
-        positive_count=5, negative_count=0,
-        has_forecast_up=True, has_reduction_or_negative=False,
+        positive_count=5,
+        negative_count=0,
+        has_forecast_up=True,
+        has_reduction_or_negative=False,
         items=items,
     )
 
@@ -151,8 +191,10 @@ def _positive_news() -> NewsSignals:
 def _negative_news() -> NewsSignals:
     items = [{"text": "减持公告"} for _ in range(5)]
     return NewsSignals(
-        positive_count=0, negative_count=5,
-        has_forecast_up=False, has_reduction_or_negative=True,
+        positive_count=0,
+        negative_count=5,
+        has_forecast_up=False,
+        has_reduction_or_negative=True,
         items=items,
     )
 
@@ -284,7 +326,7 @@ def test_decide_stop_loss():
     d = decide_action(stock, 0.0, ["测试"], acc, pos, "balanced")
     assert d.action == "sell"
     assert "止损" in d.reason
-    print(f"[OK] 止损触发 (price=182, cost=200, 亏9%)")
+    print("[OK] 止损触发 (price=182, cost=200, 亏9%)")
 
 
 def test_decide_take_profit_half():
@@ -379,7 +421,8 @@ def test_risk_check_max_holdings():
 def test_risk_check_reentry_limit():
     """同日同股加仓 ≥ 1 次 → block"""
     acc = AccountContext(
-        cash=1_000_000, total_equity=1_000_000,
+        cash=1_000_000,
+        total_equity=1_000_000,
         reentry_count_today={"600519": 1},
     )
     proposed = Decision("buy", 100, "test")
@@ -421,17 +464,26 @@ def test_mode_thresholds_different():
 def test_tech_from_indicators():
     """从 indicators dict 构造 TechSignals"""
     ind = {
-        "macd_dif": 1.0, "macd_dea": 0.5, "macd_bar": 1.0,
+        "macd_dif": 1.0,
+        "macd_dea": 0.5,
+        "macd_bar": 1.0,
         "macd_golden_cross_in_3d": True,
         "macd_death_cross_in_3d": False,
-        "rsi6": 35.0, "rsi12": 40.0, "rsi24": 45.0,
-        "ma5": 100.0, "ma10": 99.0, "ma20": 98.0,
+        "rsi6": 35.0,
+        "rsi12": 40.0,
+        "rsi24": 45.0,
+        "ma5": 100.0,
+        "ma10": 99.0,
+        "ma20": 98.0,
         "ma_bull_alignment": True,
         "ma_bear_alignment": False,
         "close_above_ma20": True,
         "close_below_ma20": False,
-        "cmf20": 0.15, "volume_ratio": 2.5, "turnover_pct": 3.0,
-        "bias": 0.05, "atr_pct": 0.02,
+        "cmf20": 0.15,
+        "volume_ratio": 2.5,
+        "turnover_pct": 3.0,
+        "bias": 0.05,
+        "atr_pct": 0.02,
     }
     tech = tech_from_indicators(ind)
     assert tech.macd_dif == 1.0

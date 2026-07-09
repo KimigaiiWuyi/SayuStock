@@ -13,11 +13,11 @@
 - compute_indicators 整合
 """
 
-import importlib.util
 import sys
-from datetime import datetime, timedelta
-from pathlib import Path
+import importlib.util
 from types import ModuleType
+from pathlib import Path
+from datetime import datetime, timedelta
 
 import numpy as np
 import pandas as pd
@@ -35,9 +35,11 @@ def _ensure_pkg():
     if PKG_NAME in sys.modules:
         return
     pkg_spec = importlib.util.spec_from_file_location(
-        PKG_NAME, PKG_ROOT / "__init__.py",
+        PKG_NAME,
+        PKG_ROOT / "__init__.py",
         submodule_search_locations=[str(PKG_ROOT)],
     )
+    assert pkg_spec is not None
     pkg = importlib.util.module_from_spec(pkg_spec)
     pkg.__path__ = [str(PKG_ROOT)]
     sys.modules[PKG_NAME] = pkg
@@ -46,6 +48,7 @@ def _ensure_pkg():
         PKG_ROOT / "stock_papertrade" / "__init__.py",
         submodule_search_locations=[str(PKG_ROOT / "stock_papertrade")],
     )
+    assert sub_spec is not None
     sub = importlib.util.module_from_spec(sub_spec)
     sub.__path__ = [str(PKG_ROOT / "stock_papertrade")]
     sys.modules[f"{PKG_NAME}.stock_papertrade"] = sub
@@ -57,6 +60,7 @@ def _load(name: str, file_name: str) -> ModuleType:
         f"{PKG_NAME}.stock_papertrade.{name}",
         PKG_ROOT / "stock_papertrade" / file_name,
     )
+    assert spec is not None and spec.loader is not None
     mod = importlib.util.module_from_spec(spec)
     sys.modules[spec.name] = mod
     spec.loader.exec_module(mod)
@@ -96,8 +100,7 @@ def _make_klines(n: int = 60, base_price: float = 100.0, drift: float = 0.0) -> 
         volume = 1_000_000 + i * 1000
         amount = close_p * volume
         out.append(
-            f"{date},{open_p:.2f},{close_p:.2f},{high_p:.2f},{low_p:.2f},"
-            f"{volume:.0f},{amount:.0f},2.0,0.5,0.0,1.5"
+            f"{date},{open_p:.2f},{close_p:.2f},{high_p:.2f},{low_p:.2f},{volume:.0f},{amount:.0f},2.0,0.5,0.0,1.5"
         )
         price = close_p
     return out
@@ -117,8 +120,7 @@ def _make_trending_klines(n: int = 60, base_price: float = 100.0, daily_pct: flo
         volume = 1_000_000
         amount = close_p * volume
         out.append(
-            f"{date},{open_p:.2f},{close_p:.2f},{high_p:.2f},{low_p:.2f},"
-            f"{volume:.0f},{amount:.0f},1.0,1.0,0.0,1.5"
+            f"{date},{open_p:.2f},{close_p:.2f},{high_p:.2f},{low_p:.2f},{volume:.0f},{amount:.0f},1.0,1.0,0.0,1.5"
         )
         price = close_p
     return out
@@ -145,11 +147,13 @@ def test_klines_to_df_empty():
 
 def test_klines_to_df_garbage():
     """乱数据应该被跳过，不抛异常"""
-    df = klines_to_df([
-        "not a kline",
-        "123,456",  # 字段不足 11
-        "abc,xyz,def,1,2,3,4,5,6,7,8",  # open/close/high 字段是 xyz 不是数字
-    ])
+    df = klines_to_df(
+        [
+            "not a kline",
+            "123,456",  # 字段不足 11
+            "abc,xyz,def,1,2,3,4,5,6,7,8",  # open/close/high 字段是 xyz 不是数字
+        ]
+    )
     # 全部应该被过滤
     assert df.empty
     print("[OK] klines_to_df 乱数据不抛异常")
@@ -245,13 +249,15 @@ def test_calc_cmf():
     high = close * 1.01
     low = close * 0.99
     volume = pd.Series([1_000_000] * 30, dtype=float)
-    df = pd.DataFrame({
-        "open": close.shift(1).fillna(close.iloc[0]),
-        "close": close,
-        "high": high,
-        "low": low,
-        "volume": volume,
-    })
+    df = pd.DataFrame(
+        {
+            "open": close.shift(1).fillna(close.iloc[0]),
+            "close": close,
+            "high": high,
+            "low": low,
+            "volume": volume,
+        }
+    )
     cmf = calc_cmf(df, period=20)
     assert cmf is not None
     assert -1 <= cmf <= 1
@@ -263,10 +269,15 @@ def test_calc_volume_ratio_double():
     closes = [10] * 10
     # 最后一天是 200，前面 5 天（iloc[-6:-1]）都是 100；均=100，量比=200/100=2.0
     volumes = [100, 100, 100, 100, 100, 100, 100, 100, 100, 200]
-    df = pd.DataFrame({
-        "open": closes, "close": closes, "high": closes, "low": closes,
-        "volume": volumes,
-    })
+    df = pd.DataFrame(
+        {
+            "open": closes,
+            "close": closes,
+            "high": closes,
+            "low": closes,
+            "volume": volumes,
+        }
+    )
     vr = calc_volume_ratio(df)
     assert vr == 2.0
     print(f"[OK] calc_volume_ratio={vr}")
@@ -290,10 +301,14 @@ def test_calc_atr_pct_normal():
     close = pd.Series(np.cumsum(np.random.normal(0, 1, 30)) + 100, dtype=float)
     high = close * 1.01
     low = close * 0.99
-    df = pd.DataFrame({
-        "open": close.shift(1).fillna(close.iloc[0]),
-        "close": close, "high": high, "low": low,
-    })
+    df = pd.DataFrame(
+        {
+            "open": close.shift(1).fillna(close.iloc[0]),
+            "close": close,
+            "high": high,
+            "low": low,
+        }
+    )
     atr = calc_atr_pct(df, period=14)
     assert atr is not None
     assert 0 < atr < 0.5
@@ -302,10 +317,12 @@ def test_calc_atr_pct_normal():
 
 def test_calc_support_resistance():
     closes = list(range(50, 100))  # 50→99 涨
-    df = pd.DataFrame({
-        "high": [c * 1.01 for c in closes],
-        "low": [c * 0.99 for c in closes],
-    })
+    df = pd.DataFrame(
+        {
+            "high": [c * 1.01 for c in closes],
+            "low": [c * 0.99 for c in closes],
+        }
+    )
     sup, res = calc_support_resistance(df, period=20)
     assert sup is not None
     assert res is not None
@@ -375,7 +392,7 @@ def test_compute_indicators_full():
     assert ind_out["kdj_j"] is not None
     assert "kdj_golden_cross_in_3d" in ind_out
     assert "kdj_overbought" in ind_out
-    print(f"[OK] compute_indicators 全套 60 根（含 KDJ）")
+    print("[OK] compute_indicators 全套 60 根（含 KDJ）")
 
 
 def test_compute_indicators_empty():

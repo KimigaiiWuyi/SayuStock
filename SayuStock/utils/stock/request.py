@@ -77,12 +77,13 @@ async def get_vix(vix_name: str):
         return trends
 
     price_change_percent = 0.0
+    open_price = 0.0
     # 确保趋势数据非空且开盘价不为0，以避免除零错误
     if len(trends) > 0:
         latest_price = trends[-1]["price"]
         open_price = trends[0]["open"] if trends[0]["open"] != 0 else trends[0]["price"]
 
-        price_change_percent: float = ((latest_price - open_price) / open_price) * 100  # type: ignore
+        price_change_percent = ((latest_price - open_price) / open_price) * 100
 
     resp = {
         "data": {

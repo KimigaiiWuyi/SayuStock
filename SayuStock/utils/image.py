@@ -38,7 +38,7 @@ async def render_image_by_pw(html_path: Path, w: int, h: int, _scale: int) -> Un
             viewport={
                 "width": w,
                 "height": h,
-            },  # type: ignore
+            },
             device_scale_factor=_scale,
         )
         page = await context.new_page()

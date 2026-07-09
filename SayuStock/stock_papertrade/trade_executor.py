@@ -19,14 +19,13 @@
 
 import datetime as _dt
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
 from typing import Optional
+from dataclasses import dataclass
 
 from gsuid_core.logger import logger as _gslogger
 
 from . import db
-from .matcher import MatchResult
-from .matcher import match_order as _match_order
+from .matcher import MatchResult, match_order as _match_order
 from .quote_service import quote_service
 from .trading_calendar import trading_day_summary, should_run_papertrade
 
@@ -145,7 +144,9 @@ class PaperTradeExecutor(TradeExecutor):
         if not should_run_papertrade():
             _, _, desc = trading_day_summary()
             return _reject_match(
-                side, stock_code, qty,
+                side,
+                stock_code,
+                qty,
                 f"非交易时段拒绝撮合（{desc}）——真实市场此刻无法成交，请改 hold 等开盘",
             )
 
@@ -168,7 +169,9 @@ class PaperTradeExecutor(TradeExecutor):
 
         if live_price is None or live_price <= 0:
             return _reject_match(
-                side, stock_code, qty,
+                side,
+                stock_code,
+                qty,
                 f"实时行情不可达（{stock_code}），拒绝撮合——不允许按参考价/旧价成交，请稍后重试或改 hold",
             )
 
@@ -177,9 +180,7 @@ class PaperTradeExecutor(TradeExecutor):
         if price and price > 0:
             dev_pct: float = (live_price - price) / price * 100.0
             if abs(dev_pct) >= 0.5:
-                deviation_note = (
-                    f"按实时价 {live_price:.2f} 成交（参考价 {price:.2f} 已过时，偏差 {dev_pct:+.2f}%）"
-                )
+                deviation_note = f"按实时价 {live_price:.2f} 成交（参考价 {price:.2f} 已过时，偏差 {dev_pct:+.2f}%）"
 
         res = _match_order(
             side=side,

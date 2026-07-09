@@ -241,9 +241,7 @@ class CloudMapDataService:
         if len(market_list) == 1:
             raw_data = await get_gg(market_list[0], "single-stock", start_time, end_time)
             logger.info(
-                f"[SayuStock] 单股结果 {market_list[0]}: "
-                f"type={type(raw_data).__name__}, "
-                f"preview={str(raw_data)[:120]}"
+                f"[SayuStock] 单股结果 {market_list[0]}: type={type(raw_data).__name__}, preview={str(raw_data)[:120]}"
             )
             if isinstance(raw_data, dict) and self._is_sector(raw_data):
                 return await self._fetch_sector_stocks(raw_data)
@@ -262,15 +260,11 @@ class CloudMapDataService:
         for idx, item in enumerate(gathered):
             query_name = market_list[idx] if idx < len(market_list) else f"#{idx}"
             if isinstance(item, BaseException):
-                logger.error(
-                    f"[SayuStock] 多股查询第{idx + 1}只标的[{query_name}]异常: {item!r}"
-                )
+                logger.error(f"[SayuStock] 多股查询第{idx + 1}只标的[{query_name}]异常: {item!r}")
                 continue
             if isinstance(item, str):
                 # 跳过单只标的解析失败的情况，避免任一错误就终止整体多股查询
-                logger.warning(
-                    f"[SayuStock] 多股查询跳过失败标的[{query_name}]: {item}"
-                )
+                logger.warning(f"[SayuStock] 多股查询跳过失败标的[{query_name}]: {item}")
                 continue
             if not isinstance(item, dict):
                 logger.warning(

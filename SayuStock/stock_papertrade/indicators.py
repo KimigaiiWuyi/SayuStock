@@ -68,17 +68,20 @@ def klines_to_df(klines: list[str]) -> pd.DataFrame:
 # 红线推荐的 union + isinstance 守卫，既不用 ``cast()`` 也不用 ``# type: ignore``。
 # ============================================================
 def _col_float(df: pd.DataFrame, name: str) -> pd.Series:
-    s: pd.Series = df[name]
+    s = df[name]
+    assert isinstance(s, pd.Series)
     return s.astype(float)
 
 
 def _tail_col(df: pd.DataFrame, name: str, n: int) -> pd.Series:
-    s: pd.Series = df[name]
+    s = df[name]
+    assert isinstance(s, pd.Series)
     return s.tail(n)
 
 
 def _tail_col_float(df: pd.DataFrame, name: str, n: int) -> pd.Series:
-    s: pd.Series = df[name]
+    s = df[name]
+    assert isinstance(s, pd.Series)
     return s.astype(float).tail(n)
 
 
@@ -302,9 +305,9 @@ def calc_bbi(close: pd.Series) -> float | None:
     ma6 = calc_ma(close, 6)
     ma12 = calc_ma(close, 12)
     ma24 = calc_ma(close, 24)
-    if None in (ma3, ma6, ma12, ma24):
+    if ma3 is None or ma6 is None or ma12 is None or ma24 is None:
         return None
-    return (ma3 + ma6 + ma12 + ma24) / 4.0  # type: ignore[operator]
+    return (ma3 + ma6 + ma12 + ma24) / 4.0
 
 
 # ============================================================
@@ -418,7 +421,8 @@ def compute_indicators(df: pd.DataFrame) -> dict[str, float | bool | None]:
 
     df = df.copy()
     df["close"] = df["close"].astype(float)
-    close: pd.Series = df["close"]
+    close = df["close"]
+    assert isinstance(close, pd.Series)
 
     ma5 = calc_ma(close, 5)
     ma10 = calc_ma(close, 10)
@@ -449,7 +453,8 @@ def compute_indicators(df: pd.DataFrame) -> dict[str, float | bool | None]:
 
     turnover: float | None = None
     if "turnover_rate" in df.columns:
-        tr_col: pd.Series = df["turnover_rate"]
+        tr_col = df["turnover_rate"]
+        assert isinstance(tr_col, pd.Series)
         turnover = _to_float(tr_col.iloc[-1])
     last_close: float = _to_float(close.iloc[-1])
 
@@ -502,12 +507,8 @@ def compute_indicators(df: pd.DataFrame) -> dict[str, float | bool | None]:
         "close_above_ma20": (ma20 is not None and last_close > ma20),
         "close_below_ma20": (ma20 is not None and last_close < ma20),
         # —— 新增：BOLL 突破 / BBI 多空 ——
-        "boll20_breakout_up": (
-            boll20_upper is not None and last_close > boll20_upper
-        ),
-        "boll20_breakout_down": (
-            boll20_lower is not None and last_close < boll20_lower
-        ),
+        "boll20_breakout_up": (boll20_upper is not None and last_close > boll20_upper),
+        "boll20_breakout_down": (boll20_lower is not None and last_close < boll20_lower),
         "close_above_bbi": (bbi is not None and last_close > bbi),
         "close_below_bbi": (bbi is not None and last_close < bbi),
     }

@@ -519,11 +519,11 @@ async def send_dry_run(bot: Bot, ev: Event):
     # 自爆身份，生产路径永远走 "auto"。
     # ────────────────────────────────────────────────────────────────────
     from .proactive import (  # noqa: E402  -- 懒加载；外部模块，重构期暂留
-        build_papertrade_proactive_text,
-        snapshot_decision_state,
+        Variant as _Variant,
         decision_state_delta,
+        snapshot_decision_state,
+        build_papertrade_proactive_text,
     )
-    from .proactive import Variant as _Variant
 
     # variant 调度：段编号 → 共享模块 variant 字面量
     _STEP_VARIANT: dict[str, _Variant] = {
@@ -575,9 +575,7 @@ async def send_dry_run(bot: Bot, ev: Event):
             lines.append(f"❌ LLM 调用失败: {type(e).__name__}: {e}")
 
         try:
-            trades_d, positions_d, decisions_d = await decision_state_delta(
-                baseline, group_id, bot_id
-            )
+            trades_d, positions_d, decisions_d = await decision_state_delta(baseline, group_id, bot_id)
         except Exception as e:
             lines.append(f"❌ 副作用查询失败: {type(e).__name__}: {e}")
 
@@ -659,7 +657,8 @@ async def send_dry_run(bot: Bot, ev: Event):
             f"        7.3 stock_indicators(stock_code, periods=60, kline_period=60) → 60 分钟 K\n"
             f"        7.4 stock_indicators(stock_code, periods=80, kline_period=15) → 15 分钟 K\n"
             f"        7.5 stock_financials(stock_code, report='main') → 财报 + 行业类型\n"
-            f"            重点：roe/revenue_yoy/profit_yoy/net_margin/debt_ratio；银行股另看 net_interest_margin（无毛利率）\n"
+            f"            重点：roe/revenue_yoy/profit_yoy/net_margin/debt_ratio；"
+            f"银行股另看 net_interest_margin（无毛利率）\n"
             f"        7.6 跨周期共振判断：\n"
             f"            - 日 K MACD 金叉 + 60m K MACD 金叉 + 15m K MACD 金叉 = 强买信号\n"
             f"            - 日 K BOLL20 带宽 / BOLL60 带宽 > 1.3 = 短期波动放大\n"

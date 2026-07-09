@@ -63,9 +63,11 @@ def test_exclude_planned_dividends():
         report_date: pd.Timestamp | None = None
         if report_date_str:
             try:
-                report_date = pd.Timestamp(str(report_date_str)[:10])
+                parsed = pd.Timestamp(str(report_date_str)[:10])
             except (ValueError, TypeError):
-                pass
+                parsed = None
+            if isinstance(parsed, pd.Timestamp):
+                report_date = parsed
         raw_events.append(
             {
                 "ex_date": ex_date_candidate,

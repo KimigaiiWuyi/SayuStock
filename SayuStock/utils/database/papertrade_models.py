@@ -192,7 +192,7 @@ class SayuPaperAccountAdmin(GsAdminModel):
     page_schema = PageSchema(
         label="模拟盘·账户",
         icon="fa fa-bullhorn",
-    )  # type: ignore
+    )
     model = SayuPaperAccount
 
 
@@ -202,7 +202,7 @@ class SayuPaperPositionAdmin(GsAdminModel):
     page_schema = PageSchema(
         label="模拟盘·持仓",
         icon="fa fa-bullhorn",
-    )  # type: ignore
+    )
     model = SayuPaperPosition
 
 
@@ -212,7 +212,7 @@ class SayuPaperTradeAdmin(GsAdminModel):
     page_schema = PageSchema(
         label="模拟盘·交易流水",
         icon="fa fa-bullhorn",
-    )  # type: ignore
+    )
     model = SayuPaperTrade
 
 
@@ -222,7 +222,7 @@ class SayuPaperDecisionAdmin(GsAdminModel):
     page_schema = PageSchema(
         label="模拟盘·决策日志",
         icon="fa fa-bullhorn",
-    )  # type: ignore
+    )
     model = SayuPaperDecision
 
 
@@ -232,7 +232,7 @@ class SayuPaperSnapshotAdmin(GsAdminModel):
     page_schema = PageSchema(
         label="模拟盘·净值快照",
         icon="fa fa-bullhorn",
-    )  # type: ignore
+    )
     model = SayuPaperSnapshot
 
 
@@ -242,7 +242,7 @@ class SayuPaperWatchlistAdmin(GsAdminModel):
     page_schema = PageSchema(
         label="模拟盘·群友关注",
         icon="fa fa-bullhorn",
-    )  # type: ignore
+    )
     model = SayuPaperWatchlist
 
 
@@ -252,7 +252,7 @@ class SayuPaperAgentPoolAdmin(GsAdminModel):
     page_schema = PageSchema(
         label="模拟盘·内部池",
         icon="fa fa-bullhorn",
-    )  # type: ignore
+    )
     model = SayuPaperAgentPool
 
 
@@ -267,26 +267,23 @@ exec_list.extend(
         # 先清掉 (group_id, bot_id) 重复行，保留每个分区的最小 id；再补建唯一索引。
         # SQLite / MySQL / PG 通用语法，subquery alias 在 SQLite 旧版可能需要别名，
         # 用 INNER JOIN 形式兜底。
-        'DELETE FROM sayupaperaccount '
-        'WHERE id NOT IN ('
-        '  SELECT MIN(id) FROM sayupaperaccount GROUP BY group_id, bot_id'
-        ');',
+        "DELETE FROM sayupaperaccount "
+        "WHERE id NOT IN ("
+        "  SELECT MIN(id) FROM sayupaperaccount GROUP BY group_id, bot_id"
+        ");",
         # CREATE UNIQUE INDEX 三方言通用
-        'CREATE UNIQUE INDEX IF NOT EXISTS ux_sayupaperaccount_gid_bid '
-        'ON sayupaperaccount (group_id, bot_id);',
+        "CREATE UNIQUE INDEX IF NOT EXISTS ux_sayupaperaccount_gid_bid ON sayupaperaccount (group_id, bot_id);",
         # MySQL 没有 IF NOT EXISTS 的 INDEX 语法，用 try 兜底
-        'ALTER TABLE sayupaperaccount '
-        'ADD UNIQUE INDEX ux_sayupaperaccount_gid_bid (group_id, bot_id);',
+        "ALTER TABLE sayupaperaccount ADD UNIQUE INDEX ux_sayupaperaccount_gid_bid (group_id, bot_id);",
         # PostgreSQL
-        'CREATE UNIQUE INDEX IF NOT EXISTS ux_sayupaperaccount_gid_bid '
-        'ON sayupaperaccount (group_id, bot_id);',
+        "CREATE UNIQUE INDEX IF NOT EXISTS ux_sayupaperaccount_gid_bid ON sayupaperaccount (group_id, bot_id);",
         # ─── 2026-07-01 迁移：SayuPaperPosition 加 last_quote_price + last_quote_at ───
         # SQLite / PostgreSQL 老版本不支持 ADD COLUMN IF NOT EXISTS；trans_adapter 已经
         # 用 try/except pass 兜底（重复执行 → 第二次失败无害），所以直接 ADD COLUMN 即可。
-        'ALTER TABLE sayupaperposition ADD COLUMN last_quote_price REAL;',
-        'ALTER TABLE sayupaperposition ADD COLUMN last_quote_at DATETIME;',
+        "ALTER TABLE sayupaperposition ADD COLUMN last_quote_price REAL;",
+        "ALTER TABLE sayupaperposition ADD COLUMN last_quote_at DATETIME;",
         # MySQL 同义（DATETIME 直接用，REAL → DOUBLE 也能存，但保留 REAL 跨方言一致）
-        'ALTER TABLE sayupaperposition ADD COLUMN last_quote_price DOUBLE;',
-        'ALTER TABLE sayupaperposition ADD COLUMN last_quote_at DATETIME;',
+        "ALTER TABLE sayupaperposition ADD COLUMN last_quote_price DOUBLE;",
+        "ALTER TABLE sayupaperposition ADD COLUMN last_quote_at DATETIME;",
     ]
 )

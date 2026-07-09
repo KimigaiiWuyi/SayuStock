@@ -1,10 +1,10 @@
 """AI 模拟盘候选池单测（mock 6 路源，验证合并/截断/去重）。"""
 
-import importlib.util
 import sys
-from pathlib import Path
-from typing import List
+import importlib.util
 from types import ModuleType
+from typing import List
+from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent.parent.parent
 sys.path.insert(0, str(REPO_ROOT))
@@ -17,9 +17,11 @@ def _ensure_pkg():
     if PKG_NAME in sys.modules:
         return
     pkg_spec = importlib.util.spec_from_file_location(
-        PKG_NAME, PKG_ROOT / "__init__.py",
+        PKG_NAME,
+        PKG_ROOT / "__init__.py",
         submodule_search_locations=[str(PKG_ROOT)],
     )
+    assert pkg_spec is not None
     pkg = importlib.util.module_from_spec(pkg_spec)
     pkg.__path__ = [str(PKG_ROOT)]
     sys.modules[PKG_NAME] = pkg
@@ -28,6 +30,7 @@ def _ensure_pkg():
         PKG_ROOT / "stock_papertrade" / "__init__.py",
         submodule_search_locations=[str(PKG_ROOT / "stock_papertrade")],
     )
+    assert sub_spec is not None
     sub = importlib.util.module_from_spec(sub_spec)
     sub.__path__ = [str(PKG_ROOT / "stock_papertrade")]
     sys.modules[f"{PKG_NAME}.stock_papertrade"] = sub
@@ -39,6 +42,7 @@ def _load(name: str, file_name: str) -> ModuleType:
         f"{PKG_NAME}.stock_papertrade.{name}",
         PKG_ROOT / "stock_papertrade" / file_name,
     )
+    assert spec is not None and spec.loader is not None
     mod = importlib.util.module_from_spec(spec)
     sys.modules[spec.name] = mod
     spec.loader.exec_module(mod)
@@ -61,14 +65,15 @@ TOTAL_CAP = pool.TOTAL_CAP
 # （用 monkey-patch 替换 6 路源函数）
 # ============================================================
 def _make_fake_sources(
-    position: List[str] = None,
-    watchlist: List[str] = None,
-    agent_pool: List[str] = None,
-    sector: List[str] = None,
-    hotmap: List[str] = None,
-    news: List[str] = None,
+    position: List[str] | None = None,
+    watchlist: List[str] | None = None,
+    agent_pool: List[str] | None = None,
+    sector: List[str] | None = None,
+    hotmap: List[str] | None = None,
+    news: List[str] | None = None,
 ):
     """生成 6 个假数据源闭包（async，与真实接口一致）"""
+
     async def _pos(gid, bid):
         return list(position or [])
 
@@ -104,6 +109,7 @@ def test_pool_empty():
         setattr(pool, name, fn)
     out = []
     import asyncio
+
     out = asyncio.run(build_candidate_pool("g1", "b1"))
     assert out == []
     print("[OK] 6 路空 → 候选池空")
@@ -115,6 +121,7 @@ def test_pool_single_source():
     for name, fn in fake.items():
         setattr(pool, name, fn)
     import asyncio
+
     out = asyncio.run(build_candidate_pool("g1", "b1"))
     assert out == ["600519", "000001", "300750"]
     print(f"[OK] 单路持仓 → {len(out)} 只")
@@ -129,6 +136,7 @@ def test_pool_dedup():
     for name, fn in fake.items():
         setattr(pool, name, fn)
     import asyncio
+
     out = asyncio.run(build_candidate_pool("g1", "b1"))
     assert out.count("600519") == 1
     # 顺序：position 先，watchlist 后 → position 在前
@@ -141,14 +149,15 @@ def test_pool_priority_order():
     fake = _make_fake_sources(
         position=["600001", "600002"],  # P1, P2
         watchlist=["600003", "600004"],  # W1, W2
-        agent_pool=["600005"],            # A1
-        sector=["600006", "600007"],      # S1, S2
-        hotmap=["600008"],                # H1
-        news=["600009"],                  # N1
+        agent_pool=["600005"],  # A1
+        sector=["600006", "600007"],  # S1, S2
+        hotmap=["600008"],  # H1
+        news=["600009"],  # N1
     )
     for name, fn in fake.items():
         setattr(pool, name, fn)
     import asyncio
+
     out = asyncio.run(build_candidate_pool("g1", "b1"))
     # 期望顺序：position 先，watchlist 后，依次类推
     expected = ["600001", "600002", "600003", "600004", "600005", "600006", "600007", "600008", "600009"]
@@ -166,12 +175,17 @@ def test_pool_total_cap_50():
     hot = [f"{600400 + i:06d}" for i in range(30)]
     news = [f"{600500 + i:06d}" for i in range(30)]
     fake = _make_fake_sources(
-        position=pos, watchlist=wl, agent_pool=ap,
-        sector=sec, hotmap=hot, news=news,
+        position=pos,
+        watchlist=wl,
+        agent_pool=ap,
+        sector=sec,
+        hotmap=hot,
+        news=news,
     )
     for name, fn in fake.items():
         setattr(pool, name, fn)
     import asyncio
+
     out = asyncio.run(build_candidate_pool("g1", "b1"))
     assert len(out) == TOTAL_CAP
     assert len(out) == 50
@@ -185,6 +199,7 @@ def test_pool_single_source_cap():
     for name, fn in fake.items():
         setattr(pool, name, fn)
     import asyncio
+
     out = asyncio.run(build_candidate_pool("g1", "b1"))
     assert len(out) == SOURCE_CAPS["position"]  # 20
     print(f"[OK] position 单路限 {SOURCE_CAPS['position']}：{len(out)} 只")
@@ -192,12 +207,11 @@ def test_pool_single_source_cap():
 
 def test_pool_invalid_codes_filtered():
     """非法代码（< 6 位、非数字）被过滤"""
-    fake = _make_fake_sources(
-        position=["600519", "abc", "12", "000001", "1.5", "300750"]
-    )
+    fake = _make_fake_sources(position=["600519", "abc", "12", "000001", "1.5", "300750"])
     for name, fn in fake.items():
         setattr(pool, name, fn)
     import asyncio
+
     out = asyncio.run(build_candidate_pool("g1", "b1"))
     assert out == ["600519", "000001", "300750"]
     print(f"[OK] 非法代码过滤 → {out}")
@@ -214,9 +228,8 @@ def test_pool_exclude_sources():
     for name, fn in fake.items():
         setattr(pool, name, fn)
     import asyncio
-    out = asyncio.run(
-        build_candidate_pool("g1", "b1", include_sector=False, include_hotmap=False, include_news=False)
-    )
+
+    out = asyncio.run(build_candidate_pool("g1", "b1", include_sector=False, include_hotmap=False, include_news=False))
     assert out == ["600001"]
     print("[OK] exclude_sources 正确禁用")
 
@@ -245,8 +258,12 @@ def test_post_decision_pool_update_buy():
 
         decisions = [
             {
-                "action": "buy", "code": "600519", "name": "茅台",
-                "secid": "1.600519", "score": 0.45, "reason": "test",
+                "action": "buy",
+                "code": "600519",
+                "name": "茅台",
+                "secid": "1.600519",
+                "score": 0.45,
+                "reason": "test",
             }
         ]
         await post_decision_pool_update("g1", "b1", decisions)
@@ -260,7 +277,7 @@ def test_post_decision_pool_update_buy():
         exp = kwargs["expires_at"]
         delta = exp - datetime.now()
         assert timedelta(days=6, hours=23) < delta < timedelta(days=7, hours=1)
-        print(f"[OK] buy → 写入 agent_pool (expires_in ~7d)")
+        print("[OK] buy → 写入 agent_pool (expires_in ~7d)")
 
     asyncio.run(_check())
 
@@ -286,7 +303,9 @@ def test_post_decision_pool_update_sell():
 
         decisions = [
             {
-                "action": "sell", "code": "600519", "name": "茅台",
+                "action": "sell",
+                "code": "600519",
+                "name": "茅台",
                 "score": 0.0,
             }
         ]

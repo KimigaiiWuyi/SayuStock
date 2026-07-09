@@ -247,9 +247,7 @@ async def _kick_immediate_decision(ev: Event, group_id: str, bot_id: str) -> Non
     # 一行冒泡，见 ai_tools._broadcast_fill）；决策推理只落库、不进群。故 init-time kick
     # 到此为止，不再拼"操盘播报"结构化文本推群（那会把决策理由 / 账户汇总泄漏到群里）。
     _ = result  # 仅供排障，不推群
-    logger.info(
-        f"[SayuStock][PaperTrade] init 决策已跑完（成交由 trade_insert 工具即时播报）group={group_id}"
-    )
+    logger.info(f"[SayuStock][PaperTrade] init 决策已跑完（成交由 trade_insert 工具即时播报）group={group_id}")
 
 
 @sv_papertrade.on_fullmatch(
@@ -321,7 +319,7 @@ async def send_init_command(bot: Bot, ev: Event):
         #      旧逻辑只查"是否为空"就直接返回"已开户"，用户永远无法用
         #      「模拟盘初始化」修复心跳，只能手工改库。
         need_rebuild: bool = not existing.kanban_init_root_id or not existing.kanban_period_root_id
-        if not need_rebuild:
+        if not need_rebuild and existing.kanban_period_root_id:
             try:
                 from gsuid_core.ai_core.planning.models import AIAgentTask
 
@@ -444,13 +442,9 @@ async def _kick_after_kanban_ready(ev: Event, group_id: str, bot_id: str, init_i
         from gsuid_core.logger import logger
 
         try:
-            _decision_task: asyncio.Task = asyncio.create_task(
-                _kick_immediate_decision(ev, group_id, bot_id)
-            )
+            _decision_task: asyncio.Task = asyncio.create_task(_kick_immediate_decision(ev, group_id, bot_id))
             _ = _decision_task  # 显式持有防 GC
-            logger.info(
-                "[SayuStock][PaperTrade] init-time 决策 kick 已派发（fire-and-forget）。"
-            )
+            logger.info("[SayuStock][PaperTrade] init-time 决策 kick 已派发（fire-and-forget）。")
         except Exception as e:
             logger.exception(f"[SayuStock][PaperTrade] kick decision 派发失败: {e}")
 

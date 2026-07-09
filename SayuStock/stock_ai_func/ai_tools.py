@@ -62,7 +62,7 @@ async def get_market_overview(
     truncated: list[str] = []
     for name, secid in INDEX_SECIDS:
         try:
-            data = await EASTMONEY_REQUESTER.get_single_fig_data(secid)
+            data = await EASTMONEY_REQUESTER.get_stock_trends(secid)
             if isinstance(data, str) or not isinstance(data, list) or not data:
                 truncated.append(name)
                 continue

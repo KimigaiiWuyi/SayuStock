@@ -16,6 +16,7 @@
     "${workspaceFolder}/../../../"
   ],
   "python.analysis.typeCheckingMode": "off",
-  "python-envs.defaultEnvManager": "ms-python.python:system",
-  "python-envs.pythonProjects": [],
+  "python.defaultInterpreterPath": "${workspaceFolder}/../../../.venv/Scripts/python.exe",
+  "python-envs.defaultEnvManager": "ms-python.python:venv",
+  "python-envs.pythonProjects": []
 }

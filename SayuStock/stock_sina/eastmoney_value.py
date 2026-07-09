@@ -1,8 +1,7 @@
-# pyright: reportMissingTypeStubs=false, reportUnknownMemberType=false, reportUnknownVariableType=false, reportUnknownArgumentType=false
 import asyncio
 import datetime
 from io import BytesIO
-from typing import Any, Union, Literal, Optional, TypedDict, cast
+from typing import Any, Union, Literal, Optional, TypedDict
 from dataclasses import dataclass
 
 import numpy as np
@@ -28,7 +27,6 @@ from ..utils.eastmoney import (
     EASTMONEY_REQUESTER,
     EASTMONEY_VALUE_NAME_MAP,
     EastMoneyStockItem,
-    EastMoneyValueSeriesData,
 )
 from ..utils.stock.request import get_gg
 
@@ -102,19 +100,18 @@ def _apply_month_ticks(ax: Axes, index: pd.Index) -> None:
     ax.set_xticklabels(tick_labels)
 
 
+def _frame_column(df: pd.DataFrame, key: str) -> pd.Series:
+    column = df[key]
+    assert isinstance(column, pd.Series), f"列 {key} 存在重复标签"
+    return column
+
+
 def _fig_to_image(fig: Figure, *, dpi: int = 180) -> Image.Image:
     output = BytesIO()
     fig.savefig(output, format="png", dpi=dpi, facecolor=fig.get_facecolor(), pad_inches=0.06)
     plt.close(fig)
     output.seek(0)
     return Image.open(output).convert("RGB")
-
-
-class StockItem(TypedDict):
-    secid: str
-    code: str
-    name: str
-    sec_type: str
 
 
 class EastmoneyValueResult(TypedDict, total=False):
@@ -160,7 +157,7 @@ async def get_eastmoney_pepb_compare(
             logger.warning(f"[SayuStock] 获取{item_desc}估值数据失败: {result}")
             failed.append(item_desc)
             continue
-        value_series = cast(Optional[ValueSeries], result)
+        value_series = result
         if value_series is None or value_series.df.empty:
             failed.append(item_desc)
             continue
@@ -189,7 +186,7 @@ async def get_eastmoney_pepb_compare(
     # AI注入必须发生在"数据已获取、图片未生成"的位置，确保AI能获得可分析的结构化文字。
     _ai_return_value_compare(series_list, failed, _type)
     image = await asyncio.to_thread(draw_value_compare_chart, series_list, _type)
-    return cast(BotSendContent, await convert_img(image))
+    return await convert_img(image)
 
 
 def _is_sector(raw_data: dict[str, Any]) -> bool:
@@ -216,7 +213,7 @@ async def _fetch_sector_codes(raw_data: dict[str, Any]) -> list[str]:
     return [str(s.get("f12", "")) for s in stocks if s.get("f12")]
 
 
-async def _parse_stock_input(_input: str) -> list[StockItem]:
+async def _parse_stock_input(_input: str) -> list[EastMoneyStockItem]:
     parts = [p.strip() for p in _input.replace("，", " ").replace(",", " ").split() if p.strip()]
     expanded: list[str] = []
     for part in parts:
@@ -227,28 +224,25 @@ async def _parse_stock_input(_input: str) -> list[StockItem]:
         else:
             expanded.append(part)
 
-    stock_items = await EASTMONEY_REQUESTER.parse_stock_input(" ".join(expanded))
-    return [cast(StockItem, item) for item in stock_items]
+    return await EASTMONEY_REQUESTER.parse_stock_input(" ".join(expanded))
 
 
 async def fetch_eastmoney_value_series(
-    stock: StockItem,
+    stock: EastMoneyStockItem,
     _type: ValueType,
 ) -> Optional[ValueSeries]:
     logger.info(f"[SayuStock] 获取东方财富{VALUE_NAME_MAP[_type]}历史估值: {stock['code']}")
-    requester_stock = cast(EastMoneyStockItem, stock)
     if _type == "pe":
-        raw_series = await EASTMONEY_REQUESTER.get_pe_series(requester_stock)
+        raw_series = await EASTMONEY_REQUESTER.get_pe_series(stock)
     elif _type == "pb":
-        raw_series = await EASTMONEY_REQUESTER.get_pb_series(requester_stock)
+        raw_series = await EASTMONEY_REQUESTER.get_pb_series(stock)
     else:
-        raw_series = await EASTMONEY_REQUESTER.get_dy_series(requester_stock)
+        raw_series = await EASTMONEY_REQUESTER.get_dy_series(stock)
     if isinstance(raw_series, str):
         logger.warning(raw_series)
         return None
 
-    series_data = cast(EastMoneyValueSeriesData, raw_series)
-    rows = series_data["rows"]
+    rows = raw_series["rows"]
     if not rows:
         return None
 
@@ -285,13 +279,10 @@ async def fetch_eastmoney_value_series(
                         "is_planned": bool(item.get("is_planned", False)),
                     }
                 )
-        sorted_items.append(
-            (
-                cast(pd.Timestamp, pd.Timestamp(str(row["date"]))),
-                float(row["value"]),
-                events_list,
-            )
-        )
+        row_date = pd.Timestamp(str(row["date"]))
+        # 构造器静态返回 Timestamp | NaTType；date 字段来自接口且已参与排序，恒为有效日期
+        assert isinstance(row_date, pd.Timestamp)
+        sorted_items.append((row_date, float(row["value"]), events_list))
     output_df = pd.DataFrame(
         {
             "date": [item[0] for item in sorted_items],
@@ -320,9 +311,9 @@ def draw_value_compare_chart(
     value_columns = [_safe_column_name(item) for item in series_list]
     labels = [item.label for item in series_list]
 
-    prices = cast(pd.DataFrame, merged.set_index("date").sort_index())
+    prices = merged.set_index("date").sort_index()
     # mplchart 需要 OHLC 骨架字段，用首条曲线占位即可，实际绘制依赖各列。
-    first_series = cast(pd.Series, prices[value_columns[0]].ffill().bfill())
+    first_series = _frame_column(prices, value_columns[0]).ffill().bfill()
     prices["open"] = first_series
     prices["high"] = first_series
     prices["low"] = first_series
@@ -353,18 +344,19 @@ def draw_value_compare_chart(
     )
     chart.add_legends()
 
-    fig = cast(Figure, chart.figure)
+    fig: Figure = chart.figure
     fig.set_facecolor(BG_COLOR)
-    ax = cast(Axes, chart.main_axes())
+    ax: Axes = chart.main_axes()
     _style_axis(ax)
     ax.set_ylabel(VALUE_NAME_MAP[_type])
     ax.tick_params(axis="x", rotation=20)
     for line in ax.lines:
         line.set_zorder(3)
 
-    value_frame = cast(pd.DataFrame, prices[value_columns])
-    data_min = float(cast(float, value_frame.min(skipna=True).min(skipna=True)))
-    data_max = float(cast(float, value_frame.max(skipna=True).max(skipna=True)))
+    value_frame = prices[value_columns]
+    assert isinstance(value_frame, pd.DataFrame), "列名列表索引恒返回 DataFrame"
+    data_min = float(value_frame.min(skipna=True).min(skipna=True))
+    data_max = float(value_frame.max(skipna=True).max(skipna=True))
     span = max(data_max - data_min, 1.0)
     padding = span * 0.08
     ax.set_ylim(data_min - padding, data_max + padding)
@@ -373,7 +365,7 @@ def draw_value_compare_chart(
     x_right = max(len(prices) - 1, 0)
     label_offsets: dict[int, int] = {}
     for index, column in enumerate(value_columns):
-        series = cast(pd.Series, prices[column]).dropna()
+        series = _frame_column(prices, column).dropna()
         if series.empty:
             continue
         last_timestamp = series.index[-1]
@@ -443,7 +435,9 @@ def _merge_value_series(series_list: list[ValueSeries]) -> pd.DataFrame:
     for item in series_list:
         column = _safe_column_name(item)
         # 只选取 date 和 value 列，避免 events 等其他列在 merge 时产生列名冲突
-        value_df = item.df[["date", "value"]].rename(columns={"value": column}).copy()
+        sub = item.df[["date", "value"]]
+        assert isinstance(sub, pd.DataFrame)
+        value_df = sub.rename(columns={"value": column}).copy()
         if merged is None:
             merged = value_df
         else:
@@ -452,10 +446,11 @@ def _merge_value_series(series_list: list[ValueSeries]) -> pd.DataFrame:
     if merged is None:
         return pd.DataFrame()
 
-    merged = cast(pd.DataFrame, merged.sort_values("date").reset_index(drop=True))
+    merged = merged.sort_values("date").reset_index(drop=True)
     value_columns = [_safe_column_name(item) for item in series_list]
-    filled_values = cast(pd.DataFrame, merged[value_columns].ffill().bfill())
-    merged[value_columns] = filled_values
+    value_frame = merged[value_columns]
+    assert isinstance(value_frame, pd.DataFrame), "列名列表索引恒返回 DataFrame"
+    merged[value_columns] = value_frame.ffill().bfill()
     return merged
 
 
@@ -479,7 +474,7 @@ def _annotate_dividend_events(
     会在纵向错开避免遮挡。同一只标的事件过多时，按贡献比例优先取 Top N。
     """
     max_event_labels_per_series = 8
-    index_to_position: dict[pd.Timestamp, int] = {cast(pd.Timestamp, ts): pos for pos, ts in enumerate(prices.index)}
+    index_to_position: dict[pd.Timestamp, int] = {ts: pos for pos, ts in enumerate(prices.index)}
 
     for series_index, (column, value_series) in enumerate(zip(value_columns, series_list)):
         if "events" not in value_series.df.columns:
@@ -491,10 +486,11 @@ def _annotate_dividend_events(
             if isinstance(ev, list) and len(ev) > 0:
                 event_count += 1
         logger.debug(
-            f"[SayuStock][DY-Annotate] {value_series.label} events列存在, 有events的行数={event_count}, 总行数={len(value_series.df)}"
+            f"[SayuStock][DY-Annotate] {value_series.label} events列存在, "
+            f"有events的行数={event_count}, 总行数={len(value_series.df)}"
         )
         color = MPL_COLORS[series_index % len(MPL_COLORS)]
-        y_values = cast(pd.Series, prices[column])
+        y_values = _frame_column(prices, column)
         y_max = float(y_values.max()) if not y_values.empty else data_max
         y_min = float(y_values.min()) if not y_values.empty else data_min
         vertical_pad = max((y_max - y_min) * 0.18, span * 0.04, 0.05)
@@ -522,11 +518,13 @@ def _annotate_dividend_events(
                     ex_ts = pd.Timestamp(str(ex_date))
                 except (ValueError, TypeError):
                     continue
+                if not isinstance(ex_ts, pd.Timestamp):
+                    continue
                 dedup_key = (str(ex_date), str(event.get("report_date", "")))
                 if dedup_key in seen_events:
                     continue
                 seen_events.add(dedup_key)
-                events_unique.append((cast(pd.Timestamp, ex_ts), cast(dict[str, Any], event)))
+                events_unique.append((ex_ts, event))
 
         # 按贡献比例从大到小排序，只标注贡献最大的若干个事件，防止图过密。
         events_unique.sort(
@@ -629,6 +627,7 @@ def _ai_return_value_compare(
         latest_values: list[tuple[str, float]] = []
         for item in series_list:
             values = item.df["value"]
+            assert isinstance(values, pd.Series)
             latest_row = item.df.iloc[-1]
             first_row = item.df.iloc[0]
             latest_value = float(latest_row["value"])

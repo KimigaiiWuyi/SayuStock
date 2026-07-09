@@ -11,19 +11,19 @@
     main = await EASTMONEY_REQUESTER.get_main_financial("600519")
 """
 
-from typing import Any, Dict, List, Literal, Optional, Union
+from typing import Any, Dict, List, Literal, Optional
 
 from gsuid_core.logger import logger
 
-from .stock.utils import async_file_cache
 from .eastmoney import EASTMONEY_REQUESTER  # noqa: F401  复用单例
+from .stock.utils import async_file_cache
 
 # 报表类型字面量
 FinanceReport = Literal[
-    "RPT_F10_FINANCE_GINCOMEDATA",      # 利润表
-    "RPT_F10_FINANCE_GBALANCEATA",      # 资产负债表
-    "RPT_F10_FINANCE_GCASHFLOWSTA",     # 现金流量表
-    "RPT_F10_FINANCE_MAINFINADATA",     # 主要财务指标
+    "RPT_F10_FINANCE_GINCOMEDATA",  # 利润表
+    "RPT_F10_FINANCE_GBALANCEATA",  # 资产负债表
+    "RPT_F10_FINANCE_GCASHFLOWSTA",  # 现金流量表
+    "RPT_F10_FINANCE_MAINFINADATA",  # 主要财务指标
 ]
 
 # 缓存用 sector key
@@ -170,20 +170,30 @@ async def get_financial_snapshot(code: str) -> Dict[str, Any]:
     # 列出 main_financial 接口真实给到的字段（不管值是不是 None）——
     # 让 LLM 知道某字段为 None 是"接口没这列"还是"这期没数据"。
     all_target_keys = [
-        "ROEJQ", "TOTALOPERATEREVETZ", "PARENTNETPROFITTZ",
-        "XSMLL", "XSJLL", "ZCFZL", "EPSJB", "BPS", "NET_INTEREST_MARGIN",
+        "ROEJQ",
+        "TOTALOPERATEREVETZ",
+        "PARENTNETPROFITTZ",
+        "XSMLL",
+        "XSJLL",
+        "ZCFZL",
+        "EPSJB",
+        "BPS",
+        "NET_INTEREST_MARGIN",
     ]
     result["_raw_keys_present"] = sorted(
-        k for k in all_target_keys
-        if latest.get(k) is not None and latest.get(k) != "" and latest.get(k) != "-"
+        k for k in all_target_keys if latest.get(k) is not None and latest.get(k) != "" and latest.get(k) != "-"
     )
     # 数据缺口：列出所有 None 的关键字段，让 LLM 在决策时知道
     gap_candidates = [
-        "roe", "revenue_yoy", "profit_yoy", "gross_margin",
-        "net_margin", "debt_ratio", "eps", "bps", "net_interest_margin",
+        "roe",
+        "revenue_yoy",
+        "profit_yoy",
+        "gross_margin",
+        "net_margin",
+        "debt_ratio",
+        "eps",
+        "bps",
+        "net_interest_margin",
     ]
-    result["_gap"] = sorted(
-        k for k in gap_candidates
-        if k in result and result[k] is None
-    )
+    result["_gap"] = sorted(k for k in gap_candidates if k in result and result[k] is None)
     return result

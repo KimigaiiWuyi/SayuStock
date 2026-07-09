@@ -1,5 +1,5 @@
 import json
-from typing import Any, Dict, Tuple, Union, Literal, Optional, cast
+from typing import Any, Dict, Tuple, Union, Literal, Optional
 
 from aiohttp import (
     FormData,
@@ -54,7 +54,7 @@ async def get_token():
             # 获取所有 Cookie
             cookies = await context.cookies()
             logger.debug(f"[SayuStock] 获取Cookie: {cookies}")
-            cl = [f"{cookie['name']}={cookie['value']}" for cookie in cookies]  # type: ignore # noqa: E501
+            cl = [f"{cookie['name']}={cookie['value']}" for cookie in cookies if "name" in cookie and "value" in cookie]
             XUEQIU_TOKEN = ";".join(cl)
             _HEADER["Cookie"] = XUEQIU_TOKEN
             logger.debug(f"[SayuStock] 设置Cookie: {XUEQIU_TOKEN}")
@@ -82,8 +82,12 @@ async def get_news_list(
     data = await stock_request(NEWS_API, params=params)
     if isinstance(data, int):
         return data
-    data = cast(XueQiu7x24, data)
-    return data
+    # 显式按 TypedDict 结构取值：接口字段缺失时立即 KeyError，而非默默透传脏数据
+    return XueQiu7x24(
+        next_max_id=data["next_max_id"],
+        items=data["items"],
+        next_id=data["next_id"],
+    )
 
 
 async def get_news(
@@ -99,7 +103,6 @@ async def get_news(
         data = await get_news_list(max_id=_max_id)
         if isinstance(data, int):
             return data
-        data = cast(XueQiu7x24, data)
 
         if not data["items"]:
             break

@@ -3,10 +3,10 @@
 
 import asyncio
 from io import BytesIO
-from typing import TypeVar, Protocol, ParamSpec, cast
+from typing import TypeVar, ParamSpec
 from pathlib import Path
 from datetime import datetime, timedelta
-from collections.abc import Callable, Sequence, Awaitable
+from collections.abc import Callable, Sequence
 
 import numpy as np
 import pandas as pd
@@ -26,19 +26,13 @@ from mplchart.indicators import CMF, RSI, SMA, MACD, BBANDS  # noqa: E402
 from mplchart.primitives import Pane, HLine, Price, Volume, BarPlot, LinePlot, Candlesticks  # noqa: E402
 from matplotlib.offsetbox import HPacker, TextArea, AnnotationBbox  # noqa: E402
 
-from gsuid_core.logger import logger as _logger
+from gsuid_core.logger import logger
 from gsuid_core.utils.fonts.fonts import FONT_ORIGIN_PATH
-from gsuid_core.utils.image.convert import convert_img as _convert_img
-from gsuid_core.ai_core.trigger_bridge import ai_return as _ai_return
+from gsuid_core.utils.image.convert import convert_img
+from gsuid_core.ai_core.trigger_bridge import ai_return
 
 from .data import CLOUDMAP_DATA_SERVICE
 from .render_data import (
-    MultiStockItem,
-    KlineRenderData,
-    CompareRenderData,
-    CloudmapRenderData,
-    MultiStockRenderData,
-    SingleStockRenderData,
     build_kline_render_data,
     build_compare_render_data,
     build_cloudmap_render_data,
@@ -47,31 +41,13 @@ from .render_data import (
 )
 from ..utils.constant import ErroText
 from ..utils.stock.utils import get_file
-from ..stock_config.stock_config import STOCK_CONFIG as _STOCK_CONFIG
-
-
-class _LoggerProtocol(Protocol):
-    def info(self, message: object) -> None: ...
-
-
-class _ConfigItemProtocol(Protocol):
-    data: int
-
-
-class _StockConfigProtocol(Protocol):
-    def get_config(self, key: str) -> _ConfigItemProtocol: ...
-
+from ..stock_config.stock_config import STOCK_CONFIG
 
 BotSendContent = str | bytes
 DrawResult = str | Image.Image
 JsonDict = dict[str, object]
 P = ParamSpec("P")
 R = TypeVar("R", bound=DrawResult)
-
-logger = cast(_LoggerProtocol, _logger)
-convert_img = cast(Callable[[bytes], Awaitable[bytes]], _convert_img)
-ai_return = cast(Callable[[str], None], _ai_return)
-STOCK_CONFIG = cast(_StockConfigProtocol, _STOCK_CONFIG)
 
 UP_COLOR = "#e74c3c"
 DOWN_COLOR = "#00b050"
@@ -118,7 +94,7 @@ def _dict_value(data: JsonDict, key: str, default: object) -> object:
 
 def _as_dict(value: object) -> JsonDict:
     if isinstance(value, dict):
-        return cast(JsonDict, value)
+        return {str(key): item for key, item in value.items()}
     return {}
 
 
@@ -150,14 +126,21 @@ def _series_from_value(value: object) -> pd.Series:
 
 
 def _numeric_series(value: object, *, fill_value: float | None = None) -> pd.Series:
-    series = cast(pd.Series, pd.to_numeric(_series_from_value(value), errors="coerce"))
+    series = pd.to_numeric(_series_from_value(value), errors="coerce")
+    assert isinstance(series, pd.Series), "to_numeric(Series) 恒返回 Series"
     if fill_value is None:
         return series
-    return cast(pd.Series, series.fillna(fill_value))
+    return series.fillna(fill_value)
 
 
 def _datetime_series(value: object) -> pd.Series:
-    return cast(pd.Series, pd.to_datetime(_series_from_value(value), errors="coerce"))
+    return pd.to_datetime(_series_from_value(value), errors="coerce")
+
+
+def _frame_column(df: pd.DataFrame, key: str) -> pd.Series:
+    column = df[key]
+    assert isinstance(column, pd.Series), f"列 {key} 存在重复标签"
+    return column
 
 
 def _timestamp_from_value(value: object) -> pd.Timestamp | None:
@@ -404,9 +387,8 @@ def draw_single_kline_chart(raw_data: JsonDict, sp: str | None = None) -> DrawRe
     data = build_kline_render_data(raw_data)
     if isinstance(data, str):
         return data
-    kline = cast(KlineRenderData, data)
-    chart_df = cast(pd.DataFrame, kline.chart_df.copy())
-    chart_df = cast(pd.DataFrame, chart_df.dropna(subset=["date", "open", "high", "low", "close"]))
+    kline = data
+    chart_df = kline.chart_df.copy().dropna(subset=["date", "open", "high", "low", "close"])
     if chart_df.empty:
         return ErroText["notData"]
 
@@ -424,12 +406,15 @@ def draw_single_kline_chart(raw_data: JsonDict, sp: str | None = None) -> DrawRe
         },
         index=pd.DatetimeIndex(np.asarray(dates[valid_mask]), name="date"),
     )
-    prices = cast(pd.DataFrame, prices.dropna(subset=["open", "high", "low", "close"]))
+    prices = prices.dropna(subset=["open", "high", "low", "close"])
     if prices.empty:
         return ErroText["notData"]
-    prices = cast(pd.DataFrame, prices.sort_index())
+    prices = prices.sort_index()
 
-    kdj_k, kdj_d, kdj_j = _compute_kdj(prices["high"], prices["low"], prices["close"])
+    high = _frame_column(prices, "high")
+    low = _frame_column(prices, "low")
+    close = _frame_column(prices, "close")
+    kdj_k, kdj_d, kdj_j = _compute_kdj(high, low, close)
     prices["kdj_k"] = kdj_k
     prices["kdj_d"] = kdj_d
     prices["kdj_j"] = kdj_j
@@ -478,7 +463,7 @@ def draw_single_kline_chart(raw_data: JsonDict, sp: str | None = None) -> DrawRe
     )
     chart.add_legends()
 
-    fig = cast(Figure, chart.figure)
+    fig: Figure = chart.figure
     fig.set_facecolor(BG_COLOR)
     axes = _axes_top_to_bottom(fig)
     for index, ax in enumerate(axes):
@@ -496,7 +481,7 @@ def draw_single_kline_chart(raw_data: JsonDict, sp: str | None = None) -> DrawRe
         if index == 1:
             ax.set_ylabel("换手率", color="#d77cff")
             ax.yaxis.set_major_formatter(FuncFormatter(_format_precise_percent_axis))
-            turnover_values = cast(pd.Series, prices["turnover"]).dropna()
+            turnover_values = _frame_column(prices, "turnover").dropna()
             turnover_max = float(turnover_values.max()) if not turnover_values.empty else 0.0
             turnover_limit = max(turnover_max * 1.35, 0.01)
             ax.set_ylim(-turnover_limit, turnover_limit)
@@ -609,9 +594,7 @@ def draw_single_kline_chart(raw_data: JsonDict, sp: str | None = None) -> DrawRe
             )
         elif index == 3:
             ax.set_ylabel("KDJ")
-            kdj_all = np.concatenate(
-                [np.asarray(prices[col], dtype=float) for col in ("kdj_k", "kdj_d", "kdj_j")]
-            )
+            kdj_all = np.concatenate([np.asarray(prices[col], dtype=float) for col in ("kdj_k", "kdj_d", "kdj_j")])
             finite_kdj = kdj_all[np.isfinite(kdj_all)]
             if finite_kdj.size:
                 kdj_low = min(0.0, float(np.min(finite_kdj)))
@@ -658,7 +641,7 @@ def draw_single_stock_chart(raw_data: JsonDict) -> DrawResult:
     data = build_single_stock_render_data(raw_data)
     if isinstance(data, str):
         return data
-    stock = cast(SingleStockRenderData, data)
+    stock = data
     df = stock.df
 
     datetimes = _datetime_series(df["dt"])
@@ -681,7 +664,7 @@ def draw_single_stock_chart(raw_data: JsonDict) -> DrawResult:
         },
         index=pd.DatetimeIndex(np.asarray(datetimes[valid_time_mask]), name="date"),
     )
-    prices = cast(pd.DataFrame, prices.sort_index())
+    prices = prices.sort_index()
 
     title_color = UP_COLOR if stock.gained >= 0 else DOWN_COLOR
     chart = Chart(
@@ -705,7 +688,7 @@ def draw_single_stock_chart(raw_data: JsonDict) -> DrawResult:
     )
     chart.add_legends()
 
-    fig = cast(Figure, chart.figure)
+    fig: Figure = chart.figure
     fig.set_facecolor(BG_COLOR)
     axes = _axes_top_to_bottom(fig)
     for index, ax in enumerate(axes):
@@ -792,12 +775,11 @@ def draw_multi_stock_chart(raw_data_list: list[JsonDict]) -> DrawResult:
     data = build_multi_stock_render_data(raw_data_list)
     if isinstance(data, str):
         return data
-    multi = cast(MultiStockRenderData, data)
+    multi = data
 
     stock_frames: list[pd.DataFrame] = []
     all_datetimes: list[pd.Timestamp] = []
-    for stock in multi.stocks:
-        item = cast(MultiStockItem, stock)
+    for item in multi.stocks:
         item_datetimes = _datetime_series(item.df["dt"])
         item_valid_time = item_datetimes.notna()
         item_frame = pd.DataFrame(
@@ -807,9 +789,9 @@ def draw_multi_stock_chart(raw_data_list: list[JsonDict]) -> DrawResult:
             },
             index=pd.DatetimeIndex(np.asarray(item_datetimes[item_valid_time]), name="date"),
         )
-        item_frame = cast(pd.DataFrame, item_frame.sort_index())
+        item_frame = item_frame.sort_index()
         stock_frames.append(item_frame)
-        all_datetimes.extend(cast(list[pd.Timestamp], item_frame.index.to_list()))
+        all_datetimes.extend(item_frame.index.to_list())
 
     if not all_datetimes:
         return ErroText["notData"]
@@ -821,19 +803,18 @@ def draw_multi_stock_chart(raw_data_list: list[JsonDict]) -> DrawResult:
     stock_colors: list[str] = []
     volume_total = pd.Series(0.0, index=full_index)
     has_valid_price = False
-    for stock_index, stock in enumerate(multi.stocks):
-        item = cast(MultiStockItem, stock)
+    for stock_index, item in enumerate(multi.stocks):
         item_frame = stock_frames[stock_index].reindex(full_index)
         col_name = f"stock_{stock_index}"
         vol_name = f"vol_{stock_index}"
-        item_change = cast(pd.Series, item_frame["percentage_change"])
-        item_volume_series = cast(pd.Series, item_frame["money"]).fillna(0)
+        item_change = _frame_column(item_frame, "percentage_change")
+        item_volume_series = _frame_column(item_frame, "money").fillna(0)
         has_valid_price = has_valid_price or bool(item_change.notna().any())
         price_columns[col_name] = np.asarray(item_change, dtype=float)
         volume_columns[vol_name] = np.asarray(item_volume_series, dtype=float)
         stock_labels.append(item.name)
         stock_colors.append(MPL_COLORS[stock_index % len(MPL_COLORS)])
-        volume_total = cast(pd.Series, volume_total.add(item_volume_series, fill_value=0))
+        volume_total = volume_total.add(item_volume_series, fill_value=0)
 
     if not has_valid_price:
         return ErroText["notData"]
@@ -852,7 +833,7 @@ def draw_multi_stock_chart(raw_data_list: list[JsonDict]) -> DrawResult:
         },
         index=full_index,
     )
-    prices = cast(pd.DataFrame, prices.sort_index())
+    prices = prices.sort_index()
     stock_volumes: list[NDArray[np.float64]] = []
     for stock_index in range(len(multi.stocks)):
         vol_name = f"vol_{stock_index}"
@@ -881,7 +862,7 @@ def draw_multi_stock_chart(raw_data_list: list[JsonDict]) -> DrawResult:
     )
     chart.add_legends()
 
-    fig = cast(Figure, chart.figure)
+    fig: Figure = chart.figure
     fig.set_facecolor(BG_COLOR)
     axes = _axes_top_to_bottom(fig)
     for ax_index, ax in enumerate(axes):
@@ -906,7 +887,7 @@ def draw_multi_stock_chart(raw_data_list: list[JsonDict]) -> DrawResult:
             x_right = max(len(prices) - 1, 0)
             label_offsets: dict[int, int] = {}
             for stock_index, col_name in enumerate(price_columns):
-                series = cast(pd.Series, prices[col_name]).dropna()
+                series = _frame_column(prices, col_name).dropna()
                 if series.empty:
                     continue
                 last_timestamp = series.index[-1]
@@ -1034,7 +1015,7 @@ def draw_compare_chart(raw_datas: list[JsonDict]) -> DrawResult:
     data = build_compare_render_data(raw_datas)
     if isinstance(data, str):
         return data
-    compare = cast(CompareRenderData, data)
+    compare = data
 
     price_frames: list[pd.DataFrame] = []
     compare_columns: list[str] = []
@@ -1052,11 +1033,10 @@ def draw_compare_chart(raw_datas: list[JsonDict]) -> DrawResult:
                 index=pd.DatetimeIndex(np.asarray(dates[valid_mask]), name="date"),
             )
         )
-    merged = pd.concat(price_frames, axis=1).sort_index()
-    merged = cast(pd.DataFrame, merged.dropna(how="all"))
+    merged = pd.concat(price_frames, axis=1).sort_index().dropna(how="all")
     if merged.empty:
         return ErroText["notData"]
-    first_series = cast(pd.Series, merged.iloc[:, 0].ffill().bfill())
+    first_series: pd.Series = merged.iloc[:, 0].ffill().bfill()
     prices = merged.copy()
     prices["open"] = first_series
     prices["high"] = first_series
@@ -1087,7 +1067,7 @@ def draw_compare_chart(raw_datas: list[JsonDict]) -> DrawResult:
     )
     chart.add_legends()
 
-    fig = cast(Figure, chart.figure)
+    fig: Figure = chart.figure
     fig.set_facecolor(BG_COLOR)
     axes = _axes_top_to_bottom(fig)
     for ax_index, ax in enumerate(axes):
@@ -1096,8 +1076,8 @@ def draw_compare_chart(raw_datas: list[JsonDict]) -> DrawResult:
         ax.tick_params(axis="x", rotation=20)
         if ax_index == 0:
             compare_values = merged[compare_columns]
-            data_min = float(cast(float, compare_values.min(skipna=True).min(skipna=True)))
-            data_max = float(cast(float, compare_values.max(skipna=True).max(skipna=True)))
+            data_min = float(compare_values.min(skipna=True).min(skipna=True))
+            data_max = float(compare_values.max(skipna=True).max(skipna=True))
             span = max(data_max - data_min, 1.0)
             padding = span * 0.08
             y_min = min(data_min - padding, 0.0)
@@ -1112,7 +1092,7 @@ def draw_compare_chart(raw_datas: list[JsonDict]) -> DrawResult:
             x_right = max(len(prices) - 1, 0)
             label_offsets: dict[int, int] = {}
             for compare_index, column_name in enumerate(compare_columns):
-                series = cast(pd.Series, prices[column_name]).dropna()
+                series = _frame_column(prices, column_name).dropna()
                 if series.empty:
                     continue
                 last_timestamp = series.index[-1]
@@ -1228,17 +1208,17 @@ def draw_cloudmap_chart(raw_data: JsonDict, market: str, sector: str | None = No
     data = build_cloudmap_render_data(raw_data, market, sector, layer)
     if isinstance(data, str):
         return data
-    cloudmap = cast(CloudmapRenderData, data)
+    cloudmap = data
 
     fig = plt.figure(figsize=(18, 18))
-    ax = cast(Axes, fig.add_subplot(1, 1, 1))
+    ax = fig.add_subplot(1, 1, 1)
     fig.set_facecolor(BG_COLOR)
     ax.set_facecolor(BG_COLOR)
     ax.set_xlim(0, 1)
     ax.set_ylim(0, 1)
     ax.axis("off")
 
-    items = cast(list[JsonDict], cloudmap.df.to_dict("records"))
+    items: list[JsonDict] = cloudmap.df.to_dict("records")
     for item, x, y, w, h in _split_rect(items, 0.0, 0.0, 1.0, 1.0):
         pad = 0.0025
         rx = x + pad
@@ -1307,7 +1287,7 @@ async def render_image_file(
 
     file = get_file(market, "png", sector, data_result.special_cache_key)
     if file.exists():
-        minutes = STOCK_CONFIG.get_config("mapcloud_refresh_minutes").data
+        minutes = int(STOCK_CONFIG.get_config("mapcloud_refresh_minutes").data)
         file_mod_time = datetime.fromtimestamp(file.stat().st_mtime)
         if datetime.now() - file_mod_time < timedelta(minutes=minutes):
             logger.info(f"[SayuStock] png文件在{minutes}分钟内，直接返回文件数据。")
@@ -1359,7 +1339,9 @@ def _ai_return_single_stock(raw_data: JsonDict | list[JsonDict], is_multi: bool 
             ai_return("【多股分时行情对比】\n" + "\n".join(parts))
         return
 
-    data = _as_dict(cast(JsonDict, raw_data)["data"])
+    if isinstance(raw_data, list):
+        return
+    data = _as_dict(raw_data["data"])
     result = (
         f"【{_dict_value(data, 'f58', 'N/A')} 分时行情】\n"
         f"最新价: {_dict_value(data, 'f43', 'N/A')}  涨跌幅: {_dict_value(data, 'f170', 'N/A')}%\n"

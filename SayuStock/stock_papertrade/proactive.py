@@ -48,11 +48,11 @@ from ..utils.database.papertrade_models import (
 # 类型：variant 文案模板选择
 # ============================================================
 Variant = Literal[
-    "auto",       # 自主决策（生产路径主用；action 自 latest_decision 推断）
+    "auto",  # 自主决策（生产路径主用；action 自 latest_decision 推断）
     "force_buy",  # 强制买入（仅 admin.send_dry_run 用）
-    "force_sell", # 强制平仓（仅 admin.send_dry_run 用）
-    "force_hold", # 强制持币（仅 admin.send_dry_run 用）
-    "kb_web",     # KB + Web 通路验证（仅 admin.send_dry_run 用）
+    "force_sell",  # 强制平仓（仅 admin.send_dry_run 用）
+    "force_hold",  # 强制持币（仅 admin.send_dry_run 用）
+    "kb_web",  # KB + Web 通路验证（仅 admin.send_dry_run 用）
 ]
 
 
@@ -86,26 +86,41 @@ _REASON_DISPLAY_LIMIT: int = 200
 # MAINFINADATA 接口里根本没有，永远 None，已从财报 snapshot 移除）。
 _INDICATOR_KEYS_WHITELIST: tuple[str, ...] = (
     # 财报（跨行业通用）
-    "roe", "revenue_yoy", "profit_yoy", "gross_margin", "net_margin",
-    "debt_ratio", "eps", "bps",
+    "roe",
+    "revenue_yoy",
+    "profit_yoy",
+    "gross_margin",
+    "net_margin",
+    "debt_ratio",
+    "eps",
+    "bps",
     # 财报（银行专属：净息差）
     "net_interest_margin",
     # 技术（已有）
-    "ma5", "ma20", "ma60", "rsi6", "rsi14", "macd_dif",
+    "ma5",
+    "ma20",
+    "ma60",
+    "rsi6",
+    "rsi14",
+    "macd_dif",
     # 技术（P0 新增）
-    "boll20_mid", "boll20_upper", "boll20_lower",
-    "boll20_bandwidth", "boll20_pct_b",
-    "boll60_mid", "boll60_bandwidth", "boll_opening_ratio_short_vs_mid",
-    "cci14", "bbi",
+    "boll20_mid",
+    "boll20_upper",
+    "boll20_lower",
+    "boll20_bandwidth",
+    "boll20_pct_b",
+    "boll60_mid",
+    "boll60_bandwidth",
+    "boll_opening_ratio_short_vs_mid",
+    "cci14",
+    "bbi",
 )
 
 
 # ============================================================
 # 副作用 Δ 工具（从 admin.py 抽出）
 # ============================================================
-async def snapshot_decision_state(
-    group_id: str, bot_id: str
-) -> Tuple[int, int, int]:
+async def snapshot_decision_state(group_id: str, bot_id: str) -> Tuple[int, int, int]:
     """拿当前群在该 bot 上的 ``(trades, positions, decisions)`` 计数快照。
 
     返回 ``(trades_count, positions_count, decisions_count)``；任何异常退回
@@ -188,8 +203,7 @@ def _indicator_summary(indicators: str) -> str:
 def _format_positions(positions: list[SayuPaperPosition], max_show: int = 5) -> str:
     """把持仓列表拼成"  - 000001 平安银行 × 100 @ ¥10.50"格式的多行文本。"""
     return "\n".join(
-        f"  - {pp.stock_code} {pp.stock_name} × {pp.qty:,} @ ¥{pp.avg_cost:.2f}"
-        for pp in positions[:max_show]
+        f"  - {pp.stock_code} {pp.stock_name} × {pp.qty:,} @ ¥{pp.avg_cost:.2f}" for pp in positions[:max_show]
     )
 
 
@@ -230,9 +244,7 @@ async def build_papertrade_proactive_text(
             ts = await _db.PaperTradeRepo.list_by_account(group_id, bot_id, limit=1)
             if ts:
                 latest_trade = ts[0]
-        positions_now: list[SayuPaperPosition] = (
-            await _db.PaperPositionRepo.list_by_account(group_id, bot_id)
-        )
+        positions_now: list[SayuPaperPosition] = await _db.PaperPositionRepo.list_by_account(group_id, bot_id)
     except Exception:
         return fallback_text
 

@@ -1,10 +1,10 @@
 """AI 模拟盘交易日历单测。"""
 
-import importlib.util
 import sys
-from datetime import datetime, time
-from pathlib import Path
+import importlib.util
 from types import ModuleType
+from pathlib import Path
+from datetime import datetime
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent.parent.parent
 sys.path.insert(0, str(REPO_ROOT))
@@ -17,9 +17,11 @@ def _ensure_pkg():
     if PKG_NAME in sys.modules:
         return
     pkg_spec = importlib.util.spec_from_file_location(
-        PKG_NAME, PKG_ROOT / "__init__.py",
+        PKG_NAME,
+        PKG_ROOT / "__init__.py",
         submodule_search_locations=[str(PKG_ROOT)],
     )
+    assert pkg_spec is not None
     pkg = importlib.util.module_from_spec(pkg_spec)
     pkg.__path__ = [str(PKG_ROOT)]
     sys.modules[PKG_NAME] = pkg
@@ -28,6 +30,7 @@ def _ensure_pkg():
         PKG_ROOT / "stock_papertrade" / "__init__.py",
         submodule_search_locations=[str(PKG_ROOT / "stock_papertrade")],
     )
+    assert sub_spec is not None
     sub = importlib.util.module_from_spec(sub_spec)
     sub.__path__ = [str(PKG_ROOT / "stock_papertrade")]
     sys.modules[f"{PKG_NAME}.stock_papertrade"] = sub
@@ -39,6 +42,7 @@ def _load(name: str, file_name: str) -> ModuleType:
         f"{PKG_NAME}.stock_papertrade.{name}",
         PKG_ROOT / "stock_papertrade" / file_name,
     )
+    assert spec is not None and spec.loader is not None
     mod = importlib.util.module_from_spec(spec)
     sys.modules[spec.name] = mod
     spec.loader.exec_module(mod)

@@ -1,7 +1,7 @@
 import json
 import random
 import asyncio
-from typing import Any, Dict, List, Tuple, Union, Literal, Optional, TypedDict, cast
+from typing import Any, Dict, List, Tuple, Union, Literal, Optional, TypedDict
 
 import pandas as pd
 from yarl import URL
@@ -708,11 +708,14 @@ class EastMoneyRequester:
         period_groups: Dict[str, Dict[str, Any]] = {}
         for ev in raw_events:
             ex_date_val: pd.Timestamp = ev["ex_date"]
-            if ev["report_date"] is not None:
-                report_key_ts = cast(pd.Timestamp, ev["report_date"])
+            report_date_val = ev["report_date"]
+            if isinstance(report_date_val, pd.Timestamp):
+                report_key_ts = report_date_val
             else:
                 # 接口未提供 REPORT_DATE 时，退化为以除权日所在年 1月1日 为报告期。
-                report_key_ts = cast(pd.Timestamp, pd.Timestamp(f"{ex_date_val.year}-01-01"))
+                fallback_ts = pd.Timestamp(f"{ex_date_val.year}-01-01")
+                assert isinstance(fallback_ts, pd.Timestamp), "固定格式日期恒可解析"
+                report_key_ts = fallback_ts
             key_str: str = report_key_ts.strftime("%Y-%m-%d")
             bucket = period_groups.setdefault(
                 key_str,

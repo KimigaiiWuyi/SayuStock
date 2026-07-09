@@ -1,5 +1,5 @@
 import asyncio
-from typing import Dict, List, Tuple, cast
+from typing import Dict, List, Tuple
 from pathlib import Path
 from datetime import datetime
 
@@ -166,8 +166,13 @@ async def draw_block(zs_diff: Dict, _type: str = "diff"):
     return zs_img
 
 
+def _ensure_dict(value: object) -> Dict:
+    assert isinstance(value, dict), "str 错误结果已在上游过滤"
+    return value
+
+
 async def draw_info_img(is_save: bool = False):
-    tasks = [
+    results = await asyncio.gather(
         get_mtdata("主要指数", pz=100),
         get_mtdata("行业板块", po=1),
         get_mtdata("行业板块", po=0),
@@ -176,9 +181,7 @@ async def draw_info_img(is_save: bool = False):
         get_gg("118.AU9999", "single-stock"),
         get_gg("220.TLM", "single-stock"),
         get_bar(),
-    ]
-
-    results = await asyncio.gather(*tasks)
+    )
 
     for result in results:
         if isinstance(result, str):
@@ -193,7 +196,7 @@ async def draw_info_img(is_save: bool = False):
         data_au,
         data_tlm,
         bars,
-    ) = cast(List[Dict], results)
+    ) = (_ensure_dict(result) for result in results)
 
     data_hy_z = data_hy_z["data"]["diff"]
     data_hy_f = data_hy_f["data"]["diff"]

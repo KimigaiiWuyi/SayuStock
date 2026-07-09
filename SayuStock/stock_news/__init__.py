@@ -1,8 +1,8 @@
 import random
 import asyncio
-from collections import deque
-from typing import Dict, Optional, Union
+from typing import Dict, Union, Optional
 from datetime import datetime
+from collections import deque
 
 from gsuid_core.sv import SV
 from gsuid_core.aps import scheduler

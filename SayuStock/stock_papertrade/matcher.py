@@ -7,8 +7,8 @@
   * 印花税：sell 时 amount × 0.0005  （万 5，卖出单边）
 """
 
-from dataclasses import dataclass
 from typing import Optional
+from dataclasses import dataclass
 
 # ============================================================
 # 费率常量

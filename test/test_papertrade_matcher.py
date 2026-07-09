@@ -9,11 +9,10 @@
 - 加权平均成本
 """
 
-import importlib.util
 import sys
-from pathlib import Path
+import importlib.util
 from types import ModuleType
-
+from pathlib import Path
 
 # 把仓库根目录加入 sys.path，以便能 import gsuid_core
 # 文件: E:/MyPyProject/gsuid_core/gsuid_core/plugins/SayuStock/test/test_xxx.py
@@ -33,6 +32,7 @@ def _load_submodule(name: str, file_name: str) -> ModuleType:
         f"{PKG_NAME}.stock_papertrade.{name}",
         PKG_ROOT / "stock_papertrade" / file_name,
     )
+    assert spec is not None and spec.loader is not None
     mod = importlib.util.module_from_spec(spec)
     sys.modules[spec.name] = mod
     spec.loader.exec_module(mod)
@@ -42,9 +42,11 @@ def _load_submodule(name: str, file_name: str) -> ModuleType:
 # 准备包对象
 if PKG_NAME not in sys.modules:
     pkg_spec = importlib.util.spec_from_file_location(
-        PKG_NAME, PKG_ROOT / "__init__.py",
+        PKG_NAME,
+        PKG_ROOT / "__init__.py",
         submodule_search_locations=[str(PKG_ROOT)],
     )
+    assert pkg_spec is not None
     pkg = importlib.util.module_from_spec(pkg_spec)
     pkg.__path__ = [str(PKG_ROOT)]
     sys.modules[PKG_NAME] = pkg
@@ -53,6 +55,7 @@ if PKG_NAME not in sys.modules:
         PKG_ROOT / "stock_papertrade" / "__init__.py",
         submodule_search_locations=[str(PKG_ROOT / "stock_papertrade")],
     )
+    assert sub_pkg is not None
     sub = importlib.util.module_from_spec(sub_pkg)
     sub.__path__ = [str(PKG_ROOT / "stock_papertrade")]
     sys.modules[f"{PKG_NAME}.stock_papertrade"] = sub
@@ -101,8 +104,8 @@ def test_calc_fee_sell():
     expected_commission = max(100_000 * COMMISSION_RATE, COMMISSION_MIN)
     expected_stamp = 100_000 * STAMP_TAX_RATE  # 50
     assert commission == expected_commission
-    assert abs(stamp_tax - 50) < 1e-6
-    assert abs(total - (expected_commission + 50)) < 1e-6
+    assert abs(stamp_tax - expected_stamp) < 1e-6
+    assert abs(total - (expected_commission + expected_stamp)) < 1e-6
     print("[OK] sell 费率计算正确（含印花税）")
 
 
@@ -230,8 +233,11 @@ def test_calc_new_avg_cost():
     # 原 100 股 @ 10 元 = 1000
     # 新买 200 股 @ 12 元 = 2400 + 5 费
     new_cost = calc_new_avg_cost(
-        old_qty=100, old_avg_cost=10.0,
-        buy_qty=200, buy_price=12.0, buy_fee=5.0,
+        old_qty=100,
+        old_avg_cost=10.0,
+        buy_qty=200,
+        buy_price=12.0,
+        buy_fee=5.0,
     )
     # (1000 + 2400 + 5) / 300 = 3405 / 300 = 11.35
     assert abs(new_cost - 11.35) < 1e-6
