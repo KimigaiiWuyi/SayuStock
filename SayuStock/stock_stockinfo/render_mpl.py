@@ -419,6 +419,14 @@ def draw_single_kline_chart(raw_data: JsonDict, sp: str | None = None) -> DrawRe
     prices["kdj_d"] = kdj_d
     prices["kdj_j"] = kdj_j
 
+    # BBI（多空指数）= (MA3 + MA6 + MA12 + MA24) / 4
+    prices["bbi"] = (
+        close.rolling(window=3).mean()
+        + close.rolling(window=6).mean()
+        + close.rolling(window=12).mean()
+        + close.rolling(window=24).mean()
+    ) / 4.0
+
     raw_info = _as_dict(raw_data["data"])
     raw_title_name = str(_dict_value(raw_info, "name", "")).strip()
     kline_title = f"{raw_title_name} {kline.freq_label}" if raw_title_name else kline.title
@@ -446,6 +454,7 @@ def draw_single_kline_chart(raw_data: JsonDict, sp: str | None = None) -> DrawRe
         SMA(10),
         BBANDS(20, 2.0),
         BBANDS(60, 3.0),
+        LinePlot(lambda frame: frame["bbi"], label="BBI", color="#ffd700", width=2.2),
         Pane("below", height_ratio=0.22),
         HLine(0, color=GRID_COLOR, linestyle="--"),
         LinePlot(lambda frame: frame["turnover"], label="换手率", color="#d77cff", width=1.5),
@@ -468,6 +477,10 @@ def draw_single_kline_chart(raw_data: JsonDict, sp: str | None = None) -> DrawRe
     axes = _axes_top_to_bottom(fig)
     for index, ax in enumerate(axes):
         _style_axis(ax)
+        # 副图之间的分隔线用金色实线加粗，提升各 pane 的区分度
+        if index > 0:
+            ax.spines["top"].set_color("#ffd700")
+            ax.spines["top"].set_linewidth(1.6)
         ax.tick_params(axis="x", rotation=16)
         ax.yaxis.label.set_color(AXIS_COLOR)
         if index < len(axes) - 1:
@@ -608,6 +621,25 @@ def draw_single_kline_chart(raw_data: JsonDict, sp: str | None = None) -> DrawRe
             ax.axhline(80, color=UP_COLOR, linestyle="--", alpha=0.65, linewidth=1.0)
             ax.axhline(50, color=GRID_COLOR, linestyle="--", alpha=0.5, linewidth=0.9)
             ax.axhline(20, color=DOWN_COLOR, linestyle="--", alpha=0.65, linewidth=1.0)
+
+            # KDJ 金叉/死叉区域：按 K/D 相对位置把整个副图切成红绿矩形块
+            mapper = chart.mapper
+            if mapper is not None:
+                xv, k_yv, d_yv = mapper.series_xy(prices["kdj_k"], prices["kdj_d"])
+                y_bottom, y_top = ax.get_ylim()
+                with np.errstate(invalid="ignore"):
+                    k_above_d: list[bool] = list(np.asarray(k_yv >= d_yv, dtype=bool))
+                    d_above_k: list[bool] = list(np.asarray(k_yv < d_yv, dtype=bool))
+                    ax.fill_between(
+                        xv, y_bottom, y_top,
+                        where=k_above_d,
+                        facecolor=UP_COLOR, alpha=0.18, interpolate=True, zorder=0.05,
+                    )
+                    ax.fill_between(
+                        xv, y_bottom, y_top,
+                        where=d_above_k,
+                        facecolor=DOWN_COLOR, alpha=0.18, interpolate=True, zorder=0.05,
+                    )
         elif index == len(axes) - 1:
             ax.set_ylabel("MACD")
         if index == len(axes) - 1:
@@ -1139,6 +1171,94 @@ def draw_compare_chart(raw_datas: list[JsonDict]) -> DrawResult:
                     zorder=6,
                 )
                 ax.add_artist(label_artist)
+
+            # 标注每条对比序列的最高点、最低点，并显示区间最大涨幅/回撤
+            for compare_index, column_name in enumerate(compare_columns):
+                series = _frame_column(prices, column_name).dropna()
+                if len(series) < 2:
+                    continue
+                stock_color = MPL_COLORS[compare_index % len(MPL_COLORS)]
+
+                # 全局最高/最低点用于打点和标注
+                max_value = float(series.max())
+                min_value = float(series.min())
+                max_timestamp = series.idxmax()
+                min_timestamp = series.idxmin()
+                max_positions = np.flatnonzero(prices.index == max_timestamp)
+                min_positions = np.flatnonzero(prices.index == min_timestamp)
+                max_position = int(max_positions[-1]) if len(max_positions) > 0 else 0
+                min_position = int(min_positions[-1]) if len(min_positions) > 0 else 0
+
+                # 用去掉首日（归一化基准 0%）后的内部极值判断走势形态，
+                # 避免起点天然成为全局最低/最高导致形态误判。
+                interior = series.iloc[1:]
+                if len(interior) < 2:
+                    continue
+                interior_max_value = float(interior.max())
+                interior_min_value = float(interior.min())
+                interior_max_timestamp = interior.idxmax()
+                interior_min_timestamp = interior.idxmin()
+                max_idx_loc = int(series.index.get_indexer(pd.Index([interior_max_timestamp]))[0])
+                min_idx_loc = int(series.index.get_indexer(pd.Index([interior_min_timestamp]))[0])
+                swing = interior_max_value - interior_min_value
+                is_up_trend = min_idx_loc < max_idx_loc
+
+                # 最高点
+                ax.scatter(
+                    [max_position],
+                    [max_value],
+                    color=stock_color,
+                    edgecolor=BG_COLOR,
+                    s=42,
+                    zorder=5,
+                )
+                # 极值点 tag 向左侧偏移，避免与右侧的“最后一点”标签重叠
+                x_tag_offset = -14
+                max_label = f"{compare_labels[compare_index]}\n涨幅 {max_value:+.2f}%"
+                if is_up_trend:
+                    max_label += f"\n区间最大涨幅 +{swing:.2f}%"
+                ax.annotate(
+                    max_label,
+                    xy=(max_position, max_value),
+                    xytext=(x_tag_offset, 14),
+                    textcoords="offset points",
+                    color=stock_color,
+                    fontsize=10,
+                    fontweight="bold",
+                    ha="center",
+                    va="bottom",
+                    bbox={"facecolor": BG_COLOR, "edgecolor": stock_color, "alpha": 0.72, "pad": 2.5},
+                    arrowprops={"arrowstyle": "-", "color": stock_color, "alpha": 0.75, "linewidth": 0.8},
+                    zorder=6,
+                )
+
+                # 最低点
+                ax.scatter(
+                    [min_position],
+                    [min_value],
+                    color=stock_color,
+                    edgecolor=BG_COLOR,
+                    s=42,
+                    zorder=5,
+                )
+                min_label = f"{compare_labels[compare_index]}\n跌幅 {min_value:+.2f}%"
+                if not is_up_trend:
+                    min_label += f"\n区间最大回撤 {swing:.2f}%"
+                ax.annotate(
+                    min_label,
+                    xy=(min_position, min_value),
+                    xytext=(x_tag_offset, -14),
+                    textcoords="offset points",
+                    color=stock_color,
+                    fontsize=10,
+                    fontweight="bold",
+                    ha="center",
+                    va="top",
+                    bbox={"facecolor": BG_COLOR, "edgecolor": stock_color, "alpha": 0.72, "pad": 2.5},
+                    arrowprops={"arrowstyle": "-", "color": stock_color, "alpha": 0.75, "linewidth": 0.8},
+                    zorder=6,
+                )
+
             ax.set_xlim(-1, x_right + 7)
             _apply_month_ticks(ax, prices.index)
             ax.tick_params(axis="x", rotation=20, labelbottom=True)
