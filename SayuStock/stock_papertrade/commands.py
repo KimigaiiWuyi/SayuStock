@@ -19,7 +19,7 @@ import datetime as _dt
 from gsuid_core.bot import Bot
 from gsuid_core.models import Event
 
-from . import db as _db, cross_group as _cross
+from . import db as _db, cross_group as _cross, account_scope as _scope
 from .sv import sv_papertrade
 from .render import draw_leaderboard, draw_account_view
 from .permissions import check_admin
@@ -219,15 +219,19 @@ async def _kick_immediate_decision(ev: Event, group_id: str, bot_id: str) -> Non
 
     # 跑 capagent（await）；成交时 papertrade_trade_insert 工具会**即时**推一行成交冒泡，
     # 决策代理最终只输出 <<NO_BROADCAST>>，故这里不再拍快照 / 算 Δ / 拼结构化播报。
+    #
+    # grant_write：这条路走 run_capability_agent 的 ad-hoc 分支，root_task_id 是现造的
+    # adhoc_*，对不上账户的 Kanban 树，不发票会被 _deny_write 拒掉（它本该能真实成交）。
     result: str = ""
     try:
-        result = await run_capability_agent(
-            profile_id="papertrade_decision_agent",
-            task=task_prompt,
-            ev=ev,
-            bot=None,  # bot 由 emit_proactive_message 内部 _resolve_active_bot(ev) 解析
-            session_id_suffix=f"init_decision_{group_id}",
-        )
+        with _scope.grant_write():
+            result = await run_capability_agent(
+                profile_id="papertrade_decision_agent",
+                task=task_prompt,
+                ev=ev,
+                bot=None,  # bot 由 emit_proactive_message 内部 _resolve_active_bot(ev) 解析
+                session_id_suffix=f"init_decision_{group_id}",
+            )
     except Exception as e:
         # 跑挂也走 fallback 文本推送，告诉群里"AI 决策失败"，避免静默失败
         logger.exception(f"[SayuStock][PaperTrade] papertrade_decision_agent 执行异常: {e}")
@@ -297,6 +301,20 @@ async def send_init_command(bot: Bot, ev: Event):
     group_id: str = str(ev.group_id)
     bot_id: str = ev.bot_id
 
+    # ── 共用模式（默认）：全服只有一个盘 ──
+    # 已有盘时别的群一律拒。否则会给同一个账户挂上第二棵周期树，两个决策代理
+    # 并发对同一个账本下单（position_upsert 是读-改-写，交错就把持仓算坏）。
+    if _scope.is_shared_mode():
+        home = await _scope.home_account_key()
+        if home is not None:
+            if home[0] != group_id:
+                return await bot.send(
+                    f"ℹ️ 模拟盘全服共用一个账户（开在群 {home[0]}），无法在本群新开。\n"
+                    f"本群可直接用「模拟盘查看」/「模拟盘收益」/「模拟盘记录」查询它。\n"
+                    f"如需每群各开各的，请在插件配置里打开「多群模拟盘」。"
+                )
+            group_id, bot_id = home
+
     # ── 可选：自定义初始资金（"模拟盘初始化 2000000"） ──
     initial_cash: float = 1_000_000.0
     raw_text: str = ev.text.strip() if ev.text else ""
@@ -362,6 +380,9 @@ async def send_init_command(bot: Bot, ev: Event):
     except Exception as e:
         return await bot.send(f"⚠️ 建账户失败: {type(e).__name__}: {e}")
 
+    # 第一个账户诞生 → 全局模式的账户键就钉在它上面，缓存必须重算
+    _scope.invalidate_home_cache()
+
     # ── 步骤 3+4+5+6：建 Kanban 两棵树 + APScheduler + 回填 root_id ──
     try:
         init_id, period_id = await _setup_papertrade_kanban_trees(bot, ev, group_id, bot_id)
@@ -371,6 +392,7 @@ async def send_init_command(bot: Bot, ev: Event):
             await _db.PaperAccountRepo.reset_account(group_id, bot_id)
         except Exception:
             pass
+        _scope.invalidate_home_cache()
         return await bot.send(f"⚠️ 初始化失败：{e}\n账户已自动回滚。请检查 gsuid_core.ai_core 是否就绪后重试。")
 
     # ── 步骤 7：fire-and-forget 立即踢 init + （开盘时）踢一次 decision ──
@@ -456,7 +478,10 @@ async def _kick_after_kanban_ready(ev: Event, group_id: str, bot_id: str, init_i
     ("模拟盘查看",),
 )
 async def send_view(bot: Bot, ev: Event):
-    img = await draw_account_view(str(ev.group_id), ev.bot_id)
+    gid, bid = await _scope.resolve_account_key(ev)
+    if not gid or not bid:
+        return await bot.send("ℹ️ 尚未开通模拟盘，请群主/管理员发送「模拟盘初始化」")
+    img = await draw_account_view(gid, bid)
     await bot.send(img)
 
 
@@ -501,11 +526,10 @@ async def send_pnl(bot: Bot, ev: Event):
         days = mapping[text]
         since = None if days is None else _dt.datetime.now() - _dt.timedelta(days=days)
 
-    agg = await _db.PaperTradeRepo.aggregate_pnl(
-        str(ev.group_id),
-        ev.bot_id,
-        since=since,
-    )
+    gid, bid = await _scope.resolve_account_key(ev)
+    if not gid or not bid:
+        return await bot.send("ℹ️ 尚未开通模拟盘，请群主/管理员发送「模拟盘初始化」")
+    agg = await _db.PaperTradeRepo.aggregate_pnl(gid, bid, since=since)
     period: str = text if text in ("总", "全部", "all") else f"近{text}"
     msg = (
         f"📊 模拟盘 · {period}盈亏\n"
@@ -524,11 +548,10 @@ async def send_pnl(bot: Bot, ev: Event):
     ("模拟盘记录",),
 )
 async def send_records(bot: Bot, ev: Event):
-    rows = await _db.PaperTradeRepo.list_by_account(
-        str(ev.group_id),
-        ev.bot_id,
-        limit=20,
-    )
+    gid, bid = await _scope.resolve_account_key(ev)
+    if not gid or not bid:
+        return await bot.send("ℹ️ 尚未开通模拟盘，请群主/管理员发送「模拟盘初始化」")
+    rows = await _db.PaperTradeRepo.list_by_account(gid, bid, limit=20)
     if not rows:
         return await bot.send("ℹ️ 暂无交易记录")
     lines: list[str] = ["【模拟盘 · 最近 20 笔交易】"]

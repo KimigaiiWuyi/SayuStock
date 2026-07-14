@@ -1,8 +1,24 @@
 from typing import Dict
 
-from gsuid_core.utils.plugins_config.models import GSC, GsIntConfig, GsStrConfig
+from gsuid_core.utils.plugins_config.models import (
+    GSC,
+    GsIntConfig,
+    GsStrConfig,
+    GsBoolConfig,
+)
 
 CONFIG_DEFAULT: Dict[str, GSC] = {
+    "papertrade_multi_group": GsBoolConfig(
+        "多群模拟盘",
+        "开启后每个群各开各的模拟盘（旧行为）。默认关闭 = 全服共用一个盘："
+        "任意群都能查询同一账户，且只有第一个开盘的群能开",
+        False,
+    ),
+    "papertrade_broadcast_group": GsStrConfig(
+        "模拟盘播报群号",
+        "共用模式下生效（即多群模拟盘关闭时）。填了就把成交播报推到该群；留空则推到开盘的那个原群",
+        "",
+    ),
     "mapcloud_viewport": GsIntConfig(
         "大盘云图分辨率",
         "截图的大盘云图分辨率",

@@ -26,7 +26,7 @@ from typing import Any
 from gsuid_core.bot import Bot
 from gsuid_core.models import Event
 
-from . import db as _db
+from . import db as _db, account_scope as _scope
 from .sv import sv_papertrade_admin
 from ..utils.database.papertrade_models import (
     SayuPaperTrade,
@@ -64,8 +64,9 @@ async def send_clear_all(bot: Bot, ev: Event):
     if not ev.group_id:
         return await bot.send("⚠️ 清理需要在群聊触发，私聊不支持。")
 
-    group_id: str = str(ev.group_id)
-    bot_id: str = ev.bot_id
+    # 全局模式下清的是那个钉死的账户，与命令在哪个群发的无关——否则在别的群发清盘
+    # 只会清一个空分区，用户还以为清干净了。
+    group_id, bot_id = await _scope.resolve_account_key(ev)
 
     # 顶层 lazy import；失败时给清楚报错
     try:
@@ -113,6 +114,7 @@ async def send_clear_all(bot: Bot, ev: Event):
     deleted: dict[str, int] = {}
     try:
         deleted = await _db.PaperAccountRepo.reset_account(group_id, bot_id)
+        _scope.invalidate_home_cache()  # 账户没了，钉死的键必须重算
         db_lines.append("✅ PaperAccountRepo.reset_account OK")
         if not deleted:
             db_lines.append("   (各表均无记录可清)")
@@ -467,13 +469,16 @@ async def send_dry_run(bot: Bot, ev: Event):
             f"initial_cash=1000000, mode='balanced', initialized_by='{ev.user_id} (DRY_RUN)'。"
             f"完成后简短报告：账户 id / cash / mode。"
         )
-        return await run_capability_agent(
-            profile_id="papertrade_setup_agent",
-            task=task,
-            ev=ev,
-            bot=bot,
-            session_id_suffix=f"dry_run_init_{group_id}",
-        )
+        # grant_write：压测走 ad-hoc capagent，root_task_id 对不上账户的 Kanban 树，
+        # 不显式发票会被 _deny_write 拒掉（压测本来就要真写库）。
+        with _scope.grant_write():
+            return await run_capability_agent(
+                profile_id="papertrade_setup_agent",
+                task=task,
+                ev=ev,
+                bot=bot,
+                session_id_suffix=f"dry_run_init_{group_id}",
+            )
 
     try:
         setup_result = await _run_setup_agent()
@@ -557,13 +562,14 @@ async def send_dry_run(bot: Bot, ev: Event):
         baseline = await snapshot_decision_state(group_id, bot_id)
 
         try:
-            result = await run_capability_agent(
-                profile_id="papertrade_decision_agent",
-                task=task,
-                ev=ev,
-                bot=bot,
-                session_id_suffix=session_suffix,
-            )
+            with _scope.grant_write():
+                result = await run_capability_agent(
+                    profile_id="papertrade_decision_agent",
+                    task=task,
+                    ev=ev,
+                    bot=bot,
+                    session_id_suffix=session_suffix,
+                )
             lines.append("✅ run_capability_agent 返回")
             lines.append(f"   profile = papertrade_decision_agent（{head_label}）")
             lines.append("   返回（前 200 字符）:")

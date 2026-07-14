@@ -132,6 +132,25 @@ class PaperAccountRepo:
 
     @classmethod
     @with_session
+    async def get_earliest(cls, session: AsyncSession) -> Optional[SayuPaperAccount]:
+        """全库最早建的那个账户（全局模拟盘把账户键钉死在它上面）。
+
+        用 created_at asc + id asc 双排序：老库 created_at 可能为 NULL，
+        单靠它排序在各方言下 NULL 的位置不一致，id 兜底保证结果稳定唯一。
+        """
+        stmt = (
+            select(SayuPaperAccount)
+            .order_by(
+                col(col(SayuPaperAccount.created_at)).asc(),
+                col(col(SayuPaperAccount.id)).asc(),
+            )
+            .limit(1)
+        )
+        result = await session.execute(stmt)
+        return result.scalar_one_or_none()
+
+    @classmethod
+    @with_session
     async def list_enabled(cls, session: AsyncSession) -> List[SayuPaperAccount]:
         stmt = select(SayuPaperAccount).where(col(col(SayuPaperAccount.enabled)) == 1)
         result = await session.execute(stmt)

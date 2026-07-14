@@ -14,7 +14,12 @@
 - ~~papertrade_account_create~~ —— 与 trigger ``send_init_command`` 重叠；统一走 trigger
 - ~~papertrade_account_update~~ —— 死代码（没有命令 / 流程使用）
 
-**所有 group_id 参数**：留空时从 ctx.deps.ev.group_id 推断。
+**所有 group_id 参数**：默认（全服共用一个盘）一律解析到那个钉死的账户，与提问
+来自哪个群无关；开了 ``papertrade_multi_group`` 才退回从 ctx.deps.ev.group_id 推断。
+
+**写工具的两道闸**（见 ``account_scope``）：``visible_when`` 只是不把工具端到模型
+面前，真正鉴权的是工具体内的 ``_deny_write`` —— 只有账户自己的 Kanban 心跳树、
+或 ``grant_write()`` 显式授权的路径能写，用户指使一律拒。
 """
 
 import json
@@ -25,8 +30,9 @@ from pydantic_ai import RunContext
 
 from gsuid_core.ai_core.models import ToolContext
 from gsuid_core.ai_core.register import ai_tools
+from gsuid_core.ai_core.planning.runtime import PlanRunContext, get_plan_context
 
-from . import db
+from . import db, account_scope
 from .indicators import klines_to_df, klines_to_df_mins, compute_indicators
 from .quote_service import quote_service
 from .trading_calendar import (
@@ -159,32 +165,57 @@ class _TradingDayView(TypedDict):
 # ============================================================
 # 上下文推断辅助
 # ============================================================
-def _resolve_group_id(ctx: RunContext[ToolContext], group_id: str = "") -> str:
-    if group_id:
-        return str(group_id)
-    ev = ctx.deps.ev
-    return str(ev.group_id) if ev and ev.group_id else ""
+# 写工具的 profile 白名单。**逐个枚举而非前缀匹配**：``startswith("papertrade_")``
+# 意味着任何人新注册一个叫 papertrade_xxx 的画像就白拿下单权限。
+_WRITE_AGENT_PROFILES: frozenset[str] = frozenset(
+    {
+        "papertrade_setup_agent",
+        "papertrade_decision_agent",
+        "papertrade_snapshot_agent",
+        "papertrade_pool_refresh_agent",
+        "papertrade_reporter_agent",
+    }
+)
 
 
-def _resolve_bot_id(ctx: RunContext[ToolContext], bot_id: str = "") -> str:
-    if bot_id:
-        return bot_id
+async def _resolve_scope(
+    ctx: RunContext[ToolContext],
+    group_id: str = "",
+    bot_id: str = "",
+) -> tuple[str, str]:
+    """解析本次调用的账户键。共用模式（默认）下恒为那个钉死的账户，与提问来自哪个群无关。
+
+    显式传入的 group_id / bot_id 只在多群模式下生效（跨群查询用）；共用模式下
+    忽略它们 —— 全服只有一个盘，让 LLM 传别的群号只会查出空账户。
+    """
+    if account_scope.is_shared_mode():
+        return await account_scope.resolve_account_key(ctx.deps.ev)
     ev = ctx.deps.ev
-    return ev.bot_id if ev and ev.bot_id else ""
+    gid: str = str(group_id) if group_id else (str(ev.group_id) if ev and ev.group_id else "")
+    bid: str = bot_id if bot_id else (ev.bot_id if ev and ev.bot_id else "")
+    return (gid, bid)
+
+
+def _current_profile() -> str:
+    """当前执行体画像；不在任务上下文里（如主 persona 直聊）时为空串。"""
+    plan_ctx: PlanRunContext | None = get_plan_context()
+    return plan_ctx.agent_profile if plan_ctx is not None else ""
 
 
 def _visible_to_papertrade_agent(ctx: RunContext[ToolContext]) -> bool:
-    """仅 papertrade_*_agent 可见（visible_when）"""
-    try:
-        from gsuid_core.ai_core.planning.runtime import get_plan_context
+    """写工具的展示层过滤（visible_when）。
 
-        plan_ctx: object | None = get_plan_context()
-    except Exception:
-        return False
-    if plan_ctx is None:
-        return False
-    profile: str = getattr(plan_ctx, "agent_profile", "") or ""
-    return profile.startswith("papertrade_") or profile == "stock_agent"
+    只是"不把工具端到模型面前"，**不是鉴权** —— profile 能被主 persona 临时委派
+    出来。真正的闸门是每个写工具体内的 ``_deny_write``。
+    """
+    return _current_profile() in _WRITE_AGENT_PROFILES
+
+
+async def _deny_write(ctx: RunContext[ToolContext], group_id: str, bot_id: str) -> str:
+    """写工具的执行层鉴权；放行返回 ``""``，否则返回给 LLM 的拒绝理由。"""
+    plan_ctx: PlanRunContext | None = get_plan_context()
+    root_task_id: str = plan_ctx.root_task_id if plan_ctx is not None else ""
+    return await account_scope.deny_write_reason(root_task_id, group_id, bot_id)
 
 
 # ============================================================
@@ -222,10 +253,14 @@ async def _broadcast_fill(
     ``<<NO_BROADCAST>>``）。每次 ``papertrade_trade_insert`` 成功即调一次，保证
     "全部买卖都在群里公布"，且只公布这一行、不带任何决策推理 / 账户汇总。
     失败只记 debug、绝不抛出（已落库的成交不能被播报失败连累）。
+
+    投递目标由 ``account_scope.broadcast_event`` 决定：配了播报群就改向到那儿，
+    没配就还是推到触发上下文的群（老行为）。配置读时取值，改完立刻生效。
     """
     ev = ctx.deps.ev
     if ev is None:
         return
+    ev = await account_scope.broadcast_event(ev)
     name: str = stock_name or stock_code
     if side == "sell":
         sign: str = "+" if realized_pnl >= 0 else "-"
@@ -409,8 +444,7 @@ async def papertrade_account_query(
         group_id: 群号；留空用当前会话群号
         bot_id: 平台；留空用当前 bot
     """
-    gid: str = _resolve_group_id(ctx, group_id)
-    bid: str = _resolve_bot_id(ctx, bot_id)
+    gid, bid = await _resolve_scope(ctx, group_id, bot_id)
     if not gid or not bid:
         return "⚠️ 无法确定 group_id/bot_id"
     acc = await db.PaperAccountRepo.get(gid, bid)
@@ -481,8 +515,7 @@ async def papertrade_position_list(
         ``"db"``   = DB 有缓存但超过 max_stale_seconds（默认 60s）
         ``"cost"`` = 从未刷过价，用 avg_cost 兜底
     """
-    gid: str = _resolve_group_id(ctx, group_id)
-    bid: str = _resolve_bot_id(ctx, bot_id)
+    gid, bid = await _resolve_scope(ctx, group_id, bot_id)
     if not gid or not bid:
         return "⚠️ 无法确定 group_id/bot_id"
 
@@ -529,8 +562,7 @@ async def papertrade_trade_list(
     问「你都买卖过什么 / 最近成交 / 交易记录 / 某只股什么时候买的」走这个。
     数据在 SQLModel 流水表，**不在** ``record:`` 集合 / ``state_*``。
     """
-    gid: str = _resolve_group_id(ctx, group_id)
-    bid: str = _resolve_bot_id(ctx, bot_id)
+    gid, bid = await _resolve_scope(ctx, group_id, bot_id)
     if not gid or not bid:
         return "⚠️ 无法确定 group_id/bot_id"
     rows = await db.PaperTradeRepo.list_by_account(
@@ -590,8 +622,7 @@ async def papertrade_decision_list(
     返回 [{id, action, stock_code, stock_name, score, reason, blocked_by, trade_id,
     indicators, decided_at}, ...]。
     """
-    gid: str = _resolve_group_id(ctx, group_id)
-    bid: str = _resolve_bot_id(ctx, bot_id)
+    gid, bid = await _resolve_scope(ctx, group_id, bot_id)
     if not gid or not bid:
         return "⚠️ 无法确定 group_id/bot_id"
     rows = await db.PaperDecisionRepo.list_recent(
@@ -630,8 +661,7 @@ async def papertrade_watchlist_list(
     bot_id: str = "",
 ) -> str:
     """查询某群群友关注列表（公开）。"""
-    gid: str = _resolve_group_id(ctx, group_id)
-    bid: str = _resolve_bot_id(ctx, bot_id)
+    gid, bid = await _resolve_scope(ctx, group_id, bot_id)
     if not gid or not bid:
         return "⚠️ 无法确定 group_id/bot_id"
     rows = await db.PaperWatchlistRepo.list_by_account(gid, bid)
@@ -662,8 +692,7 @@ async def papertrade_agent_pool_list(
     决策代理在每轮开头调此工具候选池充盈度，不足时调 papertrade_candidate_refresh
     增量补充；避免永远只看持仓股、不再找新标的的"锚定陷阱"。
     """
-    gid: str = _resolve_group_id(ctx, group_id)
-    bid: str = _resolve_bot_id(ctx, bot_id)
+    gid, bid = await _resolve_scope(ctx, group_id, bot_id)
     if not gid or not bid:
         return "⚠️ 无法确定 group_id/bot_id"
     rows = await db.PaperAgentPoolRepo.list_by_account(gid, bid)
@@ -723,8 +752,10 @@ async def papertrade_decision_insert(
 
       - ``blocked_by`` —— 风控拦截原因；hold 不带风控时传 ''。
     """
-    gid: str = _resolve_group_id(ctx)
-    bid: str = _resolve_bot_id(ctx)
+    gid, bid = await _resolve_scope(ctx)
+    denied: str = await _deny_write(ctx, gid, bid)
+    if denied:
+        return denied
 
     # 防御：reason 含异常控制字符（\r / \t / 全角空格连用）时归一化，
     #     且长度上限 200 字（超长截断+省略号），避免下游播报挤糊
@@ -838,8 +869,10 @@ async def papertrade_trade_insert(
     # + 现金维护都在 executor 里，模拟盘/实盘可切换）；本工具只透传 + 回传说明。
     from .trade_executor import get_executor
 
-    gid: str = _resolve_group_id(ctx)
-    bid: str = _resolve_bot_id(ctx)
+    gid, bid = await _resolve_scope(ctx)
+    denied: str = await _deny_write(ctx, gid, bid)
+    if denied:
+        return denied
     result = await get_executor().record_trade(
         group_id=gid,
         bot_id=bid,
@@ -905,8 +938,10 @@ async def papertrade_position_upsert(
     # 交易执行统一走 TradeExecutor 抽象层（模拟盘/实盘可切换）。
     from .trade_executor import get_executor
 
-    gid: str = _resolve_group_id(ctx)
-    bid: str = _resolve_bot_id(ctx)
+    gid, bid = await _resolve_scope(ctx)
+    denied: str = await _deny_write(ctx, gid, bid)
+    if denied:
+        return denied
     pos_id: int = await get_executor().update_position(
         group_id=gid,
         bot_id=bid,
@@ -981,10 +1016,12 @@ async def papertrade_candidate_refresh(
         _from_news_extract_tickers,
     )
 
-    gid: str = _resolve_group_id(ctx, group_id)
-    bid: str = _resolve_bot_id(ctx, bot_id)
+    gid, bid = await _resolve_scope(ctx, group_id, bot_id)
     if not gid or not bid:
         return "⚠️ 无法确定 group_id/bot_id"
+    denied: str = await _deny_write(ctx, gid, bid)
+    if denied:
+        return denied
 
     tgt: int = target_size if target_size > 0 else POOL_TARGET_SIZE
     tgt = max(5, min(tgt, 50))
@@ -1239,10 +1276,12 @@ async def papertrade_snapshot_write(
     这是**纯记账**，不做任何买卖 / 撮合 / 决策，收盘后（非交易时段）调用。
     trade_date 取东八区当天。
     """
-    gid: str = _resolve_group_id(ctx, group_id)
-    bid: str = _resolve_bot_id(ctx, bot_id)
+    gid, bid = await _resolve_scope(ctx, group_id, bot_id)
     if not gid or not bid:
         return "⚠️ 无法确定 group_id/bot_id"
+    denied: str = await _deny_write(ctx, gid, bid)
+    if denied:
+        return denied
 
     acc = await db.PaperAccountRepo.get(gid, bid)
     if not acc:
