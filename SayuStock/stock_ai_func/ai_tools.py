@@ -10,8 +10,11 @@ from datetime import datetime
 
 from pydantic_ai import RunContext
 
+from gsuid_core.logger import logger
+from gsuid_core.segment import MessageSegment
 from gsuid_core.ai_core.models import ToolContext
 from gsuid_core.ai_core.register import ai_tools
+from gsuid_core.utils.html_render import render_md_to_bytes
 
 from ..utils.get_OKX import get_all_crypto_price
 from ..utils.request import get_news
@@ -501,4 +504,61 @@ async def get_stock_change_rate(
         f"起始日期开盘价: {start_val:.3f}\n"
         f"结束日期收盘价: {end_val:.3f}\n"
         f"区间涨跌幅: {change_rate:+.2f}%"
+    )
+
+
+@ai_tools(category="common", capability_domain="股票研报出图")
+async def send_stock_report_image(
+    ctx: RunContext[ToolContext],
+    markdown_content: str,
+    title: str = "",
+    max_width: int = 760,
+) -> str:
+    """把一整篇股票研报 / 复盘 / 看盘分析渲染成**一张图片**发出去（防群聊刷屏）。
+
+    ⚠️ 只要你要输出的股票内容属于"长篇 + 多段落 + 含 markdown 表格 / 多个小标题"
+    （典型：个股研报、持仓复盘、大盘看盘、主线分析、关键价位表、建仓方案……），
+    就**必须调用本工具出图**：把研报的**完整 markdown 正文**交给 ``markdown_content``，
+    框架会用 md→图片渲染一次性发送。**不要**再把研报正文用纯文字发出来——群聊会按
+    空行（``\\n\\n``）把长文本拆成几十条消息逐条推送，这正是"一篇研报刷屏几十次"的根因。
+
+    调用本工具**之后**，你的最终文字回复只保留符合角色口癖的**一句话点评**
+    （例如"…zzZ…都画成图了…自己看…"），**禁止**再复述研报正文 / 表格 / 价位。
+
+    Args:
+        markdown_content: 完整研报的 markdown 原文（含 ``#`` 标题、``| |`` 表格、
+            ``-`` 列表、``---`` 分隔线等，原样传入即可，无需转义）。
+        title: 可选，在图片顶部再加一行大标题；不传则沿用正文里已有的标题。
+        max_width: 图片最大宽度（像素），默认 760；表格列很多时可调大到 900。
+
+    Returns:
+        状态标记字符串。成功时提示"图片已发送"，你据此只补一句点评即可，勿再发正文。
+    """
+    md = (markdown_content or "").strip()
+    if not md:
+        return "❌ 研报内容为空，无法出图；请把完整 markdown 正文放进 markdown_content 再调用。"
+
+    bot = ctx.deps.bot
+    if bot is None:
+        # 极少数无会话上下文的调用拿不到 Bot——退回让模型用文字精简回复
+        return "❌ 当前上下文拿不到 Bot，无法发图；请直接用文字精简回复（勿发超长正文）。"
+
+    if title.strip():
+        md = f"# {title.strip()}\n\n{md}"
+
+    try:
+        image_bytes = await render_md_to_bytes(
+            md=md,
+            max_width=max_width,
+            image_format="jpeg",
+        )
+    except Exception as e:
+        logger.exception(f"🧠 [SayuStock] 研报渲染成图片失败: {e}")
+        return f"❌ 研报渲染成图片失败：{e}；请直接用文字精简回复（勿发超长正文刷屏）。"
+
+    await bot.send(MessageSegment.image(image_bytes))
+    logger.info(f"🧠 [SayuStock] 研报已渲染为图片发送，图片长度: {len(image_bytes)} bytes")
+    return (
+        "✅ 研报已作为【一张图片】发送到群里。"
+        "现在只需用角色口癖补一句简短点评即可，禁止再用文字复述研报正文 / 表格 / 价位。"
     )
