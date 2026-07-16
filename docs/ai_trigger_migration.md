@@ -127,13 +127,18 @@
 - **注入位置**：[`draw_fund_info.py`](../SayuStock/stock_info/draw_fund_info.py:80)
 - **提取内容**：基金名称、持仓数量、平均涨跌幅、前10大重仓股及占比
 
-#### `_ai_return_pepb_compare`（市盈率/市净率对比）
-- **注入位置**：[`gen_image.py`](../SayuStock/stock_sina/gen_image.py:35)
-- **提取内容**：对比标的名称列表、对比类型（PE/PB）
+#### `_ai_return_value_compare`（市盈率/市净率/股息率对比）
+- **注入位置**：[`eastmoney_value.py`](../SayuStock/stock_sina/eastmoney_value.py)
+- **提取内容**：各标的最新估值、区间起点/变化/最低/最高/均值/样本数、最新估值排名与高低差
+- 注：旧的新浪版 `gen_image.py::_ai_return_pepb_compare` 只发「已生成对比图」而不含任何数据，
+  且早已无人调用（命令走东财版），已于 2026-07-17 连同 `gen_image.py` 一并删除。
 
 #### `_ai_return_kronos_data`（AI预测）
-- **注入位置**：[`draw_ai_map.py`](../SayuStock/stock_ai/draw_ai_map.py:152)
+- **注入位置**：[`draw_ai_map.py`](../SayuStock/stock_ai/draw_ai_map.py)
 - **提取内容**：股票名称、数据周期、数据条数、最新K线数据、最近5条K线趋势
+- 注：必须在 `draw_ai_kline_with_forecast`（未缓存）里调用。出图函数
+  `_draw_ai_kline_with_forecast` 挂着 `@async_file_cache(minutes=150)`，命中缓存时
+  整个函数体不执行，文字留在里面会丢。
 
 #### 此前已注入的辅助函数（stock_cloudmap 模块）
 

@@ -114,10 +114,24 @@ async def draw_ai_kline_with_forecast(market: str, bot: Bot):
     if NOW_QUEUE:
         return f"当前队列中还有{len(NOW_QUEUE)}只股票在预测中，请稍后提交..."
 
+    raw_data = await get_gg(sec_id, "single-stock-kline-30")
+    if isinstance(raw_data, str):
+        return raw_data
+
+    df = fill_kline_by_kronos(raw_data)
+    if df is None or df.empty:
+        return "无有效K线数据"
+
+    # 文字必须发在缓存**之外**：部分模型看不到图，ai_return 的文字是它唯一的输入，
+    # 而 _draw_ai_kline_with_forecast 挂着 @async_file_cache(minutes=150) —— 命中缓存
+    # 时装饰器直接返回文件、整个函数体都不执行。文字若留在里面，2.5 小时内问第二次
+    # 同一只票，AI 就一个字都收不到。
+    _ai_return_kronos_data(raw_data, df)
+
     await bot.send("[SayuStock] 模型预测中，预计将会持续3分钟，请稍后...")
     NOW_QUEUE.append(sec_id)
     try:
-        fig = await _draw_ai_kline_with_forecast(sec_id)
+        fig = await _draw_ai_kline_with_forecast(sec_id, df, raw_data)
     except Exception as e:
         logger.error(f"[SayuStock] 模型预测出现错误: {e}")
         return f"模型预测出现错误: {e}"
@@ -138,20 +152,14 @@ async def draw_ai_kline_with_forecast(market: str, bot: Bot):
     suffix="html",
     minutes=150,
 )
-async def _draw_ai_kline_with_forecast(sec_id: str):
-    raw_data = await get_gg(sec_id, "single-stock-kline-30")
-    if isinstance(raw_data, str):
-        return raw_data
+async def _draw_ai_kline_with_forecast(sec_id: str, df: pd.DataFrame, raw_data: Dict):
+    """只负责出图（Kronos 预测约 3 分钟，故缓存 150 分钟）。
 
-    df = fill_kline_by_kronos(raw_data)
-    if df is None or df.empty:
-        return "无有效K线数据"
-
-    # AI 注入：提取K线数据文本
-    _ai_return_kronos_data(raw_data, df)
-
-    fig = await asyncio.to_thread(gdf, df, raw_data)
-    return fig
+    **不要在这里调 ai_return**：命中缓存时装饰器直接返回文件、本函数根本不执行，
+    文字会丢。发文字请留在未被缓存的 ``draw_ai_kline_with_forecast`` 里。
+    ``df`` / ``raw_data`` 由调用方传入以免重复取数；缓存键只取 ``{sec_id}``。
+    """
+    return await asyncio.to_thread(gdf, df, raw_data)
 
 
 def _ai_return_kronos_data(raw_data, df):

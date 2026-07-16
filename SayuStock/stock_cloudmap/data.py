@@ -1,12 +1,9 @@
-import asyncio
 from typing import Any, Dict, List, Union, Optional
 from datetime import datetime
 from dataclasses import dataclass
 
-from ..utils.utils import get_vix_name
 from ..utils.constant import ErroText, bk_dict, market_dict
 from ..utils.eastmoney import EASTMONEY_REQUESTER
-from ..utils.stock.request import get_gg, get_vix
 
 CloudMapRawData = Union[Dict[str, Any], str]
 
@@ -71,20 +68,11 @@ class CloudMapDataService:
                 resolved_sector, raw_data = await self.fetch_concept(resolved_sector)
             else:
                 raw_data = "概念云图需要后跟概念类型, 例如： 概念云图 华为欧拉"
-        elif resolved_sector and resolved_sector.startswith("single-stock-kline"):
-            raw_data = await get_gg(market, resolved_sector, start_time, end_time)
-        elif resolved_sector == "compare-stock":
-            raw_datas = await self.fetch_compare_stocks(market, start_time, end_time)
-            if raw_datas:
-                raw_data = raw_datas[0]
-            else:
-                raw_data = ErroText["notData"]
-            st_f = start_time.strftime("%Y%m%d") if start_time else ""
-            et_f = end_time.strftime("%Y%m%d") if end_time else ""
-            special_cache_key = f"compare-stock-{st_f}-{et_f}"
-        elif resolved_sector == "single-stock":
-            raw_data, raw_datas = await self.fetch_single_stock_group(market, start_time, end_time)
         else:
+            # 本包的命令只会传 大盘云图/行业云图/概念云图 三种 market，一定命中上面
+            # 三个分支；这里是兜底。个股 / 分时 / 对比的 sector 分支曾从
+            # stock_stockinfo 拷贝过来，但 render.py 早已不分发它们（见其模块注释），
+            # 已于 2026-07-17 删除 —— 个股相关请走 stock_stockinfo。
             raw_data = await EASTMONEY_REQUESTER.get_market_list(market)
 
         return CloudMapDataResult(raw_data, raw_datas, resolved_sector, special_cache_key)
@@ -126,74 +114,6 @@ class CloudMapDataService:
             if upper_sector in concept_name:
                 return concept_name, await EASTMONEY_REQUESTER.get_market_list(concept_menu[concept_name], True, 1, 100)
         return upper_sector, ErroText["typemap"]
-
-    async def fetch_compare_stocks(
-        self,
-        market: str,
-        start_time: Optional[datetime],
-        end_time: Optional[datetime],
-    ) -> List[Dict[str, Any]]:
-        """获取多个标的的日 K 对比数据。
-
-        Args:
-            market: 以空格分隔的标的列表。
-            start_time: 开始时间。
-            end_time: 结束时间。
-
-        Returns:
-            多个标的的 K 线响应列表。任一请求返回业务错误文本时直接中断并
-            返回空列表，保持入口层错误处理兼容。
-        """
-        markets = [item.strip() for item in market.replace("，", " ").replace(",", " ").split() if item.strip()]
-        results: List[Dict[str, Any]] = []
-        for item in markets:
-            if item in {"个股对比", "对比个股", "个股", "对比"}:
-                continue
-            query = "A500ETF" if item == "A500" else item
-            raw_data = await get_gg(query, "single-stock-kline-111", start_time, end_time)
-            if isinstance(raw_data, str):
-                return []
-            results.append(raw_data)
-        return results
-
-    async def fetch_single_stock_group(
-        self,
-        market: str,
-        start_time: Optional[datetime],
-        end_time: Optional[datetime],
-    ) -> tuple[CloudMapRawData, List[Dict[str, Any]]]:
-        """获取单个或多个标的分时数据。
-
-        Args:
-            market: 单个标的、多个标的或 VIX 别名。
-            start_time: 兼容保留参数。
-            end_time: 兼容保留参数。
-
-        Returns:
-            单标的时返回 `(raw_data, [])`；多标的时返回 `(首个数据, 全部数据)`。
-        """
-        vix_market = get_vix_name(market)
-        if vix_market is not None:
-            return await get_vix(vix_market), []
-
-        market_list = market.split(" ")
-        if len(market_list) == 1:
-            return await get_gg(market_list[0], "single-stock", start_time, end_time), []
-
-        tasks = []
-        for item in market_list:
-            vix_item = get_vix_name(item)
-            if vix_item is None:
-                tasks.append(get_gg(item, "single-stock", start_time, end_time))
-            else:
-                tasks.append(get_vix(vix_item))
-        gathered = await asyncio.gather(*tasks)
-        valid_results: List[Dict[str, Any]] = []
-        for item in gathered:
-            if isinstance(item, str):
-                return item, []
-            valid_results.append(item)
-        return valid_results[0], valid_results
 
 
 CLOUDMAP_DATA_SERVICE = CloudMapDataService()

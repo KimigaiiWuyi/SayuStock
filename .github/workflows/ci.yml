@@ -1,0 +1,105 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # SayuStock 声明 requires-python = "==3.12.*"
+  PYTHON_VERSION: "3.12"
+
+jobs:
+  lint:
+    name: Lint (ruff)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - name: Install ruff
+        # 版本与 .pre-commit-config.yaml 保持一致，避免本地过了 CI 不过
+        run: pip install ruff==0.14.8
+      - run: ruff check SayuStock/ test/
+      - run: ruff format --check SayuStock/ test/
+
+  # 指标数学与 AI 文字输出都是纯 pandas/numpy，不依赖 gsuid_core —— 单独跑一个
+  # 轻量 job，几十秒内就能对「口径 / 图表 vs AI 一致性 / 回撤 / 文字完整性」给出反馈。
+  indicators:
+    name: Indicator math & AI text
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+      - name: Install minimal deps
+        run: pip install pandas numpy pytest
+      - name: Run indicator & text tests
+        # -p no:cacheprovider：CI 里不落 .pytest_cache
+        run: >-
+          pytest test/test_indicators.py test/test_papertrade_indicators.py
+          test/test_render_text.py -q -p no:cacheprovider
+
+  test:
+    name: Full test suite
+    runs-on: ubuntu-latest
+    steps:
+      # 插件必须坐落在 <gsuid_core>/gsuid_core/plugins/SayuStock，
+      # 测试里的相对 import 和 sys.path 计算都依赖这个层级。
+      - name: Checkout gsuid_core
+        uses: actions/checkout@v4
+        with:
+          repository: Genshin-bots/gsuid_core
+          path: gsuid_core
+      - name: Checkout SayuStock into plugins/
+        uses: actions/checkout@v4
+        with:
+          path: gsuid_core/gsuid_core/plugins/SayuStock
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+      - name: Install gsuid_core deps
+        run: pip install -r gsuid_core/requirements.txt
+      - name: Install SayuStock deps
+        # playwright 只在出图的运行期需要，CI 不跑浏览器，装它纯属拖时间
+        run: pip install pandas mplchart matplotlib plotly pytest
+      - name: Run tests
+        working-directory: gsuid_core/gsuid_core/plugins/SayuStock
+        run: pytest test/ -q -p no:cacheprovider
+
+  typecheck:
+    name: Typecheck (pyright)
+    runs-on: ubuntu-latest
+    # 存量类型错误尚未清零（见 pyproject [tool.pyright]），先不卡合并，
+    # 只把结果挂在 PR 上；等基线归零后去掉这行改为强制。
+    continue-on-error: true
+    steps:
+      - name: Checkout gsuid_core
+        uses: actions/checkout@v4
+        with:
+          repository: Genshin-bots/gsuid_core
+          path: gsuid_core
+      - name: Checkout SayuStock into plugins/
+        uses: actions/checkout@v4
+        with:
+          path: gsuid_core/gsuid_core/plugins/SayuStock
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+      - name: Install deps
+        run: |
+          pip install -r gsuid_core/requirements.txt
+          pip install pandas mplchart matplotlib plotly pyright
+      - name: Run pyright
+        working-directory: gsuid_core/gsuid_core/plugins/SayuStock
+        run: pyright

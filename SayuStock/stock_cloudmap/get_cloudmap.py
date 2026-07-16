@@ -1,49 +1,18 @@
-"""stock_cloudmap 对外兼容入口。
+"""stock_cloudmap 对外入口。
 
-命令层只需要导入 `render_image`；实际渲染实现已迁移到
-`render.py`，数据请求编排位于 `data.py`。
+命令层（``__init__.py``）只需要 ``render_image``；渲染实现在 ``render.py``（plotly），
+数据请求编排在 ``data.py``。
+
+本模块曾 re-export ``to_single_fig`` / ``to_multi_fig`` / ``to_compare_fig`` /
+``to_single_fig_kline``，并提供一个无人调用的 ``render_cloudmap_html`` 包装 —— 都是
+从 ``stock_stockinfo`` 拷贝时带过来的死代码（云图命令到不了那些分支，见 ``render.py``
+模块注释），已随实现一并删除。个股 / 分时 / 对比请走 ``stock_stockinfo``。
 """
 
-from typing import Union, Optional
-from pathlib import Path
-from datetime import datetime
-
-from .render import (
-    to_fig,
-    render_html,
-    render_image,
-    to_multi_fig,
-    to_single_fig,
-    to_compare_fig,
-    to_single_fig_kline,
-)
+from .render import to_fig, render_html, render_image
 
 __all__ = [
-    "render_image",
     "render_html",
+    "render_image",
     "to_fig",
-    "to_multi_fig",
-    "to_single_fig",
-    "to_compare_fig",
-    "to_single_fig_kline",
 ]
-
-
-async def render_cloudmap_html(
-    market: str = "沪深A",
-    sector: Optional[str] = None,
-    start_time: Optional[datetime] = None,
-    end_time: Optional[datetime] = None,
-) -> Union[str, Path]:
-    """兼容性包装：渲染云图 HTML。
-
-    Args:
-        market: 市场、板块或标的输入。
-        sector: 渲染类型或筛选板块。
-        start_time: 可选开始时间。
-        end_time: 可选结束时间。
-
-    Returns:
-        成功时返回 HTML 文件路径，业务失败时返回错误文本。
-    """
-    return await render_html(market, sector, start_time, end_time)
