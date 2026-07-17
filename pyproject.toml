@@ -35,6 +35,8 @@ exclude = ["tests", "deploy"]
 [tool.pyright]
 disableBytesTypePromotions = false
 include = ["SayuStock"]
+# Kronos 是 vendored 的第三方 submodule，不检查它自己的代码
+exclude = ["SayuStock/Kronos"]
 extraPaths = [
     "../../../",
     "../../../gsuid_core",
@@ -44,6 +46,8 @@ extraPaths = [
 [tool.basedpyright]
 deprecateTypingAliases = false
 include = ["SayuStock"]
+# Kronos 是 vendored 的第三方 submodule，不检查它自己的代码
+exclude = ["SayuStock/Kronos"]
 extraPaths = [
     "../../../",
     "../../../gsuid_core",

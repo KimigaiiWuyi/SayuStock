@@ -37,10 +37,6 @@ def temp_sys_path(path: str):
 base_dir = Path(__file__).parent
 kronos_dir = base_dir.parent / "Kronos"
 
-# 临时添加 Kronos 路径进行导入
-with temp_sys_path(str(kronos_dir)):
-    from ..Kronos.model import Kronos, KronosPredictor, KronosTokenizer
-
 
 def fill_kline_by_kronos(raw_data: Dict) -> Optional[pd.DataFrame]:
     """将 Kronos 返回的 kline 数据转换为标准 DataFrame 格式。
@@ -256,6 +252,11 @@ def generate_trading_times(
 
 
 def gdf(df: pd.DataFrame, raw_data: Dict):
+    # Kronos 是 git submodule 且顶层 import torch —— 惰性导入，只有真跑预测
+    # 才需要；插件加载和测试环境（无 torch / 未拉 submodule）不能被它拖垮
+    with temp_sys_path(str(kronos_dir)):
+        from ..Kronos.model import Kronos, KronosPredictor, KronosTokenizer
+
     tokenizer = KronosTokenizer.from_pretrained("NeoQuasar/Kronos-Tokenizer-base")
     model = Kronos.from_pretrained("NeoQuasar/Kronos-mini")
     predictor = KronosPredictor(

@@ -221,15 +221,26 @@ def draw_compare_chart(raw_datas: list[JsonDict]) -> DrawResult:
 
                 swing = ind.swing_points(series)
 
+                def _short_date(timestamp: object) -> str:
+                    ts = pd.Timestamp(str(timestamp))
+                    return ts.strftime("%m-%d") if isinstance(ts, pd.Timestamp) else "--"
+
                 runup_label = None
                 runup_position = -1
                 if swing.max_runup > 0:
-                    runup_label = f"区间最大涨幅 +{swing.max_runup:.2f}%"
+                    runup_span = (
+                        f"{_short_date(series.index[swing.runup_start])} → {_short_date(series.index[swing.runup_end])}"
+                    )
+                    runup_label = f"区间最大涨幅 +{swing.max_runup:.2f}%\n{runup_span}"
                     runup_position = _index_position(series.index[swing.runup_end])
                 drawdown_label = None
                 drawdown_position = -1
                 if swing.max_drawdown < 0:
-                    drawdown_label = f"区间最大回撤 {swing.max_drawdown:.2f}%"
+                    drawdown_span = (
+                        f"{_short_date(series.index[swing.drawdown_start])}"
+                        f" → {_short_date(series.index[swing.drawdown_end])}"
+                    )
+                    drawdown_label = f"区间最大回撤 {swing.max_drawdown:.2f}%\n{drawdown_span}"
                     drawdown_position = _index_position(series.index[swing.drawdown_end])
 
                 # 最高点（区间涨幅恰好在此结束时并入同一标签）

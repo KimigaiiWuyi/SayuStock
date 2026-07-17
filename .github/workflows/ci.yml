@@ -98,16 +98,23 @@ jobs:
         uses: actions/checkout@v4
         with:
           path: gsuid_core/gsuid_core/plugins/SayuStock
+          # Kronos submodule：draw_ai_map 里的 `..Kronos.model` 导入需要
+          # 文件在场才能被解析（其内容已从检查范围 exclude，不会贡献错误）
+          submodules: true
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ env.PYTHON_VERSION }}
           cache: pip
       - name: Install deps
-        # 过滤 `-e .` 的原因见 Full test suite 同名步骤
+        # 过滤 `-e .` 的原因见 Full test suite 同名步骤。
+        # 用 basedpyright 而非官方 pyright：源码里的抑制注释
+        # （reportAny / reportUnusedParameter 等）是 basedpyright 独有规则，
+        # 官方 pyright 会当成 unknown diagnostic rule 直接报错。
+        # 版本与本地开发环境保持一致。
         run: |
           grep -v '^-e' gsuid_core/requirements.txt > /tmp/gsuid_core_reqs.txt
           pip install -r /tmp/gsuid_core_reqs.txt
-          pip install pandas mplchart matplotlib plotly pyright
-      - name: Run pyright
+          pip install pandas mplchart matplotlib plotly basedpyright==1.39.7
+      - name: Run basedpyright
         working-directory: gsuid_core/gsuid_core/plugins/SayuStock
-        run: pyright
+        run: basedpyright
