@@ -68,7 +68,13 @@ jobs:
           python-version: ${{ env.PYTHON_VERSION }}
           cache: pip
       - name: Install gsuid_core deps
-        run: pip install -r gsuid_core/requirements.txt
+        # 上游 requirements.txt 是 uv export 产物：全量 --hash 校验 + 一行 `-e .`
+        # 自引用。require-hashes 模式装不了 editable（无单一文件可校验），且
+        # `.` 相对 cwd（workspace 根）解析也指不到 gsuid_core。CI 里 gsuid_core
+        # 本体靠 checkout 目录层级生效，无需安装 —— 过滤掉 -e 行只装依赖。
+        run: |
+          grep -v '^-e' gsuid_core/requirements.txt > /tmp/gsuid_core_reqs.txt
+          pip install -r /tmp/gsuid_core_reqs.txt
       - name: Install SayuStock deps
         # playwright 只在出图的运行期需要，CI 不跑浏览器，装它纯属拖时间
         run: pip install pandas mplchart matplotlib plotly pytest
@@ -97,8 +103,10 @@ jobs:
           python-version: ${{ env.PYTHON_VERSION }}
           cache: pip
       - name: Install deps
+        # 过滤 `-e .` 的原因见 Full test suite 同名步骤
         run: |
-          pip install -r gsuid_core/requirements.txt
+          grep -v '^-e' gsuid_core/requirements.txt > /tmp/gsuid_core_reqs.txt
+          pip install -r /tmp/gsuid_core_reqs.txt
           pip install pandas mplchart matplotlib plotly pyright
       - name: Run pyright
         working-directory: gsuid_core/gsuid_core/plugins/SayuStock

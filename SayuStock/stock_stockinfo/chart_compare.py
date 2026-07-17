@@ -170,80 +170,120 @@ def draw_compare_chart(raw_datas: list[JsonDict]) -> DrawResult:
                 )
                 ax.add_artist(label_artist)
 
-            # 标注每条对比序列的最高点、最低点，并显示区间最大涨幅/回撤
+            # 标注每条对比序列的最高点、最低点，并显示区间最大涨幅/回撤。
+            # 区间涨幅/回撤的终点是波段自己的峰/谷，不一定是全局极值点，
+            # 点位一律取 swing_points 的结果；与全局极值重合时合并成一个标签。
+            def _index_position(timestamp: object) -> int:
+                positions = np.flatnonzero(prices.index == timestamp)
+                return int(positions[-1]) if len(positions) > 0 else 0
+
+            def _annotate_extreme(
+                text: str,
+                position: int,
+                value: float,
+                color: str,
+                above: bool,
+            ) -> None:
+                ax.scatter(
+                    [position],
+                    [value],
+                    color=color,
+                    edgecolor=BG_COLOR,
+                    s=42,
+                    zorder=5,
+                )
+                # 极值点 tag 向左侧偏移，避免与右侧的“最后一点”标签重叠
+                ax.annotate(
+                    text,
+                    xy=(position, value),
+                    xytext=(-14, 14 if above else -14),
+                    textcoords="offset points",
+                    color=color,
+                    fontsize=10,
+                    fontweight="bold",
+                    ha="center",
+                    va="bottom" if above else "top",
+                    bbox={"facecolor": BG_COLOR, "edgecolor": color, "alpha": 0.72, "pad": 2.5},
+                    arrowprops={"arrowstyle": "-", "color": color, "alpha": 0.75, "linewidth": 0.8},
+                    zorder=6,
+                )
+
             for compare_index, column_name in enumerate(compare_columns):
                 series = _frame_column(prices, column_name).dropna()
                 if len(series) < 2:
                     continue
                 stock_color = MPL_COLORS[compare_index % len(MPL_COLORS)]
 
-                # 全局最高/最低点用于打点和标注
                 max_value = float(series.max())
                 min_value = float(series.min())
-                max_timestamp = series.idxmax()
-                min_timestamp = series.idxmin()
-                max_positions = np.flatnonzero(prices.index == max_timestamp)
-                min_positions = np.flatnonzero(prices.index == min_timestamp)
-                max_position = int(max_positions[-1]) if len(max_positions) > 0 else 0
-                min_position = int(min_positions[-1]) if len(min_positions) > 0 else 0
+                max_position = _index_position(series.idxmax())
+                min_position = _index_position(series.idxmin())
 
-                max_runup, max_drawdown = ind.swing_stats(series)
+                swing = ind.swing_points(series)
 
-                # 最高点
-                ax.scatter(
-                    [max_position],
-                    [max_value],
-                    color=stock_color,
-                    edgecolor=BG_COLOR,
-                    s=42,
-                    zorder=5,
-                )
-                # 极值点 tag 向左侧偏移，避免与右侧的“最后一点”标签重叠
-                x_tag_offset = -14
+                runup_label = None
+                runup_position = -1
+                if swing.max_runup > 0:
+                    runup_label = f"区间最大涨幅 +{swing.max_runup:.2f}%"
+                    runup_position = _index_position(series.index[swing.runup_end])
+                drawdown_label = None
+                drawdown_position = -1
+                if swing.max_drawdown < 0:
+                    drawdown_label = f"区间最大回撤 {swing.max_drawdown:.2f}%"
+                    drawdown_position = _index_position(series.index[swing.drawdown_end])
+
+                # 最高点（区间涨幅恰好在此结束时并入同一标签）
                 max_label = f"{compare_labels[compare_index]}\n涨幅 {max_value:+.2f}%"
-                if max_runup > 0:
-                    max_label += f"\n区间最大涨幅 +{max_runup:.2f}%"
-                ax.annotate(
-                    max_label,
-                    xy=(max_position, max_value),
-                    xytext=(x_tag_offset, 14),
-                    textcoords="offset points",
-                    color=stock_color,
-                    fontsize=10,
-                    fontweight="bold",
-                    ha="center",
-                    va="bottom",
-                    bbox={"facecolor": BG_COLOR, "edgecolor": stock_color, "alpha": 0.72, "pad": 2.5},
-                    arrowprops={"arrowstyle": "-", "color": stock_color, "alpha": 0.75, "linewidth": 0.8},
-                    zorder=6,
-                )
+                if runup_label is not None and runup_position == max_position:
+                    max_label += f"\n{runup_label}"
+                    runup_label = None
+                _annotate_extreme(max_label, max_position, max_value, stock_color, above=True)
 
-                # 最低点
-                ax.scatter(
-                    [min_position],
-                    [min_value],
-                    color=stock_color,
-                    edgecolor=BG_COLOR,
-                    s=42,
-                    zorder=5,
-                )
+                # 最低点（区间回撤恰好在此见底时并入同一标签）
                 min_label = f"{compare_labels[compare_index]}\n跌幅 {min_value:+.2f}%"
-                if max_drawdown < 0:
-                    min_label += f"\n区间最大回撤 {max_drawdown:.2f}%"
-                ax.annotate(
-                    min_label,
-                    xy=(min_position, min_value),
-                    xytext=(x_tag_offset, -14),
-                    textcoords="offset points",
-                    color=stock_color,
-                    fontsize=10,
-                    fontweight="bold",
-                    ha="center",
-                    va="top",
-                    bbox={"facecolor": BG_COLOR, "edgecolor": stock_color, "alpha": 0.72, "pad": 2.5},
-                    arrowprops={"arrowstyle": "-", "color": stock_color, "alpha": 0.75, "linewidth": 0.8},
-                    zorder=6,
-                )
+                if drawdown_label is not None and drawdown_position == min_position:
+                    min_label += f"\n{drawdown_label}"
+                    drawdown_label = None
+                _annotate_extreme(min_label, min_position, min_value, stock_color, above=False)
+
+                # 区间涨幅/回撤终点不与全局极值重合时，标注在真实发生的点位，
+                # 并用虚线画出波段起点 → 终点的跨度
+                if runup_label is not None:
+                    start_position = _index_position(series.index[swing.runup_start])
+                    ax.plot(
+                        [start_position, runup_position],
+                        [float(series.iloc[swing.runup_start]), float(series.iloc[swing.runup_end])],
+                        color=stock_color,
+                        linestyle="--",
+                        linewidth=1.2,
+                        alpha=0.55,
+                        zorder=4,
+                    )
+                    _annotate_extreme(
+                        f"{compare_labels[compare_index]}\n{runup_label}",
+                        runup_position,
+                        float(series.iloc[swing.runup_end]),
+                        stock_color,
+                        above=True,
+                    )
+                if drawdown_label is not None:
+                    start_position = _index_position(series.index[swing.drawdown_start])
+                    ax.plot(
+                        [start_position, drawdown_position],
+                        [float(series.iloc[swing.drawdown_start]), float(series.iloc[swing.drawdown_end])],
+                        color=stock_color,
+                        linestyle="--",
+                        linewidth=1.2,
+                        alpha=0.55,
+                        zorder=4,
+                    )
+                    _annotate_extreme(
+                        f"{compare_labels[compare_index]}\n{drawdown_label}",
+                        drawdown_position,
+                        float(series.iloc[swing.drawdown_end]),
+                        stock_color,
+                        above=False,
+                    )
 
             ax.set_xlim(-1, x_right + 7)
             _apply_month_ticks(ax, prices.index)

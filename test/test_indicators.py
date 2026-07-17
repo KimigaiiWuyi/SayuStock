@@ -353,6 +353,36 @@ def test_swing_stats_flat_series() -> None:
     assert ind.swing_stats(_pct([100, 100, 100])) == (0.0, 0.0)
 
 
+def test_swing_points_positions() -> None:
+    """点位必须是波段自己的谷→峰/峰→谷，而不是全局最高/最低点。
+
+    100→110→70→90→60：全局最高在 1、全局最低在 4；
+    最大涨幅是 70→90（2→3），最大回撤是 110→60（1→4）。
+    曾把「区间最大涨幅」标注挂在全局最高点上（此例是位置 1），完全错位。
+    """
+    points = ind.swing_points(_pct([100, 110, 70, 90, 60]))
+    assert points.max_runup == pytest.approx((90 / 70 - 1) * 100)
+    assert (points.runup_start, points.runup_end) == (2, 3)
+    assert points.max_drawdown == pytest.approx((60 / 110 - 1) * 100)
+    assert (points.drawdown_start, points.drawdown_end) == (1, 4)
+
+
+def test_swing_points_monotonic_marks_missing_side() -> None:
+    """单边行情：没有反弹/回撤的一侧幅度为 0，位置记 -1。"""
+    up = ind.swing_points(_pct([100, 150, 200]))
+    assert (up.drawdown_start, up.drawdown_end) == (-1, -1)
+    assert (up.runup_start, up.runup_end) == (0, 2)
+
+    down = ind.swing_points(_pct([100, 70, 40]))
+    assert (down.runup_start, down.runup_end) == (-1, -1)
+    assert (down.drawdown_start, down.drawdown_end) == (0, 2)
+
+
+def test_swing_points_degenerate_inputs() -> None:
+    points = ind.swing_points(pd.Series([0.0, np.nan, 10.0]))
+    assert points == ind.SwingPoints(0.0, -1, -1, 0.0, -1, -1)
+
+
 # ============================================================
 # 边界
 # ============================================================

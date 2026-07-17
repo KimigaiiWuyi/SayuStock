@@ -38,6 +38,8 @@ mplchart 默认的西方口径：
 - ``kdj``：RSV 递归平滑，K/D 初值取中性 50。
 """
 
+from typing import NamedTuple
+
 import numpy as np
 import pandas as pd
 
@@ -57,7 +59,9 @@ __all__ = [
     "normalize_pct",
     "rsi",
     "support_resistance",
+    "swing_points",
     "swing_stats",
+    "SwingPoints",
     "true_range",
     "volume_ratio",
     # 标量层
@@ -319,8 +323,22 @@ def normalize_pct(close: pd.Series) -> pd.Series:
     return close / base - 1.0
 
 
-def swing_stats(pct_series: pd.Series) -> tuple[float, float]:
-    """由归一化涨跌幅序列（单位 %）算区间最大涨幅与最大回撤（单位 %）。
+class SwingPoints(NamedTuple):
+    """区间最大涨幅/回撤及其起止位置（``pct_series`` 内的整数位置，iloc 语义）。
+
+    无有效波段（数据不足/非法值/单边无反弹）时对应幅度为 0，位置为 -1。
+    """
+
+    max_runup: float
+    runup_start: int
+    runup_end: int
+    max_drawdown: float
+    drawdown_start: int
+    drawdown_end: int
+
+
+def swing_points(pct_series: pd.Series) -> SwingPoints:
+    """由归一化涨跌幅序列（单位 %）算区间最大涨幅/最大回撤及其发生点位。
 
     归一化序列是相对首日的累计涨跌幅，两点相减只是**百分点之差**，分母始终
     是首日价格而非峰值 —— 那样算出的回撤会超过 100%。这里先还原成相对价格
@@ -330,16 +348,39 @@ def swing_stats(pct_series: pd.Series) -> tuple[float, float]:
     - 最大涨幅 = max(level / 历史最低 - 1)，每点对比它**之前**的最低谷。
 
     用累计极值天然满足「先见峰后见谷」「先见谷后见峰」的顺序约束。
-    返回 (最大涨幅 >= 0, 最大回撤 <= 0)；数据不足或含非法值时返回 (0, 0)。
+
+    注意：涨幅/回撤的终点是波段自己的峰/谷，**不一定**是全序列的全局最高/
+    最低点 —— 标注时必须用这里返回的位置，挂到全局极值点上就是错的。
     """
     level = 1.0 + pct_series.to_numpy(dtype=float) / 100.0
     if len(level) < 2 or not np.all(np.isfinite(level)) or np.any(level <= 0):
-        return 0.0, 0.0
+        return SwingPoints(0.0, -1, -1, 0.0, -1, -1)
     running_max = np.maximum.accumulate(level)
     running_min = np.minimum.accumulate(level)
-    max_runup = float(np.max(level / running_min - 1.0)) * 100.0
-    max_drawdown = float(np.min(level / running_max - 1.0)) * 100.0
-    return max_runup, max_drawdown
+    runup = level / running_min - 1.0
+    drawdown = level / running_max - 1.0
+
+    runup_end = int(np.argmax(runup))
+    max_runup = float(runup[runup_end]) * 100.0
+    if max_runup > 0:
+        runup_start = int(np.argmin(level[: runup_end + 1]))
+    else:
+        runup_start = runup_end = -1
+
+    drawdown_end = int(np.argmin(drawdown))
+    max_drawdown = float(drawdown[drawdown_end]) * 100.0
+    if max_drawdown < 0:
+        drawdown_start = int(np.argmax(level[: drawdown_end + 1]))
+    else:
+        drawdown_start = drawdown_end = -1
+
+    return SwingPoints(max_runup, runup_start, runup_end, max_drawdown, drawdown_start, drawdown_end)
+
+
+def swing_stats(pct_series: pd.Series) -> tuple[float, float]:
+    """``swing_points`` 的标量视图：返回 (最大涨幅 >= 0, 最大回撤 <= 0)。"""
+    points = swing_points(pct_series)
+    return points.max_runup, points.max_drawdown
 
 
 # ============================================================
