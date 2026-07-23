@@ -192,6 +192,43 @@
       }
     ]
   },
+  "交易分析": {
+    "desc": "技术分析、交易卡片、自动选股、组合行业集中度",
+    "data": [
+      {
+        "name": "技术分析",
+        "desc": "技术面评分与信号（默日K，可周/月/分钟）",
+        "eg": "技术分析 茅台",
+        "need_ck": false,
+        "need_sk": false,
+        "need_admin": false
+      },
+      {
+        "name": "股票卡片",
+        "desc": "单股一页纸：盘口+技术+财务+行业",
+        "eg": "股票卡片 600519",
+        "need_ck": false,
+        "need_sk": false,
+        "need_admin": false
+      },
+      {
+        "name": "自动选股",
+        "desc": "条件筛选(市值池约前2000)；行业/概念二选一",
+        "eg": "自动选股 市值50-200 PE<30 涨跌幅>2",
+        "need_ck": false,
+        "need_sk": false,
+        "need_admin": false
+      },
+      {
+        "name": "组合体检",
+        "desc": "自选/给定组合的行业集中度风险",
+        "eg": "组合体检",
+        "need_ck": false,
+        "need_sk": false,
+        "need_admin": false
+      }
+    ]
+  },
   "AI智能": {
     "desc": "使用 Kronos 模型对个股未来走势进行预测",
     "data": [
