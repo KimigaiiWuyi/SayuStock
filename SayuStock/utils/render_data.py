@@ -46,6 +46,7 @@ class KlineRenderData:
 class SingleStockRenderData:
     df: pd.DataFrame
     stock_name: str
+    stock_code: str
     new_price: Any
     gained: float
     custom_info: str
@@ -142,7 +143,107 @@ def _trend_minute_key(value: object) -> str:
         if len(stripped) >= 5:
             return stripped[-5:]
         return stripped
+    if isinstance(value, pd.Timestamp):
+        if pd.isna(value):
+            return ""
+        return value.strftime("%H:%M")
     return str(value)
+
+
+def _parse_trend_datetime_value(value: object) -> pd.Timestamp | None:
+    """解析分时点时间：支持 ``HH:MM`` / ``YYYY-MM-DD HH:MM`` / datetime。"""
+    if value is None:
+        return None
+    if isinstance(value, pd.Timestamp):
+        return None if pd.isna(value) else value
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+    # 纯 HH:MM —— 无日期，交由上层补日期
+    if len(text) <= 5 and ":" in text and "-" not in text:
+        return None
+    parsed = pd.to_datetime(text, errors="coerce")
+    if pd.isna(parsed):
+        return None
+    assert isinstance(parsed, pd.Timestamp)
+    return parsed
+
+
+def _resolve_trend_absolute_datetimes(
+    trends: list[dict[str, Any]],
+    *,
+    now_bjt: Any | None = None,
+) -> list[tuple[dict[str, Any], pd.Timestamp]]:
+    """把 trends 解析为 (原始点, 绝对时间) 列表。
+
+    - 已带完整日期（``YYYY-MM-DD HH:MM``）时直接使用；
+    - 仅 ``HH:MM``（旧缓存）时按顺序检测跨天回绕，并把最后一个点锚定到
+      ``now_bjt`` 所在会话，避免夜盘/美期把上半天数据贴到「次日」。
+    """
+    import datetime as _dt
+
+    if not trends:
+        return []
+
+    if now_bjt is None:
+        now_bjt_dt = _dt.datetime.now()
+    elif isinstance(now_bjt, pd.Timestamp):
+        now_bjt_dt = now_bjt.to_pydatetime().replace(tzinfo=None)
+    elif isinstance(now_bjt, _dt.datetime):
+        now_bjt_dt = now_bjt.replace(tzinfo=None) if now_bjt.tzinfo else now_bjt
+    else:
+        now_bjt_dt = _dt.datetime.now()
+
+    # 路径 1：全部（或绝大多数）点已带完整日期
+    full_parsed: list[tuple[dict[str, Any], pd.Timestamp | None]] = []
+    full_count = 0
+    for item in trends:
+        parsed = _parse_trend_datetime_value(item.get("datetime") if isinstance(item, dict) else None)
+        full_parsed.append((item, parsed))
+        if parsed is not None:
+            full_count += 1
+    if full_count >= max(1, len(trends) // 2):
+        resolved: list[tuple[dict[str, Any], pd.Timestamp]] = []
+        for item, parsed in full_parsed:
+            if parsed is not None:
+                resolved.append((item, parsed))
+        return resolved
+
+    # 路径 2：仅 HH:MM —— 顺序回绕 + 锚定最后一点
+    clock_times: list[_dt.time] = []
+    for item in trends:
+        key = _trend_minute_key(item.get("datetime") if isinstance(item, dict) else item)
+        try:
+            clock_times.append(_dt.datetime.strptime(key, "%H:%M").time())
+        except ValueError:
+            clock_times.append(_dt.time(0, 0))
+
+    day_offsets: list[int] = []
+    day_offset = 0
+    prev_mins = -1
+    for clock in clock_times:
+        mins = clock.hour * 60 + clock.minute
+        # 明显回绕（如 23:59 → 00:00）；允许小幅乱序不抬日
+        if prev_mins >= 0 and mins + 60 < prev_mins:
+            day_offset += 1
+        day_offsets.append(day_offset)
+        prev_mins = mins
+
+    last_clock = clock_times[-1]
+    if last_clock <= now_bjt_dt.time():
+        last_date = now_bjt_dt.date()
+    else:
+        # 例如现在 01:00、最后分时 14:30 → 数据属于昨天收盘
+        last_date = now_bjt_dt.date() - _dt.timedelta(days=1)
+
+    first_date = last_date - _dt.timedelta(days=day_offsets[-1])
+    resolved = []
+    for item, clock, offset in zip(trends, clock_times, day_offsets, strict=False):
+        abs_dt = _dt.datetime.combine(first_date + _dt.timedelta(days=offset), clock)
+        resolved.append((item, pd.Timestamp(abs_dt)))
+    return resolved
 
 
 def _infer_kline_freq(df: pd.DataFrame) -> tuple[str, str, str, pd.Timedelta]:
@@ -249,47 +350,105 @@ def build_kline_render_data(raw_data: RawDict) -> KlineRenderData | DataResult:
     )
 
 
+def _empty_trend_row(dt_obj: object) -> dict[str, Any]:
+    return {
+        "datetime": dt_obj,
+        "price": None,
+        "open": None,
+        "high": None,
+        "low": None,
+        "amount": None,
+        "money": None,
+        "avg_price": None,
+    }
+
+
+def _rows_from_resolved_trends(
+    resolved: list[tuple[dict[str, Any], pd.Timestamp]],
+    *,
+    code_id: str,
+    now_bjt: Any,
+    fill_session_future: bool,
+    fill_session_gaps: bool,
+) -> list[dict[str, Any]]:
+    """以 trends 绝对时间为真相源构图。
+
+    会话模板（``get_trading_datetimes_bjt``）**只**用于：
+    - ``fill_session_future``：盘中尚未走到的未来分钟占位；
+    - ``fill_session_gaps``：已有数据区间内的空分钟（单股分时轴更完整）。
+
+    绝不把数据点按 HH:MM 重新贴进模板——那才会把跨天品种甩到「次日」。
+    """
+    if not resolved:
+        return []
+
+    existing_by_ts: dict[pd.Timestamp, dict[str, Any]] = {}
+    for item, ts in resolved:
+        minute_ts = pd.Timestamp(ts).floor("min")
+        existing_by_ts[minute_ts] = {**item, "datetime": minute_ts}
+
+    data_times = sorted(existing_by_ts.keys())
+    rows: list[dict[str, Any]] = [existing_by_ts[t] for t in data_times]
+
+    if not fill_session_future and not fill_session_gaps:
+        return rows
+
+    session_times = [
+        pd.Timestamp(t).floor("min") for t in get_trading_datetimes_bjt(code_id, now_bjt=now_bjt)
+    ]
+    if not session_times:
+        return rows
+
+    data_min, data_max = data_times[0], data_times[-1]
+    have = set(data_times)
+    extra: list[dict[str, Any]] = []
+
+    if fill_session_gaps:
+        # 只在「已有数据覆盖的时间范围内」补洞，不外推到错误的一天
+        for minute_ts in session_times:
+            if minute_ts < data_min or minute_ts > data_max:
+                continue
+            if minute_ts not in have:
+                extra.append(_empty_trend_row(minute_ts.to_pydatetime()))
+
+    if fill_session_future and is_market_active_now(code_id, now_bjt=now_bjt):
+        for minute_ts in session_times:
+            if minute_ts <= data_max:
+                continue
+            if minute_ts not in have:
+                extra.append(_empty_trend_row(minute_ts.to_pydatetime()))
+
+    if not extra:
+        return rows
+    rows.extend(extra)
+    rows.sort(
+        key=lambda row: pd.Timestamp(row["datetime"])
+        if row.get("datetime") is not None
+        else pd.Timestamp.min
+    )
+    return rows
+
+
 def _full_single_trends(raw_data: RawDict) -> list[dict[str, Any]]:
     import datetime as _dt
 
-    code_id = raw_data["file_name"] if "file_name" in raw_data else ""
-    existing_map = {_trend_minute_key(item["datetime"]): item for item in raw_data["trends"]}
-    # 以 BJT 今日 00:00 为基准生成 datetime 数组：跨天时段（美股 21:30-04:00）会
-    # 自然进位到次日、X 轴跨天位置自动加“次日”标签。
-    time_array_dt = get_trading_datetimes_bjt(code_id, now_bjt=_dt.datetime.now())
-    # 容错：若市场识别不准（例如 time_range 还未覆盖某些 PREFIX 100 的指数），
-    # 推断出的时段与实际数据全部不在同一分钟上，existing_map 会被全部跳过，
-    # 后面会误报 notOpen。这里以下两种情形回退为“直接使用原始 trends”：
-    #   1) existing_map 为空（异常）
-    #   2) existing_map 中的 key 与 time_array 全部不在同一分钟上
-    if not existing_map:
-        return list(raw_data["trends"]) if "trends" in raw_data else []
+    code_id = str(raw_data["file_name"] if "file_name" in raw_data else "").split("_")[0]
+    trends = list(raw_data["trends"]) if "trends" in raw_data and raw_data["trends"] else []
+    if not trends:
+        return []
 
-    time_keys_hhmm = {_trend_minute_key(t.strftime("%Y-%m-%d %H:%M")) for t in time_array_dt}
-    existing_keys = set(existing_map.keys())
-    if existing_keys.isdisjoint(time_keys_hhmm) and time_keys_hhmm:
-        # 两者不重叠：以实际数据为准
-        return list(raw_data["trends"]) if "trends" in raw_data else []
+    now_bjt = _dt.datetime.now()
+    resolved = _resolve_trend_absolute_datetimes(trends, now_bjt=now_bjt)
+    if not resolved:
+        return trends
 
-    full_data: list[dict[str, Any]] = []
-    for dt_obj in time_array_dt:
-        minute_key = dt_obj.strftime("%H:%M")
-        if minute_key in existing_map:
-            full_data.append({**existing_map[minute_key], "datetime": dt_obj})
-        else:
-            full_data.append(
-                {
-                    "datetime": dt_obj,
-                    "price": None,
-                    "open": None,
-                    "high": None,
-                    "low": None,
-                    "amount": None,
-                    "money": None,
-                    "avg_price": None,
-                }
-            )
-    return full_data
+    return _rows_from_resolved_trends(
+        resolved,
+        code_id=code_id,
+        now_bjt=now_bjt,
+        fill_session_future=True,
+        fill_session_gaps=True,
+    )
 
 
 def build_single_stock_render_data(raw_data: RawDict) -> SingleStockRenderData | DataResult:
@@ -357,6 +516,17 @@ def build_single_stock_render_data(raw_data: RawDict) -> SingleStockRenderData |
     custom_info = int_to_percentage(gained)
     total_amount = number_to_chinese(raw["f48"]) if isinstance(raw["f48"], float) else 0
     stock_name = str(raw["f58"])
+    # 代码：优先 f57；否则从 file_name 取 secid（如 100.KS11）
+    stock_code = ""
+    if "f57" in raw and raw["f57"] not in (None, "", "-"):
+        stock_code = str(raw["f57"])
+    else:
+        file_name = str(raw_data["file_name"] if "file_name" in raw_data else "")
+        secid = file_name.split("_")[0]
+        if "." in secid:
+            stock_code = secid.split(".", 1)[1]
+        elif secid:
+            stock_code = secid
     new_price = raw["f43"]
     turnover_rate = raw["f168"]
     title_text = (
@@ -368,6 +538,7 @@ def build_single_stock_render_data(raw_data: RawDict) -> SingleStockRenderData |
     return SingleStockRenderData(
         df=price_history_pd,
         stock_name=stock_name,
+        stock_code=stock_code,
         new_price=new_price,
         gained=gained,
         custom_info=custom_info,
@@ -402,37 +573,23 @@ def build_multi_stock_render_data(raw_data_list: List[RawDict]) -> MultiStockRen
             logger.warning(f"[SayuStock] Skipping {stock_name} due to invalid open price: {raw_open}.")
             continue
         code_id = str(raw_data["file_name"] if "file_name" in raw_data else "").split("_")[0]
-        # 多市场对比：以 BJT 今日 00:00 为基准生成完整 datetime 数组，
-        # 这样跨天市场（如美股 21:30-04:00）会自然拼接在 X 轴右侧、
-        # 拥有“次日”标签。
-        time_array_dt = get_trading_datetimes_bjt(code_id, now_bjt=now_bjt)
+        trends = list(raw_data["trends"]) if "trends" in raw_data and raw_data["trends"] else []
 
-        # 东方财富 push2 推过来的分时是 HH:MM 字符串；与 BJT 绝对时间拼接时，
-        # 先把现有趋势接成 HH:MM 字典。
-        existing_map = {_trend_minute_key(item["datetime"]): item for item in raw_data["trends"]}
-
-        # 如果该市场当前不在交易时段内（已收盘或未开盘），不画出“昨日盘后/盘前”的
-        # 残余分时，让其在 X 轴上以 “未开盘” 留空，避免出现在不期望的位置。
-        market_active = is_market_active_now(code_id, now_bjt=now_bjt)
-
-        rows: list[dict[str, Any]] = []
-        for dt_obj in time_array_dt:
-            minute_key = dt_obj.strftime("%H:%M")
-            if minute_key in existing_map:
-                # 该分钟有实际分时数据（即使市场已收盘，也能正确回放当日走势）
-                src = existing_map[minute_key]
-                rows.append({**src, "datetime": dt_obj})
-                continue
-            if not market_active:
-                # 市场不活跃且无数据：dt 置为 NaT，X 轴不会扩展到这些时间点，
-                # 也不画出“昨日盘后/盘前”的残余分时。
-                rows.append({"datetime": None, "price": None, "money": 0})
-                continue
-            # 市场活跃但当前分钟暂无数据（盘中未来时刻）：扩展 X 轴占位
-            rows.append({"datetime": dt_obj, "price": None, "money": 0})
+        # 数据绝对时间为准；会话模板仅在盘中补未来占位，不重贴历史点
+        resolved = _resolve_trend_absolute_datetimes(trends, now_bjt=now_bjt)
+        rows = _rows_from_resolved_trends(
+            resolved,
+            code_id=code_id,
+            now_bjt=now_bjt,
+            fill_session_future=True,
+            fill_session_gaps=False,
+        )
+        if not rows:
+            continue
 
         price_history_pd = pd.DataFrame(rows)
         price_history_pd["dt"] = pd.to_datetime(price_history_pd["datetime"], errors="coerce")
+        price_history_pd = price_history_pd.sort_values("dt", kind="mergesort")
         price_history_pd["price"] = _numeric_series(price_history_pd["price"])
         price_history_pd["money"] = _numeric_series(price_history_pd["money"], fill_value=0)
         price_history_pd["percentage_change"] = ((price_history_pd["price"] / open_price) - 1) * 100

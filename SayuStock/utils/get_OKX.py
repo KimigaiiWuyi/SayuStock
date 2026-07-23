@@ -287,7 +287,8 @@ async def get_crypto_trend_as_json(
 
             # 格式化时间 HH:MM
             dt_obj = datetime.datetime.fromtimestamp(ts / 1000, tz=tz_utc8)
-            time_str = dt_obj.strftime("%H:%M")
+            # 保留完整日期，与东方财富分时一致，避免跨天对齐错误
+            time_str = dt_obj.strftime("%Y-%m-%d %H:%M")
             avg_price = (turnover / vol) if vol > 0 else c
 
             trends_list.append(

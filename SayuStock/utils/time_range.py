@@ -65,8 +65,11 @@ MARKET_SESSIONS: Dict[Market, List[Tuple[str, str]]] = {
         # 注意：不同期货品种的夜盘时间有差异，这里仅为通用示例
         # 实际应用中可能需要根据具体合约代码（如 'rb', 'ag'）进一步细化
     ],
-    Market.US_FUTURE: [  # 美国期货如 nq（纳斯达克）、es（标普500）等
-        ("18:00", "17:00"),
+    # 美国股指期货（NQ/ES/YM 等，CME）：几乎 24 小时，仅每日 17:00-18:00 ET 结算休息。
+    # 必须用北京时间：夏令时 06:00→次日 05:00 BJT，冬令时 07:00→次日 06:00 BJT。
+    # 旧值 ("18:00","17:00") 是 ET 原值，会把 06:00-17:00 的分时错贴到「次日」。
+    Market.US_FUTURE: [
+        ("06:00", "05:00") if is_us_daylight_saving() else ("07:00", "06:00"),
     ],
     Market.SG_FUTURE: [  # 例如富时中国A50指数期货 (CN)
         ("09:00", "16:30"),
@@ -338,17 +341,49 @@ def get_trading_datetimes(code: Optional[str] = None) -> List[str]:
     return [item.strftime("%Y-%m-%d %H:%M") for item in _generate_datetime_array(sessions)]
 
 
+def get_session_anchor_date(
+    code: Optional[str] = None,
+    now_bjt: Optional[datetime.datetime] = None,
+) -> datetime.date:
+    """返回「当前/最近一个交易时段」在 BJT 下的起始自然日。
+
+    跨天时段（如美股 21:30-04:00、美期 06:00-次日 05:00）在过了 0 点后，
+    会话其实是**昨天**开盘的；若仍用 today 作 base，会把已发生的
+    06:00-17:00 数据错误地映射到「次日」。
+    """
+    if now_bjt is None:
+        now_bjt = datetime.datetime.now()
+    market = _parse_em_code(code) if code else Market.A_SHARE
+    if market == Market.UNKNOWN:
+        market = Market.A_SHARE
+    sessions = MARKET_SESSIONS.get(market, MARKET_SESSIONS[Market.A_SHARE])
+    current_time = now_bjt.time()
+    today = now_bjt.date()
+
+    for start_str, end_str in sessions:
+        start = datetime.datetime.strptime(start_str, "%H:%M").time()
+        end = datetime.datetime.strptime(end_str, "%H:%M").time()
+        if start <= end:
+            # 同日时段：始终锚定今天
+            continue
+        # 跨天：start~24:00 属于开盘日 D；00:00~end 属于 D+1 但仍属会话 D
+        if current_time <= end:
+            return today - datetime.timedelta(days=1)
+    return today
+
+
 def get_trading_datetimes_bjt(
     code: Optional[str] = None,
     now_bjt: Optional[datetime.datetime] = None,
 ) -> List[datetime.datetime]:
     """
-    返回某个市场在本 BJT 日 (00:00 起) 的全部交易分钟 datetime 列表。
+    返回某个市场「当前/最近交易时段」的全部交易分钟 datetime 列表（BJT）。
 
     与 `get_trading_datetimes` 的差别：
-    - 该函数以**今天 BJT 00:00** 作为基准日，跨天时段会进位到次日；
-    - 同一调用中传入不同市场时，各市场的交易时间在 X 轴上能按 BJT 小时正确拼接
-      （例如美股夏令时 21:30-04:00 会接在 21:30-04:00 BJT 的右端）；
+    - 以会话锚定日（见 ``get_session_anchor_date``）为基准，跨天时段会进位到次日；
+    - 过了 0 点仍处在夜盘/美期会话时，基准是**昨天**，避免把已发生的
+      上午/下午分时错贴到「次日」；
+    - 同一调用中传入不同市场时，各市场的交易时间在 X 轴上能按 BJT 绝对时间正确拼接；
     - 适合多市场对比场景（multi-stock / compare-stock）。
     """
     if now_bjt is None:
@@ -357,7 +392,8 @@ def get_trading_datetimes_bjt(
     if market == Market.UNKNOWN:
         market = Market.A_SHARE
     sessions = MARKET_SESSIONS.get(market, MARKET_SESSIONS[Market.A_SHARE])
-    return _generate_datetime_array_with_base(sessions, now_bjt.date())
+    base_day = get_session_anchor_date(code, now_bjt=now_bjt)
+    return _generate_datetime_array_with_base(sessions, base_day)
 
 
 def is_market_active_now(

@@ -333,10 +333,12 @@ class EastMoneyRequester:
         stock_data: List[Dict[str, Union[str, float, int]]] = []
         for item in stock_line_data:
             parts = item.split(",")
-            date_time = parts[0].split(" ") if len(parts[0]) > 0 else ["", ""]
+            # 保留完整 "YYYY-MM-DD HH:MM"。跨天品种（美期/美股）若只留 HH:MM，
+            # 渲染层会把会话前半段错贴到「次日」。
+            raw_dt = parts[0].strip() if parts else ""
             stock_data.append(
                 {
-                    "datetime": date_time[1],
+                    "datetime": raw_dt,
                     "price": float(parts[1]),
                     "open": float(parts[2]),
                     "high": float(parts[3]),

@@ -1,6 +1,9 @@
 """分时图与多股分时对比图。"""
 
+import re
+
 from gsuid_core.logger import logger
+from matplotlib import patheffects
 
 from .chart_base import (
     BG_COLOR,
@@ -9,6 +12,7 @@ from .chart_base import (
     DOWN_COLOR,
     GRID_COLOR,
     MPL_COLORS,
+    Axes,
     Pane,
     Chart,
     HLine,
@@ -35,8 +39,72 @@ from .chart_base import (
     _axes_top_to_bottom,
     _apply_intraday_10min_ticks,
 )
-from .render_data import build_multi_stock_render_data, build_single_stock_render_data
+from .render_data import (
+    SingleStockRenderData,
+    build_multi_stock_render_data,
+    build_single_stock_render_data,
+)
 from ..utils.constant import ErroText
+
+
+def _clean_stock_display_name(name: str) -> str:
+    """去掉名称尾部类型后缀，如「韩国KOSPI (指数)」→「韩国KOSPI」。"""
+    cleaned = re.sub(r"\s*[\(（][^)）]*[\)）]\s*$", "", name).strip()
+    return cleaned or name
+
+
+def _format_price_display(price: object) -> str:
+    if price is None or price == "" or price == "-":
+        return "—"
+    if isinstance(price, (int, float)) and not isinstance(price, bool):
+        value = float(price)
+        if abs(value) >= 1000:
+            return f"{value:,.2f}"
+        if abs(value) >= 1:
+            return f"{value:.2f}"
+        return f"{value:.4f}".rstrip("0").rstrip(".")
+    text = str(price).strip()
+    try:
+        return _format_price_display(float(text))
+    except (TypeError, ValueError):
+        return text or "—"
+
+
+def _draw_single_stock_bg_watermark(ax: Axes, stock: SingleStockRenderData) -> None:
+    """透明大字两行水印：名称·代码 / 现价 涨跌。
+
+    - 上涨：贴主图底部（曲线多在上方时更易读）
+    - 下跌：贴主图顶部
+    无底框，低 zorder，曲线压在文字之上。
+    """
+    is_up = stock.gained >= 0
+    accent = UP_COLOR if is_up else DOWN_COLOR
+    name = _clean_stock_display_name(str(stock.stock_name or "").strip() or "—")
+    code = str(stock.stock_code or "").strip()
+    price_text = _format_price_display(stock.new_price)
+    change_text = str(stock.custom_info or "").strip() or "—"
+    line1 = f"{name}  ·  {code}" if code else name
+    line2 = f"{price_text}   {change_text}"
+
+    # 涨 → 主图底部两行；跌 → 主图顶部两行（避开曲线通常聚集的一侧）
+    if is_up:
+        y1, y2 = 0.16, 0.07
+    else:
+        y1, y2 = 0.90, 0.81
+
+    stroke = [patheffects.withStroke(linewidth=4.0, foreground="#050505", alpha=0.55)]
+    base = {
+        "transform": ax.transAxes,
+        "ha": "center",
+        "va": "center",
+        "fontweight": "bold",
+        "zorder": 0.15,
+        "clip_on": True,
+        "path_effects": stroke,
+    }
+    # 半透明：名称稍淡，现价+涨跌更醒目但仍透出网格
+    ax.text(0.5, y1, line1, fontsize=40, color=FG_COLOR, alpha=0.42, **base)
+    ax.text(0.5, y2, line2, fontsize=58, color=accent, alpha=0.50, **base)
 
 
 async def to_single_fig(raw_data: JsonDict) -> DrawResult:
@@ -167,6 +235,12 @@ def draw_single_stock_chart(raw_data: JsonDict) -> DrawResult:
                 text.set_color(FG_COLOR)
 
     if axes:
+        # 背景水印：主图区大字标的信息；曲线提到更高 zorder，避免被挡住
+        _draw_single_stock_bg_watermark(axes[0], stock)
+        for line in list(axes[0].lines):
+            line.set_zorder(4)
+        for collection in list(axes[0].collections):
+            collection.set_zorder(4)
         axes[0].set_title(stock.title_text, color=title_color, fontsize=24, fontweight="bold", pad=24)
     fig.text(0.016, 0.005, "数据来源：东方财富 | SayuStock", color=FG_COLOR, fontsize=9, alpha=0.65)
     fig.subplots_adjust(left=0.045, right=0.988, top=0.88, bottom=0.10, hspace=0.04)
