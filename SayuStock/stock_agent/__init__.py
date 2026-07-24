@@ -464,9 +464,22 @@ def register_papertrade_agents() -> None:
         AgentNode(
             node_id="papertrade_reporter_agent",
             display_name="模拟盘复盘代理",
-            when_to_use="模拟盘月报 / 季报 / 年报生成",
+            when_to_use=(
+                "模拟盘当前持仓 / 盈亏 / 账户汇总查询；以及月报 / 季报 / 年报 / 复盘生成"
+                "（权威数据走 papertrade_position_list / papertrade_account_query，"
+                "禁止用 state/record 旧快照代答）"
+            ),
             prompt=PAPERTRADE_REPORTER_PROMPT,
-            match_keywords=["模拟盘月报", "模拟盘复盘", "papertrade 复盘"],
+            match_keywords=[
+                "模拟盘月报",
+                "模拟盘复盘",
+                "papertrade 复盘",
+                "模拟盘持仓",
+                "模拟盘盈亏",
+                "当前持仓",
+                "持仓盈亏",
+                "虚拟盘持仓",
+            ],
             tool_packs=[TASK_BASICS_PACK],
             tool_names=[
                 "papertrade_account_query",
