@@ -12,10 +12,8 @@ from PIL import Image
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt  # noqa: E402
 from matplotlib import font_manager  # noqa: E402
-from mplchart.chart import Chart  # noqa: E402
 from matplotlib.axes import Axes  # noqa: E402
 from matplotlib.figure import Figure  # noqa: E402
-from mplchart.primitives import Price  # noqa: E402
 from matplotlib.offsetbox import HPacker, TextArea, AnnotationBbox  # noqa: E402
 
 from gsuid_core.logger import logger
@@ -29,6 +27,7 @@ from ..utils.eastmoney import (
     EastMoneyStockItem,
 )
 from ..utils.stock.request import get_gg
+from ..utils.mplchart_compat import Chart, Price  # noqa: E402
 
 ValueType = Literal["pe", "pb", "dy"]
 BotSendContent = Union[str, bytes]

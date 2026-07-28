@@ -31,16 +31,27 @@ from numpy.typing import NDArray
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt  # noqa: E402
 from matplotlib import font_manager  # noqa: E402
-from mplchart.chart import Chart  # noqa: E402
 from matplotlib.axes import Axes  # noqa: E402
 from matplotlib.figure import Figure  # noqa: E402
 from matplotlib.ticker import FuncFormatter  # noqa: E402
 from matplotlib.patches import Rectangle  # noqa: E402
-from mplchart.indicators import SMA, Indicator  # noqa: E402
-from mplchart.primitives import Pane, HLine, Price, Volume, BarPlot, LinePlot, Candlesticks  # noqa: E402
 from matplotlib.offsetbox import HPacker, TextArea, AnnotationBbox  # noqa: E402
 
 from gsuid_core.utils.fonts.fonts import FONT_ORIGIN_PATH
+
+# 统一经兼容层导入：同时支持旧版（含 Price）与新版（Price 已移除）mplchart
+from ..utils.mplchart_compat import (  # noqa: E402
+    SMA,
+    Pane,
+    Chart,
+    HLine,
+    Price,
+    Volume,
+    BarPlot,
+    LinePlot,
+    Indicator,
+    Candlesticks,
+)
 
 __all__ = [
     # 绘图栈（各 chart_* 从这里取，保证 Agg 后端先设好）
