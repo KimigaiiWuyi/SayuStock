@@ -2,8 +2,9 @@
 
 import re
 
-from gsuid_core.logger import logger
 from matplotlib import patheffects
+
+from gsuid_core.logger import logger
 
 from .chart_base import (
     BG_COLOR,
@@ -18,13 +19,10 @@ from .chart_base import (
     HLine,
     Price,
     Figure,
-    HPacker,
     NDArray,
     JsonDict,
-    TextArea,
     DrawResult,
     FuncFormatter,
-    AnnotationBbox,
     np,
     pd,
     _setup_mpl,
@@ -37,7 +35,10 @@ from .chart_base import (
     _datetime_series,
     _format_money_axis,
     _axes_top_to_bottom,
+    _apply_detail_legend,
+    _draw_end_point_labels,
     _apply_intraday_10min_ticks,
+    _format_detail_legend_label,
 )
 from .render_data import (
     SingleStockRenderData,
@@ -266,6 +267,7 @@ def draw_multi_stock_chart(raw_data_list: list[JsonDict]) -> DrawResult:
         item_valid_time = item_datetimes.notna()
         item_frame = pd.DataFrame(
             {
+                "price": np.asarray(_numeric_series(item.df["price"])[item_valid_time]),
                 "percentage_change": np.asarray(_numeric_series(item.df["percentage_change"])[item_valid_time]),
                 "money": np.asarray(_numeric_series(item.df["money"], fill_value=0)[item_valid_time]),
             },
@@ -283,6 +285,7 @@ def draw_multi_stock_chart(raw_data_list: list[JsonDict]) -> DrawResult:
     volume_columns: dict[str, NDArray[np.float64]] = {}
     stock_labels: list[str] = []
     stock_colors: list[str] = []
+    legend_labels: list[str] = []
     volume_total = pd.Series(0.0, index=full_index)
     has_valid_price = False
     for stock_index, item in enumerate(multi.stocks):
@@ -290,6 +293,7 @@ def draw_multi_stock_chart(raw_data_list: list[JsonDict]) -> DrawResult:
         col_name = f"stock_{stock_index}"
         vol_name = f"vol_{stock_index}"
         item_change = _frame_column(item_frame, "percentage_change")
+        item_price = _frame_column(item_frame, "price")
         item_volume_series = _frame_column(item_frame, "money").fillna(0)
         has_valid_price = has_valid_price or bool(item_change.notna().any())
         price_columns[col_name] = np.asarray(item_change, dtype=float)
@@ -297,6 +301,22 @@ def draw_multi_stock_chart(raw_data_list: list[JsonDict]) -> DrawResult:
         stock_labels.append(item.name)
         stock_colors.append(MPL_COLORS[stock_index % len(MPL_COLORS)])
         volume_total = volume_total.add(item_volume_series, fill_value=0)
+        # 图例：起始价（开盘参考）、末价、完整涨跌幅
+        price_valid = item_price.dropna()
+        change_valid = item_change.dropna()
+        if not price_valid.empty and not change_valid.empty:
+            end_price = float(price_valid.iloc[-1])
+            end_pct = float(change_valid.iloc[-1])
+            # percentage_change = (price/open - 1)*100 → open = price / (1 + pct/100)
+            open_price = end_price / (1.0 + end_pct / 100.0) if abs(end_pct + 100.0) > 1e-9 else end_price
+            # 若序列首点更接近开盘，优先用反推的 open 与首价对照
+            first_price = float(price_valid.iloc[0])
+            first_pct = float(change_valid.iloc[0]) if len(change_valid) else 0.0
+            start_from_first = first_price / (1.0 + first_pct / 100.0) if abs(first_pct + 100.0) > 1e-9 else first_price
+            start_price = start_from_first if np.isfinite(start_from_first) else open_price
+            legend_labels.append(_format_detail_legend_label(item.name, start_price, end_price, end_pct))
+        else:
+            legend_labels.append(item.name)
 
     if not has_valid_price:
         return ErroText["notData"]
@@ -367,7 +387,7 @@ def draw_multi_stock_chart(raw_data_list: list[JsonDict]) -> DrawResult:
             ax.tick_params(labelbottom=False)
             ax.grid(True, axis="y", color=GRID_COLOR, alpha=0.42, linewidth=0.8)
             x_right = max(len(prices) - 1, 0)
-            label_offsets: dict[int, int] = {}
+            end_entries: list[tuple[float, float, str, str, str]] = []
             for stock_index, col_name in enumerate(price_columns):
                 series = _frame_column(prices, col_name).dropna()
                 if series.empty:
@@ -376,53 +396,25 @@ def draw_multi_stock_chart(raw_data_list: list[JsonDict]) -> DrawResult:
                 last_positions = np.flatnonzero(prices.index == last_timestamp)
                 last_position = int(last_positions[-1]) if len(last_positions) > 0 else len(prices) - 1
                 last_value = float(series.iloc[-1])
-                bucket = int(round(last_value * 2))
-                offset_count = label_offsets.get(bucket, 0)
-                label_offsets[bucket] = offset_count + 1
-                y_offset = (offset_count - 1) * 13 if offset_count > 0 else 0
-                ax.scatter(
-                    [last_position],
-                    [last_value],
-                    color=stock_colors[stock_index],
-                    edgecolor=BG_COLOR,
-                    s=34,
-                    zorder=5,
+                end_entries.append(
+                    (
+                        float(last_position),
+                        last_value,
+                        stock_labels[stock_index],
+                        f" {last_value:+.2f}%",
+                        stock_colors[stock_index],
+                    )
                 )
-                name_area = TextArea(
-                    stock_labels[stock_index],
-                    textprops={"color": stock_colors[stock_index], "fontsize": 11, "fontweight": "bold"},
-                )
-                pct_area = TextArea(
-                    f" {last_value:+.2f}%",
-                    textprops={
-                        "color": UP_COLOR if last_value >= 0 else DOWN_COLOR,
-                        "fontsize": 11,
-                        "fontweight": "bold",
-                    },
-                )
-                label_box = HPacker(children=[name_area, pct_area], align="center", pad=0, sep=1)
-                label_artist = AnnotationBbox(
-                    label_box,
-                    (last_position, last_value),
-                    xybox=(10, y_offset),
-                    xycoords="data",
-                    boxcoords="offset points",
-                    box_alignment=(0, 0.5),
-                    frameon=True,
-                    pad=0.25,
-                    bboxprops={"facecolor": BG_COLOR, "edgecolor": stock_colors[stock_index], "alpha": 0.70},
-                    arrowprops={"arrowstyle": "-", "color": stock_colors[stock_index], "alpha": 0.75, "linewidth": 0.8},
-                    zorder=6,
-                )
-                ax.add_artist(label_artist)
-            ax.set_xlim(-1, x_right + 7)
-            legend = ax.get_legend()
-            if legend is not None:
-                for text, label in zip(legend.get_texts(), stock_labels, strict=False):
-                    text.set_text(label)
-                    text.set_color(FG_COLOR)
-                legend.get_frame().set_facecolor(BG_COLOR)
-                legend.get_frame().set_edgecolor(GRID_COLOR)
+            ax.set_xlim(-1, x_right + max(9, 5 + len(end_entries)))
+
+            def _end_value_color(value_text: str) -> str:
+                try:
+                    return UP_COLOR if float(value_text.strip().rstrip("%")) >= 0 else DOWN_COLOR
+                except ValueError:
+                    return FG_COLOR
+
+            _draw_end_point_labels(ax, end_entries, value_color_fn=_end_value_color)
+            _apply_detail_legend(ax, legend_labels, text_colors=stock_colors)
         else:
             ax.clear()
             _style_axis(ax)

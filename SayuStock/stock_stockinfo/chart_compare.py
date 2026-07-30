@@ -5,7 +5,6 @@ from .chart_base import (
     BG_COLOR,
     FG_COLOR,
     UP_COLOR,
-    AXIS_COLOR,
     DOWN_COLOR,
     GRID_COLOR,
     MPL_COLORS,
@@ -13,15 +12,13 @@ from .chart_base import (
     HLine,
     Price,
     Figure,
-    HPacker,
     JsonDict,
-    TextArea,
     DrawResult,
     FuncFormatter,
-    AnnotationBbox,
     np,
     pd,
     _setup_mpl,
+    _pct_change,
     _style_axis,
     _fig_to_image,
     _frame_column,
@@ -30,7 +27,11 @@ from .chart_base import (
     _datetime_series,
     _apply_month_ticks,
     _axes_top_to_bottom,
+    _apply_detail_legend,
     _format_percent_axis,
+    _draw_end_point_labels,
+    _draw_dodged_text_labels,
+    _format_detail_legend_label,
 )
 from .render_data import build_compare_render_data
 from ..utils.constant import ErroText
@@ -50,19 +51,36 @@ def draw_compare_chart(raw_datas: list[JsonDict]) -> DrawResult:
     price_frames: list[pd.DataFrame] = []
     compare_columns: list[str] = []
     compare_labels: list[str] = []
+    legend_labels: list[str] = []
     for index, item in enumerate(compare.items):
         column_name = f"compare_{index}"
         compare_columns.append(column_name)
         compare_labels.append(item.name)
         dates = _datetime_series(item.df["日期"])
         values = _numeric_series(item.df["归一化"]) * 100
-        valid_mask = dates.notna() & values.notna()
+        closes = _numeric_series(item.df["收盘"])
+        valid_mask = dates.notna() & values.notna() & closes.notna()
         price_frames.append(
             pd.DataFrame(
                 {column_name: np.asarray(values[valid_mask])},
                 index=pd.DatetimeIndex(np.asarray(dates[valid_mask]), name="date"),
             )
         )
+        close_valid = closes[valid_mask]
+        if len(close_valid) > 0:
+            start_price = float(close_valid.iloc[0])
+            end_price = float(close_valid.iloc[-1])
+            # 完整涨跌幅以收盘价为准；归一化末点应与之接近
+            legend_labels.append(
+                _format_detail_legend_label(
+                    item.name,
+                    start_price,
+                    end_price,
+                    _pct_change(start_price, end_price),
+                )
+            )
+        else:
+            legend_labels.append(item.name)
     merged = pd.concat(price_frames, axis=1).sort_index().dropna(how="all")
     if merged.empty:
         return ErroText["notData"]
@@ -99,6 +117,8 @@ def draw_compare_chart(raw_datas: list[JsonDict]) -> DrawResult:
 
     fig: Figure = chart.figure
     fig.set_facecolor(BG_COLOR)
+    # 先定版面再算 display 坐标避让，避免后续调整改变标签间距
+    fig.subplots_adjust(left=0.045, right=0.965, top=0.875, bottom=0.10)
     axes = _axes_top_to_bottom(fig)
     for ax_index, ax in enumerate(axes):
         _style_axis(ax)
@@ -120,7 +140,9 @@ def draw_compare_chart(raw_datas: list[JsonDict]) -> DrawResult:
             for line in ax.lines:
                 line.set_zorder(3)
             x_right = max(len(prices) - 1, 0)
-            label_offsets: dict[int, int] = {}
+
+            # 曲线末端：点 + 引出线 + 纵向避让
+            end_entries: list[tuple[float, float, str, str, str]] = []
             for compare_index, column_name in enumerate(compare_columns):
                 series = _frame_column(prices, column_name).dropna()
                 if series.empty:
@@ -130,45 +152,24 @@ def draw_compare_chart(raw_datas: list[JsonDict]) -> DrawResult:
                 last_position = int(last_positions[-1]) if len(last_positions) > 0 else len(prices) - 1
                 last_value = float(series.iloc[-1])
                 stock_color = MPL_COLORS[compare_index % len(MPL_COLORS)]
-                bucket = int(round(last_value * 2))
-                offset_count = label_offsets.get(bucket, 0)
-                label_offsets[bucket] = offset_count + 1
-                y_offset = (offset_count - 1) * 13 if offset_count > 0 else 0
-                ax.scatter(
-                    [last_position],
-                    [last_value],
-                    color=stock_color,
-                    edgecolor=BG_COLOR,
-                    s=34,
-                    zorder=5,
+                end_entries.append(
+                    (
+                        float(last_position),
+                        last_value,
+                        compare_labels[compare_index],
+                        f" {last_value:+.2f}%",
+                        stock_color,
+                    )
                 )
-                name_area = TextArea(
-                    compare_labels[compare_index],
-                    textprops={"color": stock_color, "fontsize": 11, "fontweight": "bold"},
-                )
-                pct_area = TextArea(
-                    f" {last_value:+.2f}%",
-                    textprops={
-                        "color": UP_COLOR if last_value >= 0 else DOWN_COLOR,
-                        "fontsize": 11,
-                        "fontweight": "bold",
-                    },
-                )
-                label_box = HPacker(children=[name_area, pct_area], align="center", pad=0, sep=1)
-                label_artist = AnnotationBbox(
-                    label_box,
-                    (last_position, last_value),
-                    xybox=(10, y_offset),
-                    xycoords="data",
-                    boxcoords="offset points",
-                    box_alignment=(0, 0.5),
-                    frameon=True,
-                    pad=0.25,
-                    bboxprops={"facecolor": BG_COLOR, "edgecolor": stock_color, "alpha": 0.70},
-                    arrowprops={"arrowstyle": "-", "color": stock_color, "alpha": 0.75, "linewidth": 0.8},
-                    zorder=6,
-                )
-                ax.add_artist(label_artist)
+            ax.set_xlim(-1, x_right + max(9, 5 + len(end_entries)))
+
+            def _end_value_color(value_text: str) -> str:
+                try:
+                    return UP_COLOR if float(value_text.strip().rstrip("%")) >= 0 else DOWN_COLOR
+                except ValueError:
+                    return FG_COLOR
+
+            _draw_end_point_labels(ax, end_entries, value_color_fn=_end_value_color)
 
             # 标注每条对比序列的最高点、最低点，并显示区间最大涨幅/回撤。
             # 区间涨幅/回撤的终点是波段自己的峰/谷，不一定是全局极值点，
@@ -177,36 +178,19 @@ def draw_compare_chart(raw_datas: list[JsonDict]) -> DrawResult:
                 positions = np.flatnonzero(prices.index == timestamp)
                 return int(positions[-1]) if len(positions) > 0 else 0
 
-            def _annotate_extreme(
+            # 先收集全部极值标签，统一 2D 避让后再画
+            extreme_entries: list[tuple[float, float, str, str, tuple[float, float]]] = []
+
+            def _queue_extreme(
                 text: str,
                 position: int,
                 value: float,
                 color: str,
                 above: bool,
             ) -> None:
-                ax.scatter(
-                    [position],
-                    [value],
-                    color=color,
-                    edgecolor=BG_COLOR,
-                    s=42,
-                    zorder=5,
-                )
                 # 极值点 tag 向左侧偏移，避免与右侧的“最后一点”标签重叠
-                ax.annotate(
-                    text,
-                    xy=(position, value),
-                    xytext=(-14, 14 if above else -14),
-                    textcoords="offset points",
-                    color=color,
-                    fontsize=10,
-                    fontweight="bold",
-                    ha="center",
-                    va="bottom" if above else "top",
-                    bbox={"facecolor": BG_COLOR, "edgecolor": color, "alpha": 0.72, "pad": 2.5},
-                    arrowprops={"arrowstyle": "-", "color": color, "alpha": 0.75, "linewidth": 0.8},
-                    zorder=6,
-                )
+                preferred = (-18.0, 16.0 if above else -16.0)
+                extreme_entries.append((float(position), float(value), text, color, preferred))
 
             for compare_index, column_name in enumerate(compare_columns):
                 series = _frame_column(prices, column_name).dropna()
@@ -248,14 +232,14 @@ def draw_compare_chart(raw_datas: list[JsonDict]) -> DrawResult:
                 if runup_label is not None and runup_position == max_position:
                     max_label += f"\n{runup_label}"
                     runup_label = None
-                _annotate_extreme(max_label, max_position, max_value, stock_color, above=True)
+                _queue_extreme(max_label, max_position, max_value, stock_color, above=True)
 
                 # 最低点（区间回撤恰好在此见底时并入同一标签）
                 min_label = f"{compare_labels[compare_index]}\n跌幅 {min_value:+.2f}%"
                 if drawdown_label is not None and drawdown_position == min_position:
                     min_label += f"\n{drawdown_label}"
                     drawdown_label = None
-                _annotate_extreme(min_label, min_position, min_value, stock_color, above=False)
+                _queue_extreme(min_label, min_position, min_value, stock_color, above=False)
 
                 # 区间涨幅/回撤终点不与全局极值重合时，标注在真实发生的点位，
                 # 并用虚线画出波段起点 → 终点的跨度
@@ -270,7 +254,7 @@ def draw_compare_chart(raw_datas: list[JsonDict]) -> DrawResult:
                         alpha=0.55,
                         zorder=4,
                     )
-                    _annotate_extreme(
+                    _queue_extreme(
                         f"{compare_labels[compare_index]}\n{runup_label}",
                         runup_position,
                         float(series.iloc[swing.runup_end]),
@@ -288,7 +272,7 @@ def draw_compare_chart(raw_datas: list[JsonDict]) -> DrawResult:
                         alpha=0.55,
                         zorder=4,
                     )
-                    _annotate_extreme(
+                    _queue_extreme(
                         f"{compare_labels[compare_index]}\n{drawdown_label}",
                         drawdown_position,
                         float(series.iloc[swing.drawdown_end]),
@@ -296,18 +280,17 @@ def draw_compare_chart(raw_datas: list[JsonDict]) -> DrawResult:
                         above=False,
                     )
 
-            ax.set_xlim(-1, x_right + 7)
+            _draw_dodged_text_labels(ax, extreme_entries, min_sep_pts=36.0, fontsize=10.0)
+
+            # 末端标签的 xlim 已在上方设定；极值标注完成后保持右侧留白
             _apply_month_ticks(ax, prices.index)
             ax.tick_params(axis="x", rotation=20, labelbottom=True)
-        legend = ax.get_legend()
-        if legend is not None:
-            legend.get_frame().set_facecolor(BG_COLOR)
-            legend.get_frame().set_edgecolor(AXIS_COLOR)
-            for text, label in zip(legend.get_texts(), compare_labels, strict=False):
-                text.set_text(label)
-                text.set_color(FG_COLOR)
+        _apply_detail_legend(
+            ax,
+            legend_labels,
+            text_colors=[MPL_COLORS[i % len(MPL_COLORS)] for i in range(len(legend_labels))],
+        )
     if axes:
         axes[0].set_title("对比图", fontsize=24, fontweight="bold", color=FG_COLOR, pad=24)
     fig.text(0.016, 0.005, "数据来源：东方财富 | SayuStock", color=FG_COLOR, fontsize=9, alpha=0.65)
-    fig.subplots_adjust(left=0.045, right=0.965, top=0.875, bottom=0.10)
     return _fig_to_image(fig)

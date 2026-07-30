@@ -1,0 +1,168 @@
+"""末端 / 点标注避让与图例明细格式单测。"""
+
+from __future__ import annotations
+
+import sys
+import importlib.util
+from types import ModuleType
+from pathlib import Path
+from unittest.mock import MagicMock
+
+import matplotlib
+
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt  # noqa: E402
+
+REPO_ROOT = Path(__file__).resolve().parent.parent.parent.parent.parent
+sys.path.insert(0, str(REPO_ROOT))
+
+PKG_ROOT = Path(__file__).resolve().parent.parent / "SayuStock"
+PKG_NAME = "_end_label_dodge_test"
+
+
+def _ensure_pkg() -> None:
+    if PKG_NAME in sys.modules:
+        return
+    pkg_spec = importlib.util.spec_from_file_location(
+        PKG_NAME,
+        PKG_ROOT / "__init__.py",
+        submodule_search_locations=[str(PKG_ROOT)],
+    )
+    assert pkg_spec is not None
+    pkg = importlib.util.module_from_spec(pkg_spec)
+    pkg.__path__ = [str(PKG_ROOT)]
+    sys.modules[PKG_NAME] = pkg
+
+    for sub in ("utils", "stock_stockinfo"):
+        mod = ModuleType(f"{PKG_NAME}.{sub}")
+        mod.__path__ = [str(PKG_ROOT / sub)]
+        sys.modules[f"{PKG_NAME}.{sub}"] = mod
+
+    fonts_mod = ModuleType("gsuid_core.utils.fonts.fonts")
+    fonts_mod.FONT_ORIGIN_PATH = Path("/nonexistent")
+    sys.modules.setdefault("gsuid_core", ModuleType("gsuid_core"))
+    sys.modules.setdefault("gsuid_core.utils", ModuleType("gsuid_core.utils"))
+    sys.modules.setdefault("gsuid_core.utils.fonts", ModuleType("gsuid_core.utils.fonts"))
+    sys.modules["gsuid_core.utils.fonts.fonts"] = fonts_mod
+
+    compat = ModuleType(f"{PKG_NAME}.utils.mplchart_compat")
+    for name in (
+        "SMA",
+        "Pane",
+        "Chart",
+        "HLine",
+        "Price",
+        "Volume",
+        "BarPlot",
+        "LinePlot",
+        "Indicator",
+        "Candlesticks",
+    ):
+        setattr(compat, name, MagicMock(name=name))
+    sys.modules[f"{PKG_NAME}.utils.mplchart_compat"] = compat
+
+
+def _load_chart_base():
+    _ensure_pkg()
+    name = f"{PKG_NAME}.stock_stockinfo.chart_base"
+    if name in sys.modules and hasattr(sys.modules[name], "_dodge_end_label_offsets"):
+        return sys.modules[name]
+    spec = importlib.util.spec_from_file_location(
+        name,
+        PKG_ROOT / "stock_stockinfo" / "chart_base.py",
+    )
+    assert spec is not None and spec.loader is not None
+    mod = importlib.util.module_from_spec(spec)
+    sys.modules[name] = mod
+    spec.loader.exec_module(mod)
+    return mod
+
+
+chart_base = _load_chart_base()
+_dodge_end_label_offsets = chart_base._dodge_end_label_offsets
+_dodge_label_point_offsets = chart_base._dodge_label_point_offsets
+_format_detail_legend_label = chart_base._format_detail_legend_label
+_pct_change = chart_base._pct_change
+
+
+def _make_ax(y_min: float = -10.0, y_max: float = 10.0):
+    fig, ax = plt.subplots(figsize=(8, 6), dpi=100)
+    ax.set_xlim(0, 10)
+    ax.set_ylim(y_min, y_max)
+    return fig, ax
+
+
+def test_dodge_identical_ys_are_spread():
+    fig, ax = _make_ax()
+    try:
+        ys = [1.0, 1.0, 1.0]
+        offsets = _dodge_end_label_offsets(ys, ax, min_sep_pts=20.0)
+        assert len(offsets) == 3
+        y_offs = sorted(o[1] for o in offsets)
+        assert y_offs[1] - y_offs[0] >= 18.0
+        assert y_offs[2] - y_offs[1] >= 18.0
+        assert all(o[0] > 0 for o in offsets)
+    finally:
+        plt.close(fig)
+
+
+def test_dodge_well_separated_ys_keep_near_zero_offset():
+    fig, ax = _make_ax(y_min=-50, y_max=50)
+    try:
+        ys = [-30.0, 0.0, 30.0]
+        offsets = _dodge_end_label_offsets(ys, ax, min_sep_pts=20.0)
+        assert len(offsets) == 3
+        for _, y_off in offsets:
+            assert abs(y_off) < 5.0
+    finally:
+        plt.close(fig)
+
+
+def test_dodge_close_but_not_equal_ys_still_separate():
+    fig, ax = _make_ax()
+    try:
+        ys = [2.1, 2.3, 2.5]
+        offsets = _dodge_end_label_offsets(ys, ax, min_sep_pts=20.0)
+        y_offs = [o[1] for o in offsets]
+        assert max(abs(o) for o in y_offs) > 5.0
+        assert (max(y_offs) - min(y_offs)) >= 18.0
+    finally:
+        plt.close(fig)
+
+
+def test_dodge_empty_and_single():
+    fig, ax = _make_ax()
+    try:
+        assert _dodge_end_label_offsets([], ax) == []
+        single = _dodge_end_label_offsets([3.5], ax)
+        assert len(single) == 1
+        assert single[0][1] == 0.0
+        assert single[0][0] > 0
+    finally:
+        plt.close(fig)
+
+
+def test_point_offsets_repel_overlapping_preferred():
+    fig, ax = _make_ax()
+    try:
+        xy = [(1.0, 1.0), (1.0, 1.05), (1.0, 1.1)]
+        preferred = [(-14.0, 14.0), (-14.0, 14.0), (-14.0, 14.0)]
+        offsets = _dodge_label_point_offsets(xy, preferred, ax, min_sep_pts=30.0)
+        assert len(offsets) == 3
+        # 三个标签不应仍落在完全相同的 offset
+        assert len({(round(o[0], 2), round(o[1], 2)) for o in offsets}) >= 2
+        # 至少有纵向被推开
+        y_offs = [o[1] for o in offsets]
+        assert max(y_offs) - min(y_offs) >= 10.0
+    finally:
+        plt.close(fig)
+
+
+def test_detail_legend_label_format():
+    label = _format_detail_legend_label("贵州茅台", 1600.0, 1680.0)
+    assert "贵州茅台" in label
+    assert "起" in label and "末" in label
+    assert "1600" in label or "1600.0" in label
+    assert "+" in label or "5.00%" in label
+    assert abs(_pct_change(100.0, 110.0) - 10.0) < 1e-9
+    assert _pct_change(0.0, 10.0) == 0.0

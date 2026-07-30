@@ -40,6 +40,7 @@ from .chart_base import (
     _apply_month_ticks,
     _axes_top_to_bottom,
     _format_percent_axis,
+    _draw_dodged_text_labels,
     _apply_intraday_kline_ticks,
     _format_precise_percent_axis,
 )
@@ -229,6 +230,7 @@ def draw_single_kline_chart(raw_data: JsonDict, sp: str | None = None) -> DrawRe
             turnover_limit = max(turnover_max * 1.35, 0.01)
             ax.set_ylim(-turnover_limit, turnover_limit)
 
+            peak_labels: list[tuple[float, float, str, str, tuple[float, float]]] = []
             turnover_line = next((line for line in ax.lines if line.get_label() == "换手率"), None)
             if turnover_line is not None:
                 turnover_x = np.asarray(turnover_line.get_xdata(), dtype=float)
@@ -238,23 +240,14 @@ def draw_single_kline_chart(raw_data: JsonDict, sp: str | None = None) -> DrawRe
                     turnover_peak_index = int(np.nanargmax(np.where(finite_turnover, turnover_y, np.nan)))
                     turnover_peak_x = float(turnover_x[turnover_peak_index])
                     turnover_peak_y = float(turnover_y[turnover_peak_index])
-                    ax.scatter(
-                        [turnover_peak_x],
-                        [turnover_peak_y],
-                        color="#d77cff",
-                        edgecolor=BG_COLOR,
-                        s=46,
-                        zorder=5,
-                    )
-                    ax.annotate(
-                        f"换手率 {turnover_peak_y:.2f}%",
-                        xy=(turnover_peak_x, turnover_peak_y),
-                        xytext=(8, 10),
-                        textcoords="offset points",
-                        color="#d77cff",
-                        fontsize=11,
-                        fontweight="bold",
-                        bbox={"facecolor": BG_COLOR, "edgecolor": "#d77cff", "alpha": 0.72, "pad": 3},
+                    peak_labels.append(
+                        (
+                            turnover_peak_x,
+                            turnover_peak_y,
+                            f"换手率 {turnover_peak_y:.2f}%",
+                            "#d77cff",
+                            (8.0, 12.0),
+                        )
                     )
 
             cmf_line = next((line for line in ax.lines if line.get_label() == "CMF(20)"), None)
@@ -285,24 +278,32 @@ def draw_single_kline_chart(raw_data: JsonDict, sp: str | None = None) -> DrawRe
                     cmf_peak_index = int(np.nanargmax(np.where(np.isfinite(cmf_y), cmf_y, np.nan)))
                     cmf_peak_x = float(cmf_x[cmf_peak_index])
                     cmf_peak_y = float(cmf_y[cmf_peak_index])
-                    cmf_ax.scatter(
-                        [cmf_peak_x],
-                        [cmf_peak_y],
-                        color="#2ecc71",
-                        edgecolor=BG_COLOR,
-                        s=46,
-                        zorder=5,
+                    # CMF 在 twinx 上：映射到共享 x 的主轴 y 显示不直观，
+                    # 直接在 cmf_ax 上做避让标注更准确。
+                    _draw_dodged_text_labels(
+                        cmf_ax,
+                        [
+                            (
+                                cmf_peak_x,
+                                cmf_peak_y,
+                                f"CMF {cmf_peak_y * 100:.2f}%",
+                                "#2ecc71",
+                                (8.0, -18.0),
+                            )
+                        ],
+                        min_sep_pts=28.0,
+                        fontsize=11.0,
+                        ha="left",
                     )
-                    cmf_ax.annotate(
-                        f"CMF {cmf_peak_y * 100:.2f}%",
-                        xy=(cmf_peak_x, cmf_peak_y),
-                        xytext=(8, -18),
-                        textcoords="offset points",
-                        color="#2ecc71",
-                        fontsize=11,
-                        fontweight="bold",
-                        bbox={"facecolor": BG_COLOR, "edgecolor": "#2ecc71", "alpha": 0.72, "pad": 3},
-                    )
+
+            if peak_labels:
+                _draw_dodged_text_labels(
+                    ax,
+                    peak_labels,
+                    min_sep_pts=28.0,
+                    fontsize=11.0,
+                    ha="left",
+                )
         elif index == 2:
             ax.set_ylabel("RSI")
             ax.set_ylim(0, 100)

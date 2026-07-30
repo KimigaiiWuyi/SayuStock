@@ -14,7 +14,6 @@ import matplotlib.pyplot as plt  # noqa: E402
 from matplotlib import font_manager  # noqa: E402
 from matplotlib.axes import Axes  # noqa: E402
 from matplotlib.figure import Figure  # noqa: E402
-from matplotlib.offsetbox import HPacker, TextArea, AnnotationBbox  # noqa: E402
 
 from gsuid_core.logger import logger
 from gsuid_core.utils.fonts.fonts import FONT_ORIGIN_PATH
@@ -28,6 +27,13 @@ from ..utils.eastmoney import (
 )
 from ..utils.stock.request import get_gg
 from ..utils.mplchart_compat import Chart, Price  # noqa: E402
+from ..stock_stockinfo.chart_base import (  # noqa: E402
+    _pct_change,
+    _apply_detail_legend,
+    _draw_end_point_labels,
+    _draw_dodged_text_labels,
+    _format_detail_legend_label,
+)
 
 ValueType = Literal["pe", "pb", "dy"]
 BotSendContent = Union[str, bytes]
@@ -345,6 +351,7 @@ def draw_value_compare_chart(
 
     fig: Figure = chart.figure
     fig.set_facecolor(BG_COLOR)
+    fig.subplots_adjust(left=0.06, right=0.965, top=0.9, bottom=0.16)
     ax: Axes = chart.main_axes()
     _style_axis(ax)
     ax.set_ylabel(VALUE_NAME_MAP[_type])
@@ -360,72 +367,54 @@ def draw_value_compare_chart(
     padding = span * 0.08
     ax.set_ylim(data_min - padding, data_max + padding)
 
-    # 在每条曲线末端标注 名称 + 当前PE/PB，并对靠近的标签做纵向避让。
+    # 末端标签 + 图例明细（起/末/完整涨跌幅）
     x_right = max(len(prices) - 1, 0)
-    label_offsets: dict[int, int] = {}
+    end_entries: list[tuple[float, float, str, str, str]] = []
+    legend_labels: list[str] = []
+    legend_colors: list[str] = []
     for index, column in enumerate(value_columns):
         series = _frame_column(prices, column).dropna()
+        color = MPL_COLORS[index % len(MPL_COLORS)]
         if series.empty:
+            legend_labels.append(labels[index])
+            legend_colors.append(color)
             continue
         last_timestamp = series.index[-1]
         last_positions = np.flatnonzero(prices.index == last_timestamp)
         last_position = int(last_positions[-1]) if len(last_positions) > 0 else len(prices) - 1
+        first_value = float(series.iloc[0])
         last_value = float(series.iloc[-1])
-        color = MPL_COLORS[index % len(MPL_COLORS)]
-        bucket = int(round(last_value / max(span, 1.0) * 40))
-        offset_count = label_offsets.get(bucket, 0)
-        label_offsets[bucket] = offset_count + 1
-        y_offset = (offset_count - 1) * 13 if offset_count > 0 else 0
-        ax.scatter(
-            [last_position],
-            [last_value],
-            color=color,
-            edgecolor=BG_COLOR,
-            s=34,
-            zorder=5,
+        end_entries.append(
+            (
+                float(last_position),
+                last_value,
+                labels[index],
+                f" {last_value:.2f}",
+                color,
+            )
         )
-        name_area = TextArea(
-            labels[index],
-            textprops={"color": color, "fontsize": 11, "fontweight": "bold"},
+        legend_labels.append(
+            _format_detail_legend_label(
+                labels[index],
+                first_value,
+                last_value,
+                _pct_change(first_value, last_value),
+            )
         )
-        value_area = TextArea(
-            f" {last_value:.2f}",
-            textprops={"color": FG_COLOR, "fontsize": 11, "fontweight": "bold"},
-        )
-        label_box = HPacker(children=[name_area, value_area], align="center", pad=0, sep=1)
-        label_artist = AnnotationBbox(
-            label_box,
-            (last_position, last_value),
-            xybox=(10, y_offset),
-            xycoords="data",
-            boxcoords="offset points",
-            box_alignment=(0, 0.5),
-            frameon=True,
-            pad=0.25,
-            bboxprops={"facecolor": BG_COLOR, "edgecolor": color, "alpha": 0.70},
-            arrowprops={"arrowstyle": "-", "color": color, "alpha": 0.75, "linewidth": 0.8},
-            zorder=6,
-        )
-        ax.add_artist(label_artist)
-    ax.set_xlim(-1, x_right + 7)
+        legend_colors.append(color)
+
+    ax.set_xlim(-1, x_right + max(9, 5 + len(end_entries)))
+    _draw_end_point_labels(ax, end_entries)
     _apply_month_ticks(ax, prices.index)
     ax.tick_params(axis="x", rotation=20, labelbottom=True)
+    _apply_detail_legend(ax, legend_labels, text_colors=legend_colors)
 
-    legend = ax.get_legend()
-    if legend is not None:
-        legend.get_frame().set_facecolor(BG_COLOR)
-        legend.get_frame().set_edgecolor(AXIS_COLOR)
-        for text, label in zip(legend.get_texts(), labels):
-            text.set_text(label)
-            text.set_color(FG_COLOR)
-
-    # 股息率(DY)图：标注每只标的在窗口内发生的分红事件。
+    # 股息率(DY)图：标注每只标的在窗口内发生的分红事件（全图统一避让）。
     if _type == "dy":
         _annotate_dividend_events(ax, prices, series_list, value_columns, span, data_min, data_max)
 
     ax.set_title(title, fontsize=24, fontweight="bold", color=FG_COLOR, pad=24)
     fig.text(0.016, 0.005, "数据来源：东方财富 | SayuStock", color=FG_COLOR, fontsize=9, alpha=0.65)
-    fig.subplots_adjust(left=0.06, right=0.965, top=0.9, bottom=0.16)
     return _fig_to_image(fig)
 
 
@@ -468,12 +457,13 @@ def _annotate_dividend_events(
 ) -> None:
     """在股息率(DY)图上标注每只标的的每次分红事件。
 
-    每个事件以一个竖直短线（除权日对齐曲线 y 位置）、一个散点、以及一行文本标签
-    （除权日 + 每股分红 + 贡献股息率比例）表示。同一交易日可能发生多次分红，
-    会在纵向错开避免遮挡。同一只标的事件过多时，按贡献比例优先取 Top N。
+    每个事件以一个竖直短线（除权日对齐曲线 y 位置）、一个散点、以及文本标签
+    （除权日 + 每股分红 + 贡献股息率比例）表示。全部事件标签统一 2D 避让。
+    同一只标的事件过多时，按贡献比例优先取 Top N。
     """
     max_event_labels_per_series = 8
     index_to_position: dict[pd.Timestamp, int] = {ts: pos for pos, ts in enumerate(prices.index)}
+    label_entries: list[tuple[float, float, str, str, tuple[float, float]]] = []
 
     for series_index, (column, value_series) in enumerate(zip(value_columns, series_list)):
         if "events" not in value_series.df.columns:
@@ -493,9 +483,6 @@ def _annotate_dividend_events(
         y_max = float(y_values.max()) if not y_values.empty else data_max
         y_min = float(y_values.min()) if not y_values.empty else data_min
         vertical_pad = max((y_max - y_min) * 0.18, span * 0.04, 0.05)
-
-        # 为不同标的事件准备纵向偏移阶梯，避免互相重叠。
-        label_offsets_y: dict[pd.Timestamp, int] = {}
 
         # 用 (ex_date, event) 集合去重，避免同一事件在多行重复出现。
         seen_events: set[tuple[str, str]] = set()
@@ -531,15 +518,11 @@ def _annotate_dividend_events(
             reverse=True,
         )
         top_events = events_unique[:max_event_labels_per_series]
-        # 按时序排列后逐个画标签与竖线。
         top_events.sort(key=lambda item: item[0])
 
-        for ex_ts, event in top_events:
-            # 找到该事件日最近的 K 线 x 位置（该日可能无交易）。
-            # 使用 index_to_position 映射，它基于 prices.index（已合并+过滤后的日期）。
+        for event_rank, (ex_ts, event) in enumerate(top_events):
             position = index_to_position.get(ex_ts)
             if position is None:
-                # ex_ts 可能不在 prices.index 中，找最近的 <= ex_ts 的位置
                 closest = [pos for ts, pos in index_to_position.items() if ts <= ex_ts]
                 if not closest:
                     logger.debug(f"[SayuStock][DY-Annotate] 事件 {ex_ts} 无对应位置, 跳过")
@@ -558,7 +541,6 @@ def _annotate_dividend_events(
             contribution = float(event.get("contribution_pct", 0.0) or 0.0)
             ex_label = ex_ts.strftime("%Y-%m-%d")
 
-            # 竖直短线表示除权日对齐位置。
             ax.vlines(
                 position,
                 base_y - vertical_pad * 0.45,
@@ -579,36 +561,21 @@ def _annotate_dividend_events(
                 zorder=5,
             )
 
-            offset_index = label_offsets_y.get(ex_ts, 0)
-            label_offsets_y[ex_ts] = offset_index + 1
-            y_text = base_y + vertical_pad * (0.95 + 0.55 * offset_index)
+            # 首选偏移：右侧 + 略向上，同日事件预先错开；最终仍走全局避让
+            preferred = (10.0 + (event_rank % 3) * 4.0, 22.0 + (event_rank % 4) * 6.0)
+            text = f"{value_series.name}\n{ex_label}\n每股{bonus:.2f}元\n贡献{contribution:.2f}%"
+            label_entries.append((float(position), float(base_y), text, color, preferred))
 
-            text = f"{ex_label}\n每股{bonus:.2f}元\n贡献{contribution:.2f}%"
-            ax.annotate(
-                text,
-                xy=(position, base_y),
-                xytext=(8, y_text - base_y),
-                textcoords="offset points",
-                fontsize=8.5,
-                color=color,
-                fontweight="bold",
-                ha="left",
-                va="bottom",
-                bbox={
-                    "boxstyle": "round,pad=0.25",
-                    "facecolor": BG_COLOR,
-                    "edgecolor": color,
-                    "linewidth": 0.9,
-                    "alpha": 0.78,
-                },
-                arrowprops={
-                    "arrowstyle": "-",
-                    "color": color,
-                    "alpha": 0.7,
-                    "linewidth": 0.7,
-                },
-                zorder=7,
-            )
+    if label_entries:
+        # 钻石点已画，这里只画引出文字
+        _draw_dodged_text_labels(
+            ax,
+            label_entries,
+            min_sep_pts=38.0,
+            fontsize=8.5,
+            ha="left",
+            scatter=False,
+        )
 
 
 def _ai_return_value_compare(

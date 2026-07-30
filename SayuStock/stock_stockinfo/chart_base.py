@@ -106,8 +106,15 @@ __all__ = [
     "_datetime_series",
     "_date_index_positions",
     "_dict_value",
+    "_apply_detail_legend",
+    "_dodge_end_label_offsets",
+    "_dodge_label_point_offsets",
+    "_draw_dodged_text_labels",
+    "_draw_end_point_labels",
     "_draw_in_thread",
     "_fig_to_image",
+    "_format_detail_legend_label",
+    "_format_metric_value",
     "_format_money_axis",
     "_format_percent_axis",
     "_format_precise_percent_axis",
@@ -115,6 +122,7 @@ __all__ = [
     "_intraday_positions",
     "_mpl_bar_colors",
     "_numeric_series",
+    "_pct_change",
     "_series_from_value",
     "_setup_mpl",
     "_style_axis",
@@ -286,6 +294,343 @@ def _style_axis(ax: Axes, *, grid: bool = True) -> None:
         spine.set_linewidth(1.1)
     if grid:
         ax.grid(True, color=GRID_COLOR, alpha=0.36, linewidth=0.8)
+
+
+def _format_metric_value(value: float) -> str:
+    """价格 / 估值等数值的统一展示格式。"""
+    if not np.isfinite(value):
+        return "--"
+    abs_value = abs(value)
+    if abs_value >= 1000:
+        return f"{value:.1f}"
+    if abs_value >= 1:
+        return f"{value:.2f}"
+    if abs_value >= 0.01:
+        return f"{value:.3f}"
+    return f"{value:.4f}"
+
+
+def _pct_change(start: float, end: float) -> float:
+    """完整涨跌幅（%）。起点为 0 或非有限值时返回 0。"""
+    if not np.isfinite(start) or not np.isfinite(end) or start == 0:
+        return 0.0
+    return (end / start - 1.0) * 100.0
+
+
+def _format_detail_legend_label(
+    name: str,
+    start: float,
+    end: float,
+    change_pct: float | None = None,
+    *,
+    start_tag: str = "起",
+    end_tag: str = "末",
+) -> str:
+    """图例用双行标签：名称 + 起/末/完整涨跌幅。"""
+    pct = _pct_change(start, end) if change_pct is None else change_pct
+    return f"{name}\n{start_tag} {_format_metric_value(start)}  {end_tag} {_format_metric_value(end)}  {pct:+.2f}%"
+
+
+def _apply_detail_legend(
+    ax: Axes,
+    labels: Sequence[str],
+    *,
+    text_colors: Sequence[str] | None = None,
+    fontsize: float = 9.5,
+    loc: str = "upper left",
+) -> None:
+    """把已有图例文案替换成带明细的标签，并固定到左上角。"""
+    legend = ax.get_legend()
+    if legend is None:
+        return
+    # 不同 matplotlib 版本 API 略有差异
+    if hasattr(legend, "set_loc"):
+        legend.set_loc(loc)
+    else:
+        legend._loc = loc  # type: ignore[attr-defined]
+    frame = legend.get_frame()
+    frame.set_facecolor(BG_COLOR)
+    frame.set_edgecolor(AXIS_COLOR)
+    frame.set_alpha(0.88)
+    for index, text in enumerate(legend.get_texts()):
+        if index >= len(labels):
+            break
+        text.set_text(labels[index])
+        text.set_fontsize(fontsize)
+        if text_colors is not None and index < len(text_colors):
+            text.set_color(text_colors[index])
+        else:
+            text.set_color(FG_COLOR)
+
+
+def _ensure_axes_renderer(ax: Axes):
+    fig = ax.figure
+    fig.canvas.draw()
+    return fig.canvas.get_renderer()
+
+
+def _dodge_end_label_offsets(
+    y_values: Sequence[float],
+    ax: Axes,
+    *,
+    min_sep_pts: float = 20.0,
+    x_base_pts: float = 16.0,
+    x_stagger_pts: float = 6.0,
+) -> list[tuple[float, float]]:
+    """为曲线末端标签计算 (x_offset, y_offset)（单位：points），使相近标签纵向避让。
+
+    返回值可直接用于 ``AnnotationBbox(..., xybox=offset, boxcoords="offset points")``。
+    当标签相对数据点纵向挪开时，配合 ``arrowprops`` 即可画出点→标签的引出线。
+    """
+    n = len(y_values)
+    if n == 0:
+        return []
+    if n == 1:
+        return [(x_base_pts, 0.0)]
+
+    renderer = _ensure_axes_renderer(ax)
+    dpi = float(ax.figure.dpi)
+    px_per_pt = dpi / 72.0
+    min_sep_px = min_sep_pts * px_per_pt
+
+    display_ys = [float(ax.transData.transform((0.0, float(y)))[1]) for y in y_values]
+    order = sorted(range(n), key=lambda i: display_ys[i])
+    sorted_y = [display_ys[i] for i in order]
+
+    # 自下而上按最小间距挤开
+    packed = sorted_y[:]
+    for i in range(1, n):
+        packed[i] = max(packed[i], packed[i - 1] + min_sep_px)
+
+    # 碰撞簇整体回中，尽量贴近原始 y
+    cluster_start = 0
+    while cluster_start < n:
+        cluster_end = cluster_start
+        while cluster_end + 1 < n and abs((packed[cluster_end + 1] - packed[cluster_end]) - min_sep_px) < 1e-6:
+            cluster_end += 1
+        if cluster_end > cluster_start:
+            size = cluster_end - cluster_start + 1
+            orig_mean = sum(sorted_y[cluster_start : cluster_end + 1]) / size
+            pack_mean = sum(packed[cluster_start : cluster_end + 1]) / size
+            shift = orig_mean - pack_mean
+            for k in range(cluster_start, cluster_end + 1):
+                packed[k] += shift
+        cluster_start = cluster_end + 1
+
+    # 回中后可能重新重叠，再做一次前向/后向收紧
+    for i in range(1, n):
+        if packed[i] < packed[i - 1] + min_sep_px:
+            packed[i] = packed[i - 1] + min_sep_px
+    for i in range(n - 2, -1, -1):
+        if packed[i] > packed[i + 1] - min_sep_px:
+            packed[i] = packed[i + 1] - min_sep_px
+
+    # 限制在坐标轴可视范围内
+    bbox = ax.get_window_extent(renderer=renderer)
+    margin = min_sep_px * 0.35
+    y_lo = float(bbox.y0) + margin
+    y_hi = float(bbox.y1) - margin
+    if packed[0] < y_lo:
+        shift = y_lo - packed[0]
+        packed = [p + shift for p in packed]
+    if packed[-1] > y_hi:
+        shift = packed[-1] - y_hi
+        packed = [p - shift for p in packed]
+    for i in range(1, n):
+        if packed[i] < packed[i - 1] + min_sep_px:
+            packed[i] = packed[i - 1] + min_sep_px
+    if packed[-1] > y_hi:
+        for i in range(n - 2, -1, -1):
+            if packed[i + 1] - packed[i] < min_sep_px:
+                packed[i] = packed[i + 1] - min_sep_px
+
+    # 映射回 points 偏移；纵向挪得越远，横向略加错开，引出线更清晰
+    results: list[tuple[float, float]] = [(x_base_pts, 0.0) for _ in range(n)]
+    for rank, orig_i in enumerate(order):
+        y_offset_pts = (packed[rank] - display_ys[orig_i]) / px_per_pt
+        stagger = (rank - (n - 1) / 2.0) * (x_stagger_pts * 0.15)
+        fan = min(abs(y_offset_pts) * 0.12, 18.0)
+        x_offset_pts = x_base_pts + fan + stagger
+        results[orig_i] = (x_offset_pts, y_offset_pts)
+    return results
+
+
+def _dodge_label_point_offsets(
+    xy_data: Sequence[tuple[float, float]],
+    preferred_offsets: Sequence[tuple[float, float]],
+    ax: Axes,
+    *,
+    min_sep_pts: float = 32.0,
+    max_iter: int = 60,
+) -> list[tuple[float, float]]:
+    """对任意位置的点标注做 2D 互斥避让，返回调整后的 offset points。
+
+    用于极值点、分红事件、副图峰值等「点 + 引出线」标签。
+    """
+    n = len(xy_data)
+    if n == 0:
+        return []
+    if n != len(preferred_offsets):
+        raise ValueError("xy_data 与 preferred_offsets 长度必须一致")
+    if n == 1:
+        return [preferred_offsets[0]]
+
+    _ensure_axes_renderer(ax)
+    dpi = float(ax.figure.dpi)
+    px_per_pt = dpi / 72.0
+    min_sep_px = min_sep_pts * px_per_pt
+
+    # 锚点 display 坐标 + 首选标签 display 位置
+    anchor_disp: list[tuple[float, float]] = []
+    label_disp: list[list[float]] = []
+    for (x, y), (ox, oy) in zip(xy_data, preferred_offsets, strict=True):
+        ax_x, ax_y = ax.transData.transform((float(x), float(y)))
+        anchor_disp.append((float(ax_x), float(ax_y)))
+        label_disp.append([float(ax_x) + float(ox) * px_per_pt, float(ax_y) + float(oy) * px_per_pt])
+
+    for _ in range(max_iter):
+        moved = False
+        for i in range(n):
+            for j in range(i + 1, n):
+                dx = label_disp[j][0] - label_disp[i][0]
+                dy = label_disp[j][1] - label_disp[i][1]
+                dist = float(np.hypot(dx, dy))
+                if dist >= min_sep_px:
+                    continue
+                if dist < 1e-6:
+                    # 完全重合时优先纵向推开
+                    dx, dy, dist = 0.0, 1.0, 1.0
+                push = (min_sep_px - dist) / 2.0
+                ux, uy = dx / dist, dy / dist
+                # 更偏向纵向分离，阅读更清晰
+                if abs(uy) < 0.25:
+                    uy = 1.0 if dy >= 0 else -1.0
+                    ux = 0.15 if dx >= 0 else -0.15
+                    norm = float(np.hypot(ux, uy)) or 1.0
+                    ux, uy = ux / norm, uy / norm
+                label_disp[i][0] -= ux * push
+                label_disp[i][1] -= uy * push
+                label_disp[j][0] += ux * push
+                label_disp[j][1] += uy * push
+                moved = True
+        if not moved:
+            break
+
+    results: list[tuple[float, float]] = []
+    for i in range(n):
+        ox = (label_disp[i][0] - anchor_disp[i][0]) / px_per_pt
+        oy = (label_disp[i][1] - anchor_disp[i][1]) / px_per_pt
+        results.append((ox, oy))
+    return results
+
+
+def _draw_end_point_labels(
+    ax: Axes,
+    entries: Sequence[tuple[float, float, str, str, str]],
+    *,
+    min_sep_pts: float = 22.0,
+    x_base_pts: float = 18.0,
+    x_stagger_pts: float = 8.0,
+    value_color_fn: Callable[[str], str] | None = None,
+) -> None:
+    """绘制曲线末端「点 + 引出线 + 名称/数值」标签，并做纵向避让。
+
+    entries 每项为 ``(x, y, name, value_text, color)``，value_text 含前导空格，如 `` +1.23%``。
+    """
+    if not entries:
+        return
+    offsets = _dodge_end_label_offsets(
+        [item[1] for item in entries],
+        ax,
+        min_sep_pts=min_sep_pts,
+        x_base_pts=x_base_pts,
+        x_stagger_pts=x_stagger_pts,
+    )
+    for (x, y, name, value_text, color), (x_off, y_off) in zip(entries, offsets, strict=True):
+        ax.scatter([x], [y], color=color, edgecolor=BG_COLOR, s=40, zorder=5)
+        value_color = value_color_fn(value_text) if value_color_fn is not None else FG_COLOR
+        name_area = TextArea(
+            name,
+            textprops={"color": color, "fontsize": 11, "fontweight": "bold"},
+        )
+        value_area = TextArea(
+            value_text,
+            textprops={"color": value_color, "fontsize": 11, "fontweight": "bold"},
+        )
+        label_box = HPacker(children=[name_area, value_area], align="center", pad=0, sep=1)
+        artist = AnnotationBbox(
+            label_box,
+            (x, y),
+            xybox=(x_off, y_off),
+            xycoords="data",
+            boxcoords="offset points",
+            box_alignment=(0, 0.5),
+            frameon=True,
+            pad=0.25,
+            bboxprops={"facecolor": BG_COLOR, "edgecolor": color, "alpha": 0.78},
+            arrowprops={
+                "arrowstyle": "-",
+                "color": color,
+                "alpha": 0.85,
+                "linewidth": 1.0,
+                "connectionstyle": "arc3,rad=0",
+                "shrinkA": 0,
+                "shrinkB": 1,
+            },
+            zorder=6,
+        )
+        ax.add_artist(artist)
+
+
+def _draw_dodged_text_labels(
+    ax: Axes,
+    entries: Sequence[tuple[float, float, str, str, tuple[float, float]]],
+    *,
+    min_sep_pts: float = 34.0,
+    fontsize: float = 10.0,
+    ha: str = "center",
+    va_from_offset: bool = True,
+    scatter: bool = True,
+    scatter_size: float = 42.0,
+) -> None:
+    """绘制「点 + 引出线 + 文本框」标签，并对首选偏移做 2D 避让。
+
+    entries 每项为 ``(x, y, text, color, preferred_offset_pts)``。
+    """
+    if not entries:
+        return
+    xy_data = [(float(item[0]), float(item[1])) for item in entries]
+    preferred = [item[4] for item in entries]
+    offsets = _dodge_label_point_offsets(xy_data, preferred, ax, min_sep_pts=min_sep_pts)
+    for (x, y, text, color, _), (ox, oy) in zip(entries, offsets, strict=True):
+        if scatter:
+            ax.scatter([x], [y], color=color, edgecolor=BG_COLOR, s=scatter_size, zorder=5)
+        if va_from_offset:
+            va = "bottom" if oy >= 0 else "top"
+        else:
+            va = "center"
+        ax.annotate(
+            text,
+            xy=(x, y),
+            xytext=(ox, oy),
+            textcoords="offset points",
+            color=color,
+            fontsize=fontsize,
+            fontweight="bold",
+            ha=ha,
+            va=va,
+            bbox={"facecolor": BG_COLOR, "edgecolor": color, "alpha": 0.75, "pad": 2.5},
+            arrowprops={
+                "arrowstyle": "-",
+                "color": color,
+                "alpha": 0.8,
+                "linewidth": 0.9,
+                "connectionstyle": "arc3,rad=0",
+                "shrinkA": 0,
+                "shrinkB": 1,
+            },
+            zorder=6,
+        )
 
 
 def _mpl_bar_colors(colors: Sequence[str]) -> list[str]:
