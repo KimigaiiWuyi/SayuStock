@@ -63,12 +63,14 @@ class CloudMapDataService:
         elif resolved_sector and resolved_sector.startswith("single-stock-kline"):
             raw_data = await self._fetch_kline(market, resolved_sector, start_time, end_time)
         elif resolved_sector == "compare-stock":
-            raw_data, raw_datas = await self.fetch_compare_stocks(market, start_time, end_time)
+            raw_data, compare_datas = await self.fetch_compare_stocks(market, start_time, end_time)
+            raw_datas = list[IntradaySeries | KlineSeries](compare_datas)
             st_f = start_time.strftime("%Y%m%d") if start_time else ""
             et_f = end_time.strftime("%Y%m%d") if end_time else ""
             special_cache_key = f"compare-stock-{st_f}-{et_f}"
         elif resolved_sector == "single-stock":
-            raw_data, raw_datas = await self.fetch_single_stock_group(market, start_time, end_time)
+            raw_data, single_datas = await self.fetch_single_stock_group(market, start_time, end_time)
+            raw_datas = list[IntradaySeries | KlineSeries](single_datas)
         else:
             snap = await port.board(market, limit=100, sort_asc=False)
             raw_data = snap.message if is_market_error(snap) else snap

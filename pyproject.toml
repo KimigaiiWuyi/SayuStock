@@ -32,27 +32,21 @@ exclude = ["tests", "deploy"]
 [tool.poetry.urls]
 "Bug Tracker" = "https://github.com/KimigaiiWuyi/SayuStock/issues"
 
+# basedpyright 与 pyright 共用 [tool.pyright]；二者不能同时出现 tool.basedpyright
 [tool.pyright]
+include = ["SayuStock"]
+# Kronos 是 vendored 的第三方 submodule，不检查它自己的代码
+exclude = ["**/__pycache__", "**/node_modules", "SayuStock/Kronos"]
+extraPaths = [
+    "../../../",
+    "../../../gsuid_core",
+    "../../../gsuid_core/ai_core",
+]
+pythonVersion = "3.12"
+typeCheckingMode = "basic"
+reportMissingTypeStubs = false
+reportMissingModuleSource = false
 disableBytesTypePromotions = false
-include = ["SayuStock"]
-# Kronos 是 vendored 的第三方 submodule，不检查它自己的代码
-exclude = ["SayuStock/Kronos"]
-extraPaths = [
-    "../../../",
-    "../../../gsuid_core",
-    "../../../gsuid_core/ai_core",
-]
-
-[tool.basedpyright]
-deprecateTypingAliases = false
-include = ["SayuStock"]
-# Kronos 是 vendored 的第三方 submodule，不检查它自己的代码
-exclude = ["SayuStock/Kronos"]
-extraPaths = [
-    "../../../",
-    "../../../gsuid_core",
-    "../../../gsuid_core/ai_core",
-]
 
 [project]
 name = "SayuStock"

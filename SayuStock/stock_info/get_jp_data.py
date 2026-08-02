@@ -1,12 +1,13 @@
 import asyncio
+from typing import Any
 
 import httpx
-from bs4 import BeautifulSoup
+from bs4 import Tag, BeautifulSoup
 
 from gsuid_core.logger import logger
 
 
-async def get_live_pch_by_symbol(soup: object, symbol: str) -> object:
+async def get_live_pch_by_symbol(soup: BeautifulSoup | Tag, symbol: str) -> tuple[float, float] | None:
     table = soup.select_one("table.table.table-hover.sortable-theme-minimal")
 
     if not table:
@@ -37,16 +38,16 @@ async def get_live_pch_by_symbol(soup: object, symbol: str) -> object:
     return float(pch_td.get_text(strip=True)[:-1]), float(p_td.get_text(strip=True))
 
 
-def calculate_change_rate(a: float, b: float) -> object:
+def calculate_change_rate(a: float, b: float) -> float:
     previous_value = b - a
     if previous_value == 0:
-        return 0
+        return 0.0
 
     diff = a / previous_value
     return diff * 100
 
 
-async def get_jpy() -> object:
+async def get_jpy() -> dict[str, dict[str, Any]] | None:
     url = "https://zh.tradingeconomics.com/japan/government-bond-yield"
     symbol_to_find1 = "GJGB30Y:IND"
     symbol_to_find2 = "GJGB10:IND"

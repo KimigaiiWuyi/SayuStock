@@ -10,12 +10,18 @@
     }
   },
   "python.autoComplete.extraPaths": [
-    "${workspaceFolder}/../../../../"
+    "${workspaceFolder}/../../../"
   ],
-  "basedpyright.analysis.extraPaths": [
+  "python.analysis.extraPaths": [
     "${workspaceFolder}/../../../"
   ],
   "python.analysis.typeCheckingMode": "off",
+  "basedpyright.analysis.typeCheckingMode": "basic",
+  "basedpyright.analysis.extraPaths": [
+    "${workspaceFolder}/../../../",
+    "${workspaceFolder}/../../../gsuid_core",
+    "${workspaceFolder}/../../../gsuid_core/ai_core"
+  ],
   "python.defaultInterpreterPath": "${workspaceFolder}/../../../.venv/Scripts/python.exe",
   "python-envs.defaultEnvManager": "ms-python.python:venv",
   "python-envs.pythonProjects": []

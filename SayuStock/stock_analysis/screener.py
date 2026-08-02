@@ -100,8 +100,12 @@ def apply_filters(df: pd.DataFrame, filters: list[tuple[str, str, float, float |
         return df
     mask = pd.Series(True, index=df.index)
     for col, op, v, v2 in filters:
-        series = df[col] if col in df.columns else pd.Series([None] * len(df), index=df.index)
-        s = pd.to_numeric(series, errors="coerce")
+        # df[col] 的 stubs 是宽联合类型；显式落成 Series 再 to_numeric，避免 .ge/.where 等成员报错
+        if col in df.columns:
+            numeric = pd.to_numeric(df[col], errors="coerce")
+            s = numeric if isinstance(numeric, pd.Series) else pd.Series(numeric, index=df.index)
+        else:
+            s = pd.Series(float("nan"), index=df.index, dtype="float64")
         if col == "pe":
             s = s.where(s > 0)
         if op == "between" and v2 is not None:

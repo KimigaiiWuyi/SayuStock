@@ -18,7 +18,7 @@
 
 import asyncio
 from io import BytesIO
-from typing import TypeVar, Protocol, ParamSpec, runtime_checkable
+from typing import TypeVar, Protocol, ParamSpec, cast, runtime_checkable
 from datetime import datetime
 from collections.abc import Callable, Sequence
 
@@ -36,6 +36,7 @@ from matplotlib.figure import Figure  # noqa: E402
 from matplotlib.ticker import FuncFormatter  # noqa: E402
 from matplotlib.patches import Rectangle  # noqa: E402
 from matplotlib.offsetbox import HPacker, TextArea, AnnotationBbox  # noqa: E402
+from matplotlib.backend_bases import RendererBase  # noqa: E402
 
 from gsuid_core.utils.fonts.fonts import FONT_ORIGIN_PATH
 
@@ -380,10 +381,23 @@ def _apply_detail_legend(
             text.set_color(FG_COLOR)
 
 
-def _ensure_axes_renderer(ax: Axes) -> object:
+def _ensure_axes_renderer(ax: Axes) -> RendererBase:
+    """拿到可用于 ``get_window_extent(renderer=...)`` 的 renderer。
+
+    stubs 里 ``Figure.canvas`` 可能是 ``None``，且 ``get_renderer`` 只在 Agg canvas 上；
+    运行时 Agg 后端一定有这两个属性。
+    """
     fig = ax.figure
-    fig.canvas.draw()
-    return fig.canvas.get_renderer()
+    if fig is None:
+        raise RuntimeError("Axes 未绑定 Figure，无法获取 renderer")
+    canvas = fig.canvas
+    if canvas is None:
+        raise RuntimeError("Figure 未绑定 canvas，无法获取 renderer")
+    canvas.draw()
+    get_renderer = getattr(canvas, "get_renderer", None)
+    if not callable(get_renderer):
+        raise RuntimeError("当前 canvas 不支持 get_renderer（需要 Agg 后端）")
+    return cast(RendererBase, get_renderer())
 
 
 def _estimate_text_box_pts(text: str, fontsize: float, *, pad_pts: float = 4.0) -> tuple[float, float]:

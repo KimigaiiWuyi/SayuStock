@@ -66,10 +66,10 @@ def draw_compare_chart(series_list: list[KlineSeries]) -> DrawResult:
                 index=pd.DatetimeIndex(np.asarray(dates[valid_mask]), name="date"),
             )
         )
-        close_valid = closes[valid_mask]
-        if len(close_valid) > 0:
-            start_price = float(close_valid.iloc[0])
-            end_price = float(close_valid.iloc[-1])
+        close_vals = np.asarray(closes[valid_mask], dtype=float)
+        if close_vals.size > 0:
+            start_price = float(close_vals[0])
+            end_price = float(close_vals[-1])
             # 完整涨跌幅以收盘价为准；归一化末点应与之接近
             legend_labels.append(
                 _format_detail_legend_label(

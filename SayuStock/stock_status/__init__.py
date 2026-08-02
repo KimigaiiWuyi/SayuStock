@@ -6,12 +6,12 @@ from ..stock_news.__init__ import TASK_NAME
 from ..utils.database.models import SsBind
 
 
-async def get_subscribe_num() -> object:
+async def get_subscribe_num() -> int:
     datas = await gs_subscribe.get_subscribe(TASK_NAME)
     return len(datas) if datas else 0
 
 
-async def get_add_num() -> object:
+async def get_add_num() -> int:
     datas = await SsBind.get_all_data()
     return len(datas) if datas else 0
 

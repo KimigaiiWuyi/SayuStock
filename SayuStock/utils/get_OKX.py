@@ -90,7 +90,7 @@ CRYPTO_MAP = {
 CRYPTO_MAP.update({value: value for key, value in CRYPTO_MAP.items() if key not in value})
 
 
-def analyze_market_target(query: str) -> str:
+def analyze_market_target(query: str) -> tuple[str, str]:
     """
     分析用户输入，判断是股票还是虚拟货币。
 

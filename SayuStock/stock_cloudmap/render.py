@@ -16,6 +16,7 @@ from pathlib import Path
 from datetime import datetime, timedelta
 
 import plotly.express as px
+from plotly.graph_objects import Figure
 
 from gsuid_core.logger import logger
 from gsuid_core.ai_core.trigger_bridge import ai_return
@@ -34,7 +35,7 @@ from ..stock_config.stock_config import STOCK_CONFIG
 PLOTLY_COLORS = ["#1f77b4", "#ff7f0e", "#2ca02c", "#d62728", "#9467bd", "#17becf", "#e377c2"]
 
 
-async def to_fig(snap: BoardSnapshot, market: str, sector: str | None = None, layer: int = 2) -> object:
+async def to_fig(snap: BoardSnapshot, market: str, sector: str | None = None, layer: int = 2) -> str | Figure:
     data = build_cloudmap_render_data(snap, market, sector, layer)
     if isinstance(data, str):
         return data

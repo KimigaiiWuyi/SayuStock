@@ -12,8 +12,9 @@
 from __future__ import annotations
 
 import inspect
-from typing import Any
+from typing import Any, cast
 
+from mplchart import primitives as _mpl_primitives
 from mplchart.chart import Chart as _MplChart
 from mplchart.indicators import SMA, Indicator
 from mplchart.primitives import (
@@ -25,10 +26,8 @@ from mplchart.primitives import (
     Candlesticks,
 )
 
-try:
-    from mplchart.primitives import Price as _NativePrice
-except ImportError:  # mplchart >= 0.0.46 移除了 Price
-    _NativePrice = None
+# getattr：新版 stubs/包里可能没有 Price，避免 reportAttributeAccessIssue
+_NativePrice = cast("type[LinePlot] | None", getattr(_mpl_primitives, "Price", None))
 
 
 __all__ = [
@@ -116,11 +115,13 @@ class Chart(_MplChart):
         super().__init__(prices, **filtered)
 
     def add_legends(self) -> Any:
-        if hasattr(_MplChart, "add_legends"):
-            return _MplChart.add_legends(self)
+        method = getattr(_MplChart, "add_legends", None)
+        if callable(method):
+            return method(self)
         return self.canvas.add_legends()
 
     def main_axes(self) -> Any:
-        if hasattr(_MplChart, "main_axes"):
-            return _MplChart.main_axes(self)
+        method = getattr(_MplChart, "main_axes", None)
+        if callable(method):
+            return method(self)
         return self.canvas.main_axes()

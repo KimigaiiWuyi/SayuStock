@@ -54,10 +54,12 @@ def kline_to_cn_df(series: KlineSeries) -> pd.DataFrame:
     df = df.dropna(subset=["开盘", "收盘", "成交量"]).reset_index(drop=True)
     if df.empty:
         return df
-    df["5日均线"] = ma(df["收盘"], 5)
-    df["10日均线"] = ma(df["收盘"], 10)
+    close = df["收盘"]
+    assert isinstance(close, pd.Series), "收盘列存在重复标签"
+    df["5日均线"] = ma(close, 5)
+    df["10日均线"] = ma(close, 10)
     df["换手率"] = df["换手率"].astype(float)
-    df["归一化"] = normalize_pct(df["收盘"])
+    df["归一化"] = normalize_pct(close)
     return df
 
 

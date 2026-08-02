@@ -1,0 +1,19 @@
+{
+  "include": ["SayuStock"],
+  "exclude": [
+    "**/__pycache__",
+    "**/node_modules",
+    "SayuStock/Kronos"
+  ],
+  "extraPaths": [
+    "../../../",
+    "../../../gsuid_core",
+    "../../../gsuid_core/ai_core"
+  ],
+  "pythonVersion": "3.12",
+  "typeCheckingMode": "basic",
+  "reportMissingTypeStubs": false,
+  "reportMissingModuleSource": false,
+  "venvPath": "../../../",
+  "venv": ".venv"
+}

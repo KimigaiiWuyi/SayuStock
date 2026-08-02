@@ -9,7 +9,7 @@ plotly 版（``stock_cloudmap/render.py``）与 mpl 版（``stock_stockinfo``）
 from __future__ import annotations
 
 import math
-from typing import Any, List
+from typing import Any, List, cast
 from collections import defaultdict
 from dataclasses import dataclass
 
@@ -204,11 +204,11 @@ def _resolve_trend_absolute_datetimes(
         if parsed is not None:
             full_count += 1
     if full_count >= max(1, len(trends) // 2):
-        resolved: list[tuple[dict[str, Any], pd.Timestamp]] = []
+        full_resolved: list[tuple[dict[str, Any], pd.Timestamp]] = []
         for item, parsed in full_parsed:
             if parsed is not None:
-                resolved.append((item, parsed))
-        return resolved
+                full_resolved.append((item, parsed))
+        return full_resolved
 
     # 路径 2：仅 HH:MM —— 顺序回绕 + 锚定最后一点
     clock_times: list[_dt.time] = []
@@ -238,11 +238,14 @@ def _resolve_trend_absolute_datetimes(
         last_date = now_bjt_dt.date() - _dt.timedelta(days=1)
 
     first_date = last_date - _dt.timedelta(days=day_offsets[-1])
-    resolved = []
+    clock_resolved: list[tuple[dict[str, Any], pd.Timestamp]] = []
     for item, clock, offset in zip(trends, clock_times, day_offsets, strict=False):
         abs_dt = _dt.datetime.combine(first_date + _dt.timedelta(days=offset), clock)
-        resolved.append((item, pd.Timestamp(abs_dt)))
-    return resolved
+        ts = pd.Timestamp(abs_dt)
+        if pd.isna(ts):
+            continue
+        clock_resolved.append((item, cast(pd.Timestamp, ts)))
+    return clock_resolved
 
 
 def _infer_kline_freq(df: pd.DataFrame) -> tuple[str, str, str, pd.Timedelta]:
@@ -394,7 +397,9 @@ def _rows_from_resolved_trends(
 
     existing_by_ts: dict[pd.Timestamp, dict[str, Any]] = {}
     for item, ts in resolved:
-        minute_ts = pd.Timestamp(ts).floor("min")
+        minute_ts = cast(pd.Timestamp, pd.Timestamp(ts).floor("min"))
+        if pd.isna(minute_ts):
+            continue
         existing_by_ts[minute_ts] = {**item, "datetime": minute_ts}
 
     data_times = sorted(existing_by_ts.keys())

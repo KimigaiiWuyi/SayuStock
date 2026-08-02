@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import sys
 import asyncio
-from typing import TYPE_CHECKING, Any, Union
+from typing import TYPE_CHECKING, Any, Union, cast
 from pathlib import Path
 from contextlib import contextmanager
 from collections.abc import Iterator
@@ -223,7 +223,8 @@ def generate_trading_times(
         in_trade = any(start_h <= t_float <= end_h for (start_h, end_h) in intervals)
         if not in_trade:
             continue
-        times.append(curr)
+        if isinstance(curr, pd.Timestamp) and not pd.isna(curr):
+            times.append(curr)
 
     if len(times) < periods:
         raise RuntimeError(
@@ -270,14 +271,11 @@ def gdf(df: pd.DataFrame, series: KlineSeries) -> str | PlotlyFigure:
         return ErroText["notData"]
 
     timestamps = work["timestamps"]
+    inferred_freq = pd.Timedelta(days=1)
     if len(timestamps) >= 2:
         diff0 = timestamps.iloc[-1] - timestamps.iloc[-2]
         if isinstance(diff0, pd.Timedelta) and not pd.isna(diff0):
-            inferred_freq: pd.Timedelta = diff0
-        else:
-            inferred_freq = pd.Timedelta(days=1)
-    else:
-        inferred_freq = pd.Timedelta(days=1)
+            inferred_freq = pd.Timedelta(diff0)
 
     freq_minutes = float(inferred_freq.total_seconds()) / 60.0
     logger.info(f"[SayuStock] 股票K线周期: {freq_minutes}")
@@ -334,15 +332,22 @@ def gdf(df: pd.DataFrame, series: KlineSeries) -> str | PlotlyFigure:
     x_future_ts = work.iloc[future_input_start_index:]["timestamps"].reset_index(drop=True)
 
     timestamps = work["timestamps"]
-    default_freq = pd.Timedelta(days=1)
+    freq = pd.Timedelta(days=1)
     if len(timestamps) >= 2:
         diff = timestamps.iloc[-1] - timestamps.iloc[-2]
-        freq: pd.Timedelta = diff if isinstance(diff, pd.Timedelta) and not pd.isna(diff) else default_freq
-    else:
-        freq = default_freq
+        if isinstance(diff, pd.Timedelta) and not pd.isna(diff):
+            freq = pd.Timedelta(diff)
 
-    last_timestamp = pd.Timestamp(timestamps.iloc[-1])
-    pred_times = generate_trading_times(last_timestamp, pred_len, freq)
+    last_raw = timestamps.iloc[-1]
+    last_timestamp = pd.Timestamp(last_raw)
+    if pd.isna(last_timestamp):
+        return ErroText["notData"]
+    # stubs 里 Timestamp(...) / Timedelta(...) 常带 NaTType 联合，运行时已排除 NaT
+    pred_times = generate_trading_times(
+        cast(pd.Timestamp, last_timestamp),
+        pred_len,
+        cast(pd.Timedelta, freq),
+    )
 
     preds_future_list: list[NDArray[np.floating[Any]]] = []
     for _ in trange(sample_count, desc="Predicting future samples"):

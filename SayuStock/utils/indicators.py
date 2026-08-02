@@ -38,7 +38,7 @@ mplchart 默认的西方口径：
 - ``kdj``：RSV 递归平滑，K/D 初值取中性 50。
 """
 
-from typing import NamedTuple
+from typing import NamedTuple, cast
 
 import numpy as np
 import pandas as pd
@@ -86,12 +86,12 @@ __all__ = [
 # ============================================================
 def ma(close: pd.Series, period: int) -> pd.Series:
     """简单移动平均 MA(N)。"""
-    return close.rolling(window=period).mean()
+    return cast(pd.Series, close.rolling(window=period).mean())
 
 
 def ema(close: pd.Series, span: int) -> pd.Series:
     """指数移动平均 EMA(N)（递归口径，adjust=False）。"""
-    return close.ewm(span=span, adjust=False).mean()
+    return cast(pd.Series, close.ewm(span=span, adjust=False).mean())
 
 
 # ============================================================
@@ -126,12 +126,12 @@ def rsi(close: pd.Series, period: int) -> pd.Series:
     delta = close.diff()
     gain = delta.clip(lower=0.0)
     loss = -delta.clip(upper=0.0)
-    avg_gain = gain.ewm(alpha=1.0 / period, adjust=False).mean()
-    avg_loss = loss.ewm(alpha=1.0 / period, adjust=False).mean()
-    rs = avg_gain / avg_loss
-    out = 100.0 - 100.0 / (1.0 + rs)
+    avg_gain = cast(pd.Series, gain.ewm(alpha=1.0 / period, adjust=False).mean())
+    avg_loss = cast(pd.Series, loss.ewm(alpha=1.0 / period, adjust=False).mean())
+    rs = cast(pd.Series, avg_gain / avg_loss)
+    out = cast(pd.Series, 100.0 - 100.0 / (1.0 + rs))
     # avg_loss == 0（含 avg_gain 也为 0 的横盘）时 rs 为 inf/NaN，统一记 100
-    return out.where(avg_loss != 0, 100.0)
+    return cast(pd.Series, out.where(avg_loss != 0, 100.0))
 
 
 # ============================================================
@@ -197,8 +197,8 @@ def boll(
     基准价为**收盘价**（通达信/东财口径）。mplchart 用典型价 (H+L+C)/3，
     画出来与券商软件的 BOLL 不是同一条线。
     """
-    mid = close.rolling(window=period).mean()
-    std = close.rolling(window=period).std(ddof=0)
+    mid = cast(pd.Series, close.rolling(window=period).mean())
+    std = cast(pd.Series, close.rolling(window=period).std(ddof=0))
     return mid, mid + std_mult * std, mid - std_mult * std
 
 
@@ -268,8 +268,8 @@ def true_range(high: pd.Series, low: pd.Series, close: pd.Series) -> pd.Series:
 
 def atr_pct(high: pd.Series, low: pd.Series, close: pd.Series, period: int = 14) -> pd.Series:
     """ATR% = MA(TR, N) / C —— 用收盘价归一后的波动率，便于跨股比较。"""
-    atr = true_range(high, low, close).rolling(window=period).mean()
-    return (atr / close).where(close != 0)
+    atr = cast(pd.Series, true_range(high, low, close).rolling(window=period).mean())
+    return cast(pd.Series, (atr / close).where(close != 0))
 
 
 def support_resistance(
@@ -278,7 +278,9 @@ def support_resistance(
     period: int = 20,
 ) -> tuple[pd.Series, pd.Series]:
     """近 N 日支撑（最低价）/ 压力（最高价），返回 (支撑, 压力)。"""
-    return low.rolling(window=period).min(), high.rolling(window=period).max()
+    support = cast(pd.Series, low.rolling(window=period).min())
+    resistance = cast(pd.Series, high.rolling(window=period).max())
+    return support, resistance
 
 
 # ============================================================

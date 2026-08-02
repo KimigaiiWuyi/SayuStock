@@ -37,7 +37,7 @@ async def get_hours_from_em() -> Tuple[float, float, Optional[datetime]]:
     return ya, y, last_trade_date
 
 
-async def get_bar() -> object:
+async def get_bar() -> dict[str, object] | str:
     URL = "https://quotederivates.eastmoney.com/datacenter/updowndistribution"
     PARAMS = {
         "mcodelist": "0.399002,1.000002,0.899050",
@@ -52,7 +52,9 @@ async def get_bar() -> object:
 
     if isinstance(resp, int):
         return f"[SayuStock] 请求错误：{resp}"
-    return resp
+    if isinstance(resp, dict):
+        return resp
+    return f"[SayuStock] 请求错误：意外响应类型 {type(resp).__name__}"
 
 
 async def get_menu(mode: int = 3) -> Dict[str, str]:

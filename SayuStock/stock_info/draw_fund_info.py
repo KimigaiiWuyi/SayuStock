@@ -20,12 +20,16 @@ async def draw_fund_info(fcode: Union[str, int]) -> str | bytes:
 
     dcode = _code[0].split(".")[1]
     fund_data = await get_fund_pos_list(dcode)
-    if fund_data is None or not fund_data["Datas"]:
+    holdings_raw = fund_data.get("Datas") if fund_data is not None else None
+    if not isinstance(holdings_raw, list) or not holdings_raw:
+        return "获取基金持仓数据失败，请稍后再试~"
+    holdings: list[dict[str, object]] = [row for row in holdings_raw if isinstance(row, dict)]
+    if not holdings:
         return "获取基金持仓数据失败，请稍后再试~"
 
     img = Image.new(
         "RGBA",
-        (900, 400 + 60 + len(fund_data["Datas"]) * 110),
+        (900, 400 + 60 + len(holdings) * 110),
         (7, 9, 27),
     )
     img_draw = ImageDraw.Draw(img)
@@ -39,17 +43,17 @@ async def draw_fund_info(fcode: Union[str, int]) -> str | bytes:
 
     all_p = 0.0
     market = get_market()
-    for index, d in enumerate(fund_data["Datas"]):
-        share_code: str = d["ShareCode"]
+    for index, d in enumerate(holdings):
+        share_code = str(d.get("ShareCode", ""))
         q = await market.quote(share_code)
-        percent = f"{d['ShareProportion']}%"
+        percent = f"{d.get('ShareProportion', '')}%"
         if is_market_error(q):
             continue
         bar = draw_bar_from_quote(q, _code[0], percent=percent)
         all_p += float(q.change_pct) if q.change_pct is not None else 0.0
         img.paste(bar, (0, 400 + index * 110), bar)
 
-    avg_p = all_p / len(fund_data["Datas"])
+    avg_p = all_p / len(holdings)
     for i in DIFF_MAP:
         if avg_p >= i:
             title_num = DIFF_MAP[i]
@@ -74,18 +78,21 @@ async def draw_fund_info(fcode: Union[str, int]) -> str | bytes:
     res = await convert_img(img)
 
     # AI 注入：提取基金持仓文本数据
-    _ai_return_fund_info(_code, fund_data, all_p)
+    _ai_return_fund_info(_code, holdings, all_p)
 
     return res
 
 
-def _ai_return_fund_info(code_info: dict[str, object], fund_data: list[object], all_p: list[object]) -> None:
+def _ai_return_fund_info(
+    code_info: tuple[str, str, str] | list[str],
+    holdings: list[dict[str, object]],
+    all_p: float,
+) -> None:
     """从基金持仓数据中提取文本信息，通过 ai_return 返回给 AI 分析"""
     try:
         fund_name = code_info[1]
         fund_code = code_info[0]
-        holdings = fund_data.get("Datas", [])
-        avg_p = all_p / len(holdings) if holdings else 0
+        avg_p = all_p / len(holdings) if holdings else 0.0
 
         result = f"【{fund_name}({fund_code}) 持仓信息】\n"
         result += f"持仓数量: {len(holdings)} 只，平均涨跌幅: {avg_p:+.2f}%\n\n"

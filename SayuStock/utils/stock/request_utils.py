@@ -48,7 +48,7 @@ def _get_searchapi_headers() -> Dict[str, str]:
     return headers
 
 
-async def get_fund_pos_list(fcode: Union[str, int]) -> Optional[Dict]:
+async def get_fund_pos_list(fcode: Union[str, int]) -> Optional[Dict[str, object]]:
     _api = "https://fundwebapi.eastmoney.com/FundMEApi/FundPositionList"
     params = {
         "pageIndex": "1",
@@ -187,7 +187,7 @@ async def get_image_from_em(
     file = get_file(name, "png")
     if file.exists():
         # 检查文件的修改时间是否在一分钟以内
-        minutes = STOCK_CONFIG.get_config("mapcloud_refresh_minutes").data
+        minutes = int(STOCK_CONFIG.get_config("mapcloud_refresh_minutes").data)
         file_mod_time = datetime.fromtimestamp(file.stat().st_mtime)
         if datetime.now() - file_mod_time < timedelta(minutes=minutes):
             logger.info(f"[SayuStock] image文件在{minutes}分钟内，直接返回文件数据。")

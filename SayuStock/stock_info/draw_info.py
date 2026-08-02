@@ -60,7 +60,7 @@ def remove_color_range(
     return img
 
 
-def invert_colors(img: Image.Image) -> object:
+def invert_colors(img: Image.Image) -> Image.Image:
     r, g, b, a = img.split()
 
     rgb = Image.merge("RGB", (r, g, b))
@@ -117,7 +117,7 @@ def calculate_gradient_rgb_from_gray(diff: float) -> tuple[int, int, int, int]:
     return r, g, b, 150
 
 
-async def draw_block(item: DisplayItem, _type: str = "diff") -> object:
+async def draw_block(item: DisplayItem, _type: str = "diff") -> Image.Image:
     """绘制指数/标的块（语义 DisplayItem）。"""
     name_s = item.name
     price_s = item.price
@@ -166,13 +166,16 @@ async def draw_info_img(is_save: bool = False) -> str | bytes:
             return result.message
     if isinstance(bars_raw, str):
         return bars_raw
-    assert not is_market_error(zs_r)
-    assert not is_market_error(hy_z_r)
-    assert not is_market_error(hy_f_r)
-    assert not is_market_error(gn_z_r)
-    assert not is_market_error(gn_f_r)
-    assert not is_market_error(au_q)
-    assert not is_market_error(tlm_q)
+    from ..utils.market.models import Quote, BoardSnapshot
+
+    if not isinstance(zs_r, BoardSnapshot):
+        return "主要指数数据异常"
+    if not isinstance(hy_z_r, BoardSnapshot) or not isinstance(hy_f_r, BoardSnapshot):
+        return "行业板块数据异常"
+    if not isinstance(gn_z_r, BoardSnapshot) or not isinstance(gn_f_r, BoardSnapshot):
+        return "概念板块数据异常"
+    if not isinstance(au_q, Quote) or not isinstance(tlm_q, Quote):
+        return "贵金属/债券报价异常"
 
     data_zs_items = board_rows_to_items(zs_r.rows)
     data_hy_z = board_rows_to_items(hy_z_r.rows)
@@ -183,10 +186,33 @@ async def draw_info_img(is_save: bool = False) -> str | bytes:
     data_zs_items.append(from_quote(tlm_q))
 
     bars = bars_raw if isinstance(bars_raw, dict) else {}
-    zf: List[int] = bars["2"]
-    df: List[int] = bars["3"]
+
+    def _int_list(key: str, size: int) -> List[int]:
+        raw = bars.get(key, [])
+        if not isinstance(raw, list):
+            return [0] * size
+        vals = [int(x) if isinstance(x, (int, float, str)) else 0 for x in raw]
+        if len(vals) < size:
+            vals.extend([0] * (size - len(vals)))
+        return vals
+
+    def _int_val(key: str) -> int:
+        raw = bars.get(key, 0)
+        if isinstance(raw, bool):
+            return int(raw)
+        if isinstance(raw, (int, float)):
+            return int(raw)
+        if isinstance(raw, str):
+            try:
+                return int(float(raw))
+            except ValueError:
+                return 0
+        return 0
+
+    zf: List[int] = _int_list("2", 10)
+    df: List[int] = _int_list("3", 10)
     diff_bar: Dict[str, int] = {
-        "10+": bars["5"],
+        "10+": _int_val("5"),
         "5~10": zf[5] + zf[6] + zf[7] + zf[8] + zf[9],
         "3~5": zf[3] + zf[4],
         "2~3": zf[2],
@@ -197,7 +223,7 @@ async def draw_info_img(is_save: bool = False) -> str | bytes:
         "-2~-3": df[2],
         "-3~-5": df[3] + df[4],
         "-5~-10": df[5] + df[6] + df[7] + df[8] + df[9],
-        "-10+": bars["6"],
+        "-10+": _int_val("6"),
     }
     up_value = (
         diff_bar["0~1"] + diff_bar["1~2"] + diff_bar["2~3"] + diff_bar["3~5"] + diff_bar["5~10"] + diff_bar["10+"]

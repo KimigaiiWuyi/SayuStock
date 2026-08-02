@@ -11,12 +11,15 @@
     main = await EASTMONEY_REQUESTER.get_main_financial("600519")
 """
 
-from typing import Any, Dict, List, Literal, Optional
+from typing import Any, Dict, List, Literal, TypeVar, Callable, Optional, Coroutine, ParamSpec
 
 from gsuid_core.logger import logger
 
 from .eastmoney import EASTMONEY_REQUESTER  # noqa: F401  复用单例
 from .stock.utils import async_file_cache
+
+_P = ParamSpec("_P")
+_R = TypeVar("_R")
 
 # 报表类型字面量
 FinanceReport = Literal[
@@ -35,7 +38,9 @@ _REPORT_KEY = {
 }
 
 
-def _make_decorator(report: FinanceReport) -> object:
+def _make_decorator(
+    report: FinanceReport,
+) -> Callable[[Callable[_P, Coroutine[Any, Any, _R]]], Callable[_P, Coroutine[Any, Any, _R]]]:
     """为每种报表生成一个带独立 sector key 的 async_file_cache 装饰器"""
     return async_file_cache(
         market="{code}",

@@ -348,9 +348,9 @@ def render_portfolio_image(report: PortfolioRiskReport) -> Image.Image:
     fig = plt.figure(figsize=(13, 11), dpi=140)
     fig.patch.set_facecolor(BG_COLOR)
 
-    ax_pie = fig.add_axes([0.08, 0.38, 0.40, 0.48])
-    ax_bar = fig.add_axes([0.55, 0.38, 0.40, 0.48])
-    ax_txt = fig.add_axes([0.08, 0.05, 0.84, 0.28])
+    ax_pie = fig.add_axes((0.08, 0.38, 0.40, 0.48))
+    ax_bar = fig.add_axes((0.55, 0.38, 0.40, 0.48))
+    ax_txt = fig.add_axes((0.08, 0.05, 0.84, 0.28))
     for a in (ax_pie, ax_bar, ax_txt):
         a.set_facecolor(BG_COLOR)
 

@@ -16,6 +16,8 @@ MACD / CMF，AI 一个都拿不到，等于让它裸看 K 线数字瞎猜。对�
 新增图表元素时，请同步在这里补上对应文字，并在 ``test/test_render_text.py`` 加断言。
 """
 
+import pandas as pd
+
 from .indicators import swing_stats, normalize_pct, compute_indicators
 from .market.models import KlineSeries, BoardSnapshot, IntradaySeries
 from .market.convert.dataframe import kline_to_df
@@ -88,9 +90,9 @@ def kline_text(series: KlineSeries, sector: str) -> str:
         return ""
 
     ind = compute_indicators(df)
-    close = df["close"].astype(float)
-    high = df["high"].astype(float)
-    low = df["low"].astype(float)
+    close = pd.Series(df["close"], dtype="float64")
+    high = pd.Series(df["high"], dtype="float64")
+    low = pd.Series(df["low"], dtype="float64")
 
     lines: list[str] = [
         f"【{name} {period_name(sector)}数据】共 {len(df)} 根，{df['date'].iloc[0]} ~ {df['date'].iloc[-1]}"
@@ -104,8 +106,8 @@ def kline_text(series: KlineSeries, sector: str) -> str:
     )
 
     # —— 区间极值 + 区间涨跌（与对比图同一套 swing_stats 口径）——
-    hi_idx = int(high.idxmax())
-    lo_idx = int(low.idxmin())
+    hi_idx = int(high.to_numpy().argmax())
+    lo_idx = int(low.to_numpy().argmin())
     pct_series = normalize_pct(close) * 100
     runup, drawdown = swing_stats(pct_series)
     lines.append(
@@ -216,7 +218,7 @@ def compare_text(series_list: list[KlineSeries]) -> str:
         if df.empty:
             continue
 
-        close = df["close"].astype(float)
+        close = pd.Series(df["close"], dtype="float64")
         pct = normalize_pct(close) * 100
         runup, drawdown = swing_stats(pct)
         hi_loc = int(pct.idxmax())

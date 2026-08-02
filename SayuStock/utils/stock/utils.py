@@ -1,7 +1,8 @@
 import json
 import inspect
 import functools
-from typing import Any, List, Tuple, Callable, Optional, Coroutine
+from typing import Any, List, Tuple, TypeVar, Callable, Optional, Coroutine, ParamSpec, cast
+from pathlib import Path
 from datetime import datetime, timedelta
 
 import aiofiles
@@ -12,8 +13,13 @@ from gsuid_core.logger import logger
 from ..resource_path import DATA_PATH
 from ...stock_config.stock_config import STOCK_CONFIG
 
+_P = ParamSpec("_P")
+_R = TypeVar("_R")
 
-def async_file_cache(**get_file_args: Any) -> Callable:
+
+def async_file_cache(
+    **get_file_args: Any,
+) -> Callable[[Callable[_P, Coroutine[Any, Any, _R]]], Callable[_P, Coroutine[Any, Any, _R]]]:
     """
     一个异步函数装饰器，用于缓存函数结果到文件。
 
@@ -29,9 +35,11 @@ def async_file_cache(**get_file_args: Any) -> Callable:
     `sector='VIX_9D'` 来调用 `get_file`。
     """
 
-    def decorator(func: Callable[..., Coroutine[Any, Any, Any]]) -> Callable:
+    def decorator(
+        func: Callable[_P, Coroutine[Any, Any, _R]],
+    ) -> Callable[_P, Coroutine[Any, Any, _R]]:
         @functools.wraps(func)
-        async def wrapper(*args: Any, **kwargs: Any) -> Any:
+        async def wrapper(*args: _P.args, **kwargs: _P.kwargs) -> _R:
             # 1. 解析函数参数，为文件名生成做准备
             try:
                 sig = inspect.signature(func)
@@ -69,20 +77,21 @@ def async_file_cache(**get_file_args: Any) -> Callable:
             if file_path.exists():
                 try:
                     # 检查文件的修改时间是否在一分钟以内
-                    if minutes == 0:
-                        minutes: int = STOCK_CONFIG.get_config("mapcloud_refresh_minutes").data
+                    cache_minutes = minutes
+                    if cache_minutes == 0:
+                        cache_minutes = int(STOCK_CONFIG.get_config("mapcloud_refresh_minutes").data)
 
                     file_mod_time = datetime.fromtimestamp(file_path.stat().st_mtime)
-                    if datetime.now() - file_mod_time < timedelta(minutes=minutes):
-                        logger.info(f"[SayuStock] json文件在{minutes}分钟内，直接返回文件数据。")
+                    if datetime.now() - file_mod_time < timedelta(minutes=cache_minutes):
+                        logger.info(f"[SayuStock] json文件在{cache_minutes}分钟内，直接返回文件数据。")
 
                         if file_path.suffix == ".html":
-                            return file_path
+                            return cast(_R, file_path)
 
                         async with aiofiles.open(file_path, mode="r", encoding="utf-8") as f:
                             logger.success(f"✅ [SayuStock] 缓存命中！正在从 {file_path} 读取...")
                             content = await f.read()
-                            return json.loads(content)
+                            return cast(_R, json.loads(content))
 
                 except (json.JSONDecodeError, IOError) as e:
                     logger.warning(f"🚨 [SayuStock] 读取或解析缓存文件失败: {e}。将重新执行函数。")
@@ -94,8 +103,8 @@ def async_file_cache(**get_file_args: Any) -> Callable:
                 return result
 
             if isinstance(result, Figure):
-                result.write_html(file_path)
-                return file_path
+                result.write_html(str(file_path))
+                return cast(_R, file_path)
 
             if isinstance(result, dict):
                 result["file_name"] = file_path.name
@@ -121,13 +130,14 @@ def get_file(
     suffix: str,
     sector: Optional[str] = None,
     sp: Optional[str] = None,
-) -> object:
+    **_: Any,
+) -> Path:
     a = f"{market}_{sector}_{sp}_data"
     a = a[:254]
     return DATA_PATH / f"{a}.{suffix}"
 
 
-def get_adjusted_date() -> object:
+def get_adjusted_date() -> datetime:
     now = datetime.now()
     target_time = now.replace(hour=9, minute=30, second=0, microsecond=0)
     # 判断当前时间是否在当天的9:30之前
@@ -138,11 +148,11 @@ def get_adjusted_date() -> object:
     return adjusted_date
 
 
-def calculate_difference(data: List[str]) -> Tuple[int, int, Optional[datetime]]:
+def calculate_difference(data: List[str]) -> Tuple[float, float, Optional[datetime]]:
     # 获取今天的日期
     today = get_adjusted_date()
 
-    date_dict = {}
+    date_dict: dict[int, list[float]] = {}
     for item in data:
         item_part = item.split(",")
         date_day = datetime.strptime(item_part[0], "%Y-%m-%d %H:%M")
@@ -157,7 +167,7 @@ def calculate_difference(data: List[str]) -> Tuple[int, int, Optional[datetime]]
         else:
             break
     else:
-        return 0, 0, None
+        return 0.0, 0.0, None
 
     logger.info(f"[SayuStock]今天交易日: {today}")
     all_today_data = sum(date_dict[today.day])
