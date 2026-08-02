@@ -48,6 +48,13 @@ reportMissingTypeStubs = false
 reportMissingModuleSource = false
 disableBytesTypePromotions = false
 
+# 锚定 rootdir 到本插件，避免向上找到 gsuid_core 的 [tool.pytest.ini_options]
+# 把插件根放进 pythonpath，使 `import SayuStock` 在 market 等未手写 sys.path 的测试中可用
+[tool.pytest.ini_options]
+testpaths = ["test"]
+# "." → import SayuStock；"test" → import kline_fixtures 等测试辅助模块
+pythonpath = [".", "test"]
+
 [project]
 name = "SayuStock"
 version = "0.2"

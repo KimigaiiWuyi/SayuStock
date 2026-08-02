@@ -1,11 +1,13 @@
 # 八、测试与质量门
 
-> **返回主入口**：[`../SKILL.md`](../SKILL.md) · **上一章**：[七](./07-config-database-cache.md) · **下一章**：[九、已知坑](./09-developer-pitfalls.md)
+> **返回主入口**：[`../SKILL.md`](../SKILL.md) · **上一章**：[七](./07-config-database-cache.md) · **下一章**：[九、已知坑](./09-developer-pitfalls.md)  
+> **CI / 双布局 / conftest 契约**：见 [十、CI/CD 与本地开发流程](./10-cicd-and-dev-workflow.md)。
 
 ## 8.1 测试布局
 
 ```
 test/
+├── conftest.py                    # 双布局路径 + SayuStock 包壳（勿 exec Plugins）
 ├── kline_fixtures.py              # 合成 K 线字符串
 ├── market/
 │   ├── fixtures/                  # 东财样例 JSON
@@ -13,26 +15,43 @@ test/
 │   ├── test_parse_kline_board_finance.py
 │   ├── test_okx_parse.py
 │   └── test_composite_routing.py
-├── test_render_text.py            # 文字完整性 + 与 indicators 一致
+├── test_render_text.py            # 文字完整性 + 与 indicators 一致（进 CI 轻量 job）
 ├── test_ai_text_delivery.py       # 冷/热缓存都发 ai_return
 ├── test_intraday_align.py         # 跨天分时轴
-├── test_indicators.py
+├── test_indicators.py             # 进 CI 轻量 job
 ├── test_stock_analysis_unit.py
 ├── test_papertrade_*.py           # 日历/撮合/策略/候选池/账户 scope…
+│                                  # test_papertrade_indicators 进 CI 轻量 job
 └── test_end_label_dodge.py
 ```
 
 ## 8.2 怎么跑
 
-在 monorepo 或插件上下文设置 `PYTHONPATH` 指向含 `gsuid_core` 的根，例如：
+推荐在 **嵌套布局**下工作（与 Full suite CI 一致）：
 
 ```powershell
-$env:PYTHONPATH="F:\gsuid_core"
 cd F:\gsuid_core\gsuid_core\plugins\SayuStock
+# pyproject [tool.pytest.ini_options] 已设 pythonpath = [".", "test"]
+# conftest 会补 gsuid_core 仓库根；通常不必再手设 PYTHONPATH
 python -m pytest test/ -q
 ```
 
-当前规模约 **235 passed + 1 skipped**（本地缓存缺失时 `test_intraday_align` 部分 skip）。
+对齐 CI 的三组命令：
+
+```powershell
+# 与 CI indicators job 相同
+python -m pytest test/test_indicators.py test/test_papertrade_indicators.py test/test_render_text.py -q
+
+# 与 CI full suite 相同
+python -m pytest test/ -q -p no:cacheprovider
+
+# lint
+ruff check SayuStock/ test/
+ruff format --check SayuStock/ test/
+```
+
+当前规模约 **230+ passed**（本地缓存缺失时 `test_intraday_align` 部分 skip）。  
+**为什么 Full suite 要嵌套 checkout、为什么不能 `import SayuStock` 触发 `__init__`**：见 [§10](./10-cicd-and-dev-workflow.md)。
 
 ## 8.3 分层测什么
 
@@ -51,15 +70,18 @@ python -m pytest test/ -q
 ## 8.4 静态检查
 
 ```powershell
-python -m ruff check SayuStock/
-python -m pyright SayuStock/   # 或 basedpyright；exclude Kronos
+ruff check SayuStock/ test/
+ruff format --check SayuStock/ test/
+basedpyright   # CI 用 basedpyright，不要用官方 pyright（见 §10.5.4）
 ```
 
-`pyproject.toml`：
+配置要点（细节见 [§10.2.4](./10-cicd-and-dev-workflow.md) / [§10.5.3](./10-cicd-and-dev-workflow.md)）：
 
-- `include = ["SayuStock"]`  
-- `exclude = ["SayuStock/Kronos"]`  
-- `extraPaths` 指向 Core  
+- `pyproject.toml` `[tool.pyright]` 与 `pyrightconfig.json` 字段保持同步  
+- `include = ["SayuStock"]`，`exclude` 含 `SayuStock/Kronos`  
+- `extraPaths` 指向嵌套布局下的 Core  
+- **`pyrightconfig.json` 禁止提交本机 `venvPath` / `venv`**（CI 无 `.venv` 会直接 exit 3）  
+- ruff 版本与 `.pre-commit-config.yaml` / CI `ruff==…` 对齐  
 
 ## 8.5 代码风格红线（与 GsCore 对齐）
 

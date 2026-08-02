@@ -51,7 +51,9 @@ STOCK_AGENT_PROMPT = """你是一个严谨的「股票研究分析代理」。�
    `papertrade_trade_insert` / `papertrade_position_upsert` 读写。
    - 建账户 / 起心跳 → 走 trigger `send_init_command`（或委派 `papertrade_setup_agent`）。
    - 周期买卖决策 → 委派 `papertrade_decision_agent`。
-   - 查账户 / 持仓 / 盈亏 → `papertrade_account_query` / `papertrade_position_list`。
+   - 查账户 / 持仓 / 盈亏 → `papertrade_account_query` / `papertrade_position_list`；
+     要发「我的自选」风格持仓简图（含今日涨跌+持仓浮盈，无流水）→
+     `papertrade_holdings_image`。
    ⚠️ **严禁**把模拟盘持仓写进 `record:stock:*` 集合或 `state_set` 大 JSON——
    那是已废弃的旧设计，会与 SQLModel 落库产生两套彼此看不见的数据、并导致
    主人格查持仓时读错存储（2026-07-02 修复）。本代理只做**研究分析**，
@@ -313,9 +315,13 @@ PAPERTRADE_DECISION_PROMPT = """你是「模拟盘决策代理」（无人格）
 
 PAPERTRADE_REPORTER_PROMPT = """你是「模拟盘复盘代理」。
 
-只做：拉期内的 trade_log + decision_log，统计总盈亏 / 胜率 / 最大回撤 / 换手率 / 持仓时间，
-输出 1 段 markdown 复盘报告（含数据表 + 1~2 个结论）。
-不写日志、不下新单。
+【两类任务】
+A. **持仓速览图**：有人只要当前持仓/盈亏一眼图 → 调 ``papertrade_holdings_image``
+   （简化版，含今日涨跌+持仓浮盈，**不含**交易流水；图发出后一句点评即可）。
+B. **完整复盘报告**：拉期内 trade_log + decision_log，统计总盈亏 / 胜率 / 最大回撤 /
+   换手率 / 持仓时间，输出 1 段 markdown 复盘（含数据表 + 1~2 个结论）。
+
+不写日志、不下新单。权威数据一律 SQLModel 工具，禁止 state/record 旧快照。
 """
 
 
@@ -465,8 +471,9 @@ def register_papertrade_agents() -> None:
             node_id="papertrade_reporter_agent",
             display_name="模拟盘复盘代理",
             when_to_use=(
-                "模拟盘当前持仓 / 盈亏 / 账户汇总查询；以及月报 / 季报 / 年报 / 复盘生成"
-                "（权威数据走 papertrade_position_list / papertrade_account_query，"
+                "模拟盘当前持仓 / 盈亏 / 账户汇总查询；持仓简图出图；"
+                "以及月报 / 季报 / 年报 / 复盘生成"
+                "（权威数据走 papertrade_holdings_image / position_list / account_query，"
                 "禁止用 state/record 旧快照代答）"
             ),
             prompt=PAPERTRADE_REPORTER_PROMPT,
@@ -479,11 +486,15 @@ def register_papertrade_agents() -> None:
                 "当前持仓",
                 "持仓盈亏",
                 "虚拟盘持仓",
+                "持仓图",
+                "模拟盘持仓图",
+                "仓位图",
             ],
             tool_packs=[TASK_BASICS_PACK],
             tool_names=[
                 "papertrade_account_query",
                 "papertrade_position_list",
+                "papertrade_holdings_image",
                 "papertrade_trade_list",
                 "send_cloudmap_img",
             ],

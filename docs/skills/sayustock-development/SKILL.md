@@ -6,7 +6,9 @@ description: >
   "render_data / render_text 分工"、"AI 工具怎么注册"、"stock_agent 能力代理"、
   "模拟盘 papertrade 怎么改"、"自选股 SsBind"、"缓存路径 / STOCK_CONFIG"、
   "指标 utils/indicators 口径"、"加新数据源 OKX/VIX"、"有图必有文字 ai_return"、
-  "改 SayuStock 要注意什么 / 有哪些坑"时触发此 SKILL。
+  "改 SayuStock 要注意什么 / 有哪些坑"、"CI 怎么跑 / GitHub Actions 红了"、
+  "pytest 找不到 SayuStock / gsuid_core"、"basedpyright venv"、"pre-commit 与 ruff"
+  时触发此 SKILL。
   凡是改动 `gsuid_core/plugins/SayuStock` 业务插件（非 GsCore 框架核心）的任务
   都应优先读取此 SKILL。
 
@@ -15,7 +17,7 @@ description: >
   自身的内部结构与设计约束**：目录与模块全景、SV 命令与触发器、MarketDataPort
   行情抽象与多源路由、渲染管线（data → render_data → chart / plotly → ai_return）、
   AI 工具与能力代理、模拟盘 papertrade、配置/数据库/缓存、测试与质量门、
-  以及一份**已知坑与开发注意事项**清单。
+  CI/CD 与本地开发流程，以及一份**已知坑与开发注意事项**清单。
 ---
 
 # SayuStock 插件开发与维护指南（核心入口）
@@ -33,6 +35,7 @@ description: >
 | 你的任务 | 该读的文档 |
 |----------|-----------|
 | **改 SayuStock 业务代码**（行情 / 出图 / 命令 / 模拟盘 / AI 工具） | **本 SKILL** |
+| **修 CI / 写测试 / 提 PR 对齐 Actions** | 本 SKILL [八](./references/08-testing-and-quality.md) + [十](./references/10-cicd-and-dev-workflow.md) |
 | 改 GsCore 框架核心（handler / ai_core / 启动 / 配置基类） | `docs/skills/gscore-development` |
 | 写一个全新的 GsCore 插件（通用模板） | `docs/skills/gscore-plugin-development` |
 | 查 AI Core 给插件暴露的 API | `docs/skills/gscore-ai-core-api` |
@@ -52,6 +55,7 @@ description: >
 | 七 | 配置 / 数据库 / 缓存 / 资源路径 | [references/07-config-database-cache.md](./references/07-config-database-cache.md) |
 | 八 | 测试与质量门（pytest / ruff / pyright、fixtures） | [references/08-testing-and-quality.md](./references/08-testing-and-quality.md) |
 | 九 | 已知坑与开发注意事项（红线、不变量、历史事故） | [references/09-developer-pitfalls.md](./references/09-developer-pitfalls.md) |
+| 十 | CI/CD 与本地开发流程（GitHub Actions、双布局、conftest、踩坑） | [references/10-cicd-and-dev-workflow.md](./references/10-cicd-and-dev-workflow.md) |
 
 ## 推荐阅读顺序（按需跳转）
 
@@ -61,6 +65,7 @@ description: >
 4. **接 AI / 加工具 / 改能力代理**：看 [五](./references/05-ai-tools-and-agents.md)。
 5. **改模拟盘**：看 [六](./references/06-papertrade.md)。
 6. **动手前必读**：[九、已知坑](./references/09-developer-pitfalls.md)。
+7. **跑测试 / 修 CI / 提 PR 前**：[八、测试](./references/08-testing-and-quality.md) + [十、CI/CD](./references/10-cicd-and-dev-workflow.md)。
 
 ## 关键概念速记
 
@@ -72,13 +77,18 @@ description: >
 - **渲染计算单源**：`utils/render_data.py`；`stock_stockinfo` 与 `stock_cloudmap` 只 re-export，不要再分叉拷贝。
 - **模拟盘落库 SQLModel**：禁止用 `record_*` / `state_set` 拼第二套账本。
 - **插件加载只 import 各包 `__init__.py`**：兄弟模块的 `@sv` / `@ai_tools` 必须在 `__init__.py` 里**显式 import** 才会生效。
+- **测试双布局**：扁平（无 Core，CI 指标门）与嵌套（`…/plugins/SayuStock`，全量 CI）都要能过；依赖 `test/conftest.py` 包壳，勿让单测执行 `SayuStock/__init__.py` 的 Plugins 链。
+- **CI 四门**：lint（ruff）→ indicators（轻量）→ full pytest → basedpyright（暂不挡合并）；细节见 [十](./references/10-cicd-and-dev-workflow.md)。
 
 ## 仓库路径约定
 
 ```
 gsuid_core/plugins/SayuStock/          # 插件根（本仓库）
 ├── SayuStock/                         # 可导入包
-├── test/                              # pytest
+├── test/                              # pytest（含 conftest 路径/包壳）
+├── .github/workflows/ci.yml           # GitHub Actions
+├── pyproject.toml                     # pytest / pyright 配置
+├── pyrightconfig.json                 # basedpyright（勿写死本机 venv）
 ├── doc/ / docs/                       # 散落专题文档
 └── docs/skills/sayustock-development/ # 本 SKILL
 ```

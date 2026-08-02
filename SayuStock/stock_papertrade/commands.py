@@ -3,10 +3,11 @@
 公开命令：
 1. ``send_init_command``  — ``模拟盘初始化`` (群主 / 管理员权限)
 2. ``send_view``          — ``模拟盘查看``
-3. ``send_pnl``           — ``模拟盘收益`` (周期: 日/周/月/季/年/ytd/总)
-4. ``send_records``       — ``模拟盘记录``
-5. ``send_leaderboard``   — ``模拟盘排行`` (群主 / 管理员权限)
-6. ``send_query_group``   — ``模拟盘查询 <group_id>`` (群主 / 管理员权限)
+3. ``send_holdings``      — ``模拟盘自选``（持仓简图，含今日涨跌+持仓浮盈）
+4. ``send_pnl``           — ``模拟盘收益`` (周期: 日/周/月/季/年/ytd/总)
+5. ``send_records``       — ``模拟盘记录``
+6. ``send_leaderboard``   — ``模拟盘排行`` (群主 / 管理员权限)
+7. ``send_query_group``   — ``模拟盘查询 <group_id>`` (群主 / 管理员权限)
 
 所有 DB 操作走 ``from . import db as _db`` 函数内 lazy import；渲染走
 ``from .render import draw_xxx``；跨群查询走 ``from . import cross_group as _cross``。
@@ -21,7 +22,7 @@ from gsuid_core.models import Event
 
 from . import db as _db, cross_group as _cross, account_scope as _scope
 from .sv import sv_papertrade
-from .render import draw_leaderboard, draw_account_view
+from .render import draw_leaderboard, draw_account_view, build_holdings_snapshot_image
 from .permissions import check_admin
 from .trading_calendar import is_trading_time, is_a_share_trading_day
 
@@ -483,6 +484,50 @@ async def send_view(bot: Bot, ev: Event) -> list[str] | None:
         return await bot.send("ℹ️ 尚未开通模拟盘，请群主/管理员发送「模拟盘初始化」")
     img = await draw_account_view(gid, bid)
     await bot.send(img)
+
+
+# ============================================================
+# 2b) 模拟盘自选（持仓简图，仿「我的自选」）
+# ============================================================
+@sv_papertrade.on_fullmatch(
+    ("模拟盘自选",),
+    block=True,
+    to_ai="""查看 AI 模拟盘当前持仓的简化版卡片图（类似「我的自选」）。
+
+    当用户问「模拟盘自选」「模拟盘持仓图」「你持仓怎么样发张图」「仓位图」时调用。
+    图上含：账户摘要（现金/总资产/浮盈）、每只持仓的数量/成本/现价、
+    **今日涨跌** 与 **持仓收益率**。
+
+    ⚠️ 这是**简化版**：不含交易流水、决策日志、候选池；完整账本请用
+    papertrade_account_query / papertrade_position_list / papertrade_trade_list，
+    或命令「模拟盘查看」「模拟盘记录」。
+
+    无额外参数。
+    """,
+)
+async def send_holdings(bot: Bot, ev: Event) -> list[str] | None:
+    """用户命令：模拟盘自选 → 持仓简图（无需 agent）。"""
+    from gsuid_core.logger import logger
+    from gsuid_core.ai_core.trigger_bridge import ai_return
+
+    logger.info("[SayuStock] 开始执行[模拟盘自选]")
+    gid, bid = await _scope.resolve_account_key(ev)
+    if not gid or not bid:
+        return await bot.send("ℹ️ 尚未开通模拟盘，请群主/管理员发送「模拟盘初始化」")
+
+    result = await build_holdings_snapshot_image(gid, bid)
+    if isinstance(result, str):
+        return await bot.send(result)
+
+    # 有图必有文字：trigger 桥接 / 多模态模型可读
+    try:
+        ai_return(
+            "【模拟盘自选·简化版】已出持仓图：含今日涨跌与持仓浮盈，"
+            "不含交易流水/决策日志。完整数据见「模拟盘查看」「模拟盘记录」。"
+        )
+    except Exception:
+        pass
+    await bot.send(result)
 
 
 # ============================================================

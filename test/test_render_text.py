@@ -1,25 +1,19 @@
-"""utils/render_text.py 单测 —— AI 文字输出（领域模型入参）。"""
+"""utils/render_text.py 单测 —— AI 文字输出（领域模型入参）。
+
+路径与 ``SayuStock`` 包壳由 ``test/conftest.py`` 处理（避免触发 Plugins 注册）。
+"""
 
 from __future__ import annotations
 
 import re
-import sys
-from pathlib import Path
 from datetime import datetime
 
 import pytest
 from kline_fixtures import make_klines
 
-REPO_ROOT = Path(__file__).resolve().parent.parent.parent.parent.parent
-sys.path.insert(0, str(REPO_ROOT))
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-
-from SayuStock.utils import (  # noqa: E402
-    indicators as ind,
-    render_text as rt,
-)
-from SayuStock.utils.market.enums import BoardKind, AssetClass, KlinePeriod  # noqa: E402
-from SayuStock.utils.market.models import (  # noqa: E402
+from SayuStock.utils import indicators as ind, render_text as rt
+from SayuStock.utils.market.enums import BoardKind, AssetClass, KlinePeriod
+from SayuStock.utils.market.models import (
     Bar,
     Quote,
     BoardRow,
@@ -29,7 +23,7 @@ from SayuStock.utils.market.models import (  # noqa: E402
     IntradayPoint,
     IntradaySeries,
 )
-from SayuStock.utils.market.convert.dataframe import kline_to_df  # noqa: E402
+from SayuStock.utils.market.convert.dataframe import kline_to_df
 
 
 def _klines(n: int = 160, seed: int = 3) -> list[str]:

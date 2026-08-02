@@ -50,7 +50,7 @@ class CloudMapDataResult:
 | market ∈ 大盘云图/行业云图 | `hotmap` 或 `board(sector)` |
 | 概念云图 | `sector_menu` + `board` |
 | sector 以 `single-stock-kline` 开头 | `kline` + `KlinePeriod` |
-| sector == `compare-stock` | 多标的 `kline(D1_RECENT)` |
+| sector == `compare-stock` | 多标的 `kline(D1_YEAR)`（默认约一年日 K） |
 | sector == `single-stock` | `intraday`；若名含「(板块)」则展开成分股分时 |
 | 其它 | `board(market)` |
 

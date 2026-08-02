@@ -29,7 +29,7 @@ Core 的 `trigger_bridge` 会把触发器包装成工具；执行时用 `MockBot
 | 文件 | 能力域示例 |
 |------|------------|
 | `stock_ai_func/ai_tools.py` | 大盘概览、板块热力、新闻、VIX、涨跌幅、加密、搜索… |
-| `stock_papertrade/ai_tools.py` | `capability_domain="AI模拟盘"` 账户/持仓/交易/指标… |
+| `stock_papertrade/ai_tools.py` | `capability_domain="AI模拟盘"` 账户/持仓/持仓简图/交易/指标… |
 
 ```python
 from gsuid_core.ai_core.register import ai_tools
@@ -105,6 +105,18 @@ ai_entity(KnowledgeBase(id=…, content=PAPERTRADE_GUIDE.md, …))
 - 返回 JSON 字符串给 LLM  
 
 与图共用 `utils/indicators.py` / 或 `papertrade/indicators.py` 包装（改口径两边一起看）。
+
+### 模拟盘自选（命令 + 工具）
+
+| 入口 | 名称 |
+|------|------|
+| 用户命令 | **`模拟盘自选`**（`send_holdings`，`to_ai` 桥接，**无需 agent**） |
+| `@ai_tools` | `papertrade_holdings_image`（与命令同一渲染） |
+
+- **简化版**：账户摘要 + 持仓条（**今日涨跌** + **持仓收益率**）；**无**流水 / 决策日志。  
+- **渲染**：`render.build_holdings_snapshot_image` → `draw_holdings_snapshot`；纹理复用 `stock_info/texture2d`。  
+- **有图必有文字**：命令 / 工具内 `ai_return`。  
+- 完整账本：`模拟盘查看` / `模拟盘记录` 或 JSON 工具。
 
 ## 5.8 加工具 checklist
 

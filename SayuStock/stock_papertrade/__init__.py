@@ -9,7 +9,7 @@
 模块分工：
 - ``sv.py``: 所有 SV 实例集中处（``sv_papertrade`` pm=3、``sv_papertrade_admin`` pm=0）
 - ``permissions.py``: 权限校验 helpers（``user_pm_level`` / ``check_admin``）
-- ``commands.py``: 6 个业务命令（``sv_papertrade`` 注册）
+- ``commands.py``: 业务命令（``sv_papertrade`` 注册，含「模拟盘自选」）
 - ``admin.py``: 1 个 master-only 压测命令（``sv_papertrade_admin`` 注册）
 - 其它兄弟文件（ai_tools / db / cross_group / indicators / matcher / render /
   strategy / candidate_pool / trading_calendar）按需导入。
@@ -34,7 +34,7 @@ ai_alias(
 )
 ai_alias(
     "papertrade_query",
-    ["模拟盘查看", "模拟盘收益", "模拟盘记录", "模拟盘排行"],
+    ["模拟盘查看", "模拟盘自选", "模拟盘收益", "模拟盘记录", "模拟盘排行"],
     scope="SayuStock",
 )
 
@@ -116,6 +116,7 @@ from .commands import (  # noqa: E402,F401
     send_pnl,
     send_view,
     send_records,
+    send_holdings,
     send_leaderboard,
     send_query_group,
     send_init_command,

@@ -13,7 +13,5 @@
   "pythonVersion": "3.12",
   "typeCheckingMode": "basic",
   "reportMissingTypeStubs": false,
-  "reportMissingModuleSource": false,
-  "venvPath": "../../../",
-  "venv": ".venv"
+  "reportMissingModuleSource": false
 }

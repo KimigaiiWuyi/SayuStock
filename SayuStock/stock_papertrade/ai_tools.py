@@ -1,8 +1,9 @@
 """模拟盘 ai_tools 集合。
 
-14 个 ai_tools，分三类（**没有重叠**，每个工具只做一件事）：
-- 业务/账本（**5 个只读**，capability_domain="AI模拟盘"，category="common"）
+15 个 ai_tools，分三类（**没有重叠**，每个工具只做一件事）：
+- 业务/账本（**6 个只读**，capability_domain="AI模拟盘"，category="common"）
   —— 主 persona + 能力代理都能用
+  —— 含 ``papertrade_holdings_image``：仿「我的自选」的持仓简图（含今日涨跌+持仓浮盈）
 - 能力代理私有（**6 个写**，capability_domain="AI模拟盘"，category="default" + visible_when）
   —— 仅 papertrade_*_agent 可见；防止主 persona 误调写操作
   —— decision_insert / trade_insert / position_upsert / candidate_refresh /
@@ -544,6 +545,69 @@ async def papertrade_position_list(
             }
         )
     return json.dumps(items, ensure_ascii=False)
+
+
+@ai_tools(
+    category="common",
+    capability_domain="AI模拟盘",
+    context_tags=_PAPERTRADE_CTX_TAGS,
+)
+async def papertrade_holdings_image(
+    ctx: RunContext[ToolContext],
+    group_id: str = "",
+    bot_id: str = "",
+) -> str:
+    """把本群**模拟盘当前持仓**渲染成「模拟盘自选」风格的**简化版持仓图**并发出。
+
+    与用户命令「**模拟盘自选**」同一张图（也可不经 agent、直接发该命令）。
+
+    ⚠️ **这是简化快照，不是完整账户报告**：
+    - **有**：账户摘要（现金 / 总资产 / 持仓市值 / 浮盈 / 累计盈亏）、
+      每只持仓的数量 / 成本 / 现价 / 市值、**今日涨跌幅**、**持仓收益率（相对成本）**、
+      顶部宽基指数参考。
+    - **没有**：交易流水、决策日志、候选池、群友关注、风控模式细节、历史净值曲线。
+      需要完整数据请分别调 ``papertrade_account_query`` /
+      ``papertrade_position_list`` / ``papertrade_trade_list`` /
+      ``papertrade_decision_list``，或命令「模拟盘查看」「模拟盘记录」。
+
+    与用户「我的自选」的区别：自选只有当日涨跌；本图是 **AI 模拟盘真实持仓**，
+    每条同时标 **今日涨跌** 与 **持仓浮盈%**。
+
+    适用：有人问「模拟盘自选 / 你现在持仓怎么样 / 发张持仓图 / 仓位图」
+    时出图；主 persona 可直接调，不必先委派决策代理。
+
+    Args:
+        group_id / bot_id: 留空用当前会话（共用模式下固定全服账户）
+    """
+    from gsuid_core.segment import MessageSegment
+    from gsuid_core.ai_core.trigger_bridge import ai_return
+
+    from .render import build_holdings_snapshot_image
+
+    gid, bid = await _resolve_scope(ctx, group_id, bot_id)
+    if not gid or not bid:
+        return "⚠️ 无法确定 group_id/bot_id"
+
+    bot = ctx.deps.bot
+    if bot is None:
+        return "❌ 当前上下文拿不到 Bot，无法发图；请改用 papertrade_position_list 文本查询。"
+
+    try:
+        result = await build_holdings_snapshot_image(gid, bid)
+    except Exception as e:
+        _gslogger.exception(f"[SayuStock][PaperTrade] holdings_image 渲染失败: {e}")
+        return f"❌ 持仓简图渲染失败：{e}；请改用 papertrade_position_list。"
+
+    if isinstance(result, str):
+        return result
+
+    try:
+        ai_return(f"【模拟盘自选·简化版】群 {gid} 持仓图已发送：含今日涨跌与持仓浮盈，不含交易流水/决策日志。")
+    except Exception as e:
+        _gslogger.debug(f"[SayuStock][PaperTrade] holdings_image ai_return 失败: {e}")
+
+    await bot.send(MessageSegment.image(result))
+    return "✅ 已发送【模拟盘自选】简化版持仓图（今日涨跌+持仓浮盈，不含交易记录）。可再补一句点评，勿复述整表。"
 
 
 @ai_tools(

@@ -140,7 +140,9 @@ class CloudMapDataService:
         end_d = end_time.date() if end_time is not None else None
         port = get_market()
         for query in expanded:
-            series = await port.kline(query, KlinePeriod.D1_RECENT, start=start_d, end=end_d)
+            # 默认窗口与历史一致：未指定时间时走 D1_YEAR（约 365 自然日）
+            # 重构时曾误写成 D1_RECENT（仅 50 天），用户会感觉像「最近一个月」
+            series = await port.kline(query, KlinePeriod.D1_YEAR, start=start_d, end=end_d)
             if is_market_error(series):
                 continue
             results.append(series)

@@ -1,6 +1,6 @@
 # 九、已知坑与开发注意事项
 
-> **返回主入口**：[`../SKILL.md`](../SKILL.md) · **上一章**：[八](./08-testing-and-quality.md)
+> **返回主入口**：[`../SKILL.md`](../SKILL.md) · **上一章**：[八](./08-testing-and-quality.md) · **下一章**：[十、CI/CD](./10-cicd-and-dev-workflow.md)
 
 **这一章是别人替你踩过的坑。改插件前过一遍能省大量返工。**
 
@@ -144,7 +144,20 @@ if not isinstance(raw_data, KlineSeries):
 - 队列 `NOW_QUEUE` 防并发打爆  
 - 单测必须 mock 模型与 playwright  
 
-## 9.16 改完自查清单
+## 9.16 CI / 测试导入（S-15）
+
+详细流程与对照表见 [十、CI/CD](./10-cicd-and-dev-workflow.md)。这里只记红线：
+
+| 坑 | 表现 | 处理 |
+|----|------|------|
+| 单测执行 `SayuStock/__init__.py` | 轻量 CI：`No module named 'gsuid_core'` | `test/conftest.py` 包壳；勿在 indicators 测里硬 import 包初始化 |
+| 无 `[tool.pytest.ini_options]` | Full suite：`No module named 'SayuStock'` | 保留 `pythonpath = [".", "test"]`，防止 rootdir 上浮到 Core |
+| `pyrightconfig` 写死 `.venv` | basedpyright exit 3，「0 errors」仍失败 | 删除 `venvPath`/`venv` |
+| 用官方 pyright | unknown diagnostic rule | 统一 **basedpyright** |
+| 脚本 E402 | pre-commit / lint 红 | 路径补丁后的 import 加 `# noqa: E402` |
+| 对比图默认窗口 | 用户觉得「只有一个月」 | 对比默认 `KlinePeriod.D1_YEAR`（365 天），勿改回 `D1_RECENT`（50 天） |
+
+## 9.17 改完自查清单
 
 1. 新代码是否只通过 `get_market()` / 领域模型取数？  
 2. 是否未 import `compat` / 未解析 `f*`？  
@@ -153,10 +166,11 @@ if not isinstance(raw_data, KlineSeries):
 5. 新模块是否被 `__init__.py` import？  
 6. `@ai_tools` docstring 是否紧贴 def？  
 7. 模拟盘是否只写 SQLModel？  
-8. ruff / pyright / 相关 pytest 是否绿？  
-9. 是否更新了本 SKILL 对应章节（若改了不变量）？  
+8. ruff / **basedpyright** / 相关 pytest 是否绿？  
+9. 新测试是否在**扁平（无 Core）与嵌套**下都能 collection？（至少本地跑一遍 CI indicators 三件套 + `pytest test/`）  
+10. 是否更新了本 SKILL 对应章节（若改了不变量 / CI 约定）？  
 
-## 9.17 历史问题速查
+## 9.18 历史问题速查
 
 | ID | 主题 | 详见 |
 |----|------|------|
@@ -172,9 +186,11 @@ if not isinstance(raw_data, KlineSeries):
 | S-10 | 板块展开 | §9.11 |
 | S-11 | str 错误当数据 | §9.12 |
 | S-12 | 业务直读 requester | §9.13 |
+| S-15 | CI 导入 / pytest rootdir / pyright venv | §9.16 / [§10](./10-cicd-and-dev-workflow.md) |
+| C-1…C-8 | CI 事故速查表 | [§10.8](./10-cicd-and-dev-workflow.md) |
 | M-1 | 领域模型迁移完成 | [§03](./03-market-data-port.md) |
 
-## 9.18 与 GsCore 坑的交叉
+## 9.19 与 GsCore 坑的交叉
 
 以下问题出在框架，但会表现为「股票插件怪」：
 
