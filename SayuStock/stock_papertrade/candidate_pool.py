@@ -135,64 +135,55 @@ async def _from_agent_pool(group_id: str, bot_id: str) -> List[str]:
 
 
 async def _from_sector_top_picks(top_sectors: int = 3, per_sector: int = 5) -> List[str]:
-    """从 EASTMONEY_REQUESTER 拉行业板块 + 成分股，返回 [code, ...]
-
-    拉 EASTMONEY_REQUESTER.get_menu(2) 行业板块菜单
-    然后调 get_market_list 取每板块前 per_sector 只股票
-    按板块涨幅排序取 top_sectors
-    """
+    """行业板块轮动：菜单 + 成分股，按板块涨幅取 TOP。"""
     try:
-        from ..utils.eastmoney import EASTMONEY_REQUESTER
+        from ..utils.market import get_market, is_market_error
 
-        menu = await EASTMONEY_REQUESTER.get_menu(2)  # 2 = 行业
-        if not menu:
+        market = get_market()
+        menu = await market.sector_menu("industry")
+        if is_market_error(menu) or not menu:
             return []
-        # 拉每个板块行情，涨跌幅 f3 排序
-        sector_codes = list(menu.values())[:20]  # 限制最多 20 个板块
-        tasks_results = []
+        sector_codes = list(menu.values())[:20]
+        tasks_results: list[tuple[float, list[str]]] = []
         for sec_code in sector_codes:
             try:
-                market = await EASTMONEY_REQUESTER.get_market_list(sec_code, True, 1, per_sector)
-                if not isinstance(market, dict):
+                snap = await market.board(str(sec_code), limit=per_sector, sort_asc=False)
+                if is_market_error(snap) or not snap.rows:
                     continue
-                diff = market.get("data", {}).get("diff", [])
-                # 取 f3 涨跌幅
-                f3 = diff[0].get("f3", 0) if diff else 0
-                codes = [str(d.get("f12", "")) for d in diff[:per_sector] if d.get("f12")]
+                chg = float(snap.rows[0].change_pct) if snap.rows[0].change_pct is not None else 0.0
+                codes = [r.code for r in snap.rows[:per_sector] if r.code]
                 if codes:
-                    tasks_results.append((f3, codes))
-            except Exception as e:
+                    tasks_results.append((chg, codes))
+            except (OSError, TimeoutError, RuntimeError, ValueError, TypeError) as e:
                 logger.debug(f"[PaperTrade] 拉板块 {sec_code} 失败: {e}")
                 continue
-        tasks_results.sort(key=lambda x: -x[0])  # 涨幅降序
+        tasks_results.sort(key=lambda x: -x[0])
         out: List[str] = []
         for _, codes in tasks_results[:top_sectors]:
             out.extend(codes)
         return out[: SOURCE_CAPS["sector"]]
-    except Exception as e:
+    except (OSError, TimeoutError, RuntimeError, ValueError, TypeError) as e:
         logger.warning(f"[PaperTrade] 板块轮动拉取失败: {e}")
         return []
 
 
 async def _from_hotmap_top_n(n: int = 10) -> List[str]:
-    """大盘热股 TOP N（从 stockhotmap 数据）"""
+    """大盘热股 TOP N。"""
     try:
-        from ..utils.eastmoney import EASTMONEY_REQUESTER
+        from ..utils.market import get_market, is_market_error
 
-        data = await EASTMONEY_REQUESTER.get_hotmap()
-        if not isinstance(data, dict):
+        snap = await get_market().hotmap()
+        if is_market_error(snap):
             return []
-        # 不同接口版本可能返回结构略不同
-        items = data.get("data", []) if isinstance(data.get("data"), list) else []
         codes: List[str] = []
-        for item in items:
-            c = item.get("code") or item.get("f12") or item.get("stockCode")
+        for row in snap.rows:
+            c = row.code
             if c and len(c) == 6 and c.isdigit():
-                codes.append(str(c))
+                codes.append(c)
             if len(codes) >= n:
                 break
         return codes
-    except Exception as e:
+    except (OSError, TimeoutError, RuntimeError, ValueError, TypeError) as e:
         logger.warning(f"[PaperTrade] 热股拉取失败: {e}")
         return []
 

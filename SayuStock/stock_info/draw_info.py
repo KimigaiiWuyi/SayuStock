@@ -12,7 +12,14 @@ from gsuid_core.ai_core.trigger_bridge import ai_return
 
 from ..utils.image import get_footer
 from ..utils.utils import number_to_chinese
-from ..utils.stock.request import get_gg, get_bar, get_mtdata, get_hours_from_em
+from ..utils.market import (
+    DisplayItem,
+    from_quote,
+    get_market,
+    is_market_error,
+    board_rows_to_items,
+)
+from ..utils.stock.request import get_bar, get_hours_from_em
 from ..utils.stock.request_utils import get_image_from_em
 
 TEXT_PATH = Path(__file__).parent / "texture2d"
@@ -30,7 +37,11 @@ DIFF_MAP = {
 }
 
 
-def remove_color_range(img: Image.Image, lower_bound, upper_bound):
+def remove_color_range(
+    img: Image.Image,
+    lower_bound: tuple[int, int, int],
+    upper_bound: tuple[int, int, int],
+) -> Image.Image:
     datas = img.getdata()
 
     new_data = []
@@ -49,7 +60,7 @@ def remove_color_range(img: Image.Image, lower_bound, upper_bound):
     return img
 
 
-def invert_colors(img: Image.Image):
+def invert_colors(img: Image.Image) -> object:
     r, g, b, a = img.split()
 
     rgb = Image.merge("RGB", (r, g, b))
@@ -106,18 +117,11 @@ def calculate_gradient_rgb_from_gray(diff: float) -> tuple[int, int, int, int]:
     return r, g, b, 150
 
 
-async def draw_block(zs_diff: Dict, _type: str = "diff"):
-    if _type == "single":
-        zs_diff["f14"] = zs_diff["f58"]
-        zs_diff["f3"] = zs_diff["f170"]
-        zs_diff["f6"] = zs_diff["f48"]
-        zs_diff["f2"] = zs_diff["f43"]
-        zs_diff["f100"] = "-"
-
-    if isinstance(zs_diff["f3"], str):
-        diff: float = 0
-    else:
-        diff = round(zs_diff["f3"], 2)
+async def draw_block(item: DisplayItem, _type: str = "diff") -> object:
+    """绘制指数/标的块（语义 DisplayItem）。"""
+    name_s = item.name
+    price_s = item.price
+    diff = round(float(item.change_pct), 2)
 
     zs_img = Image.new("RGBA", (200, 140))
     zs_draw = ImageDraw.Draw(zs_img)
@@ -131,96 +135,54 @@ async def draw_block(zs_diff: Dict, _type: str = "diff"):
     zs_draw.rounded_rectangle((15, 13, 185, 127), 0, zsc)
 
     t_font = ss_font(24)
+    name = name_s
+    if len(name) >= 15:
+        name = name[:6]
+    elif len(name) >= 10:
+        t_font = ss_font(18)
 
-    if len(zs_diff["f14"]) >= 15:
-        name = zs_diff["f14"][:6]
-    else:
-        if len(zs_diff["f14"]) >= 10:
-            t_font = ss_font(18)
-
-        name = zs_diff["f14"]
-
-    zs_draw.text(
-        (100, 99),
-        name,
-        (255, 255, 255),
-        t_font,
-        "mm",
-    )
-
-    zs_draw.text(
-        (100, 38),
-        f"{zs_diff['f2']}",
-        zsc2,
-        ss_font(30),
-        "mm",
-    )
-
-    zs_draw.text(
-        (100, 70),
-        f"{'+' if diff >= 0 else ''}{diff}%",
-        zsc2,
-        ss_font(30),
-        "mm",
-    )
+    zs_draw.text((100, 99), name, (255, 255, 255), t_font, "mm")
+    zs_draw.text((100, 38), f"{price_s}", zsc2, ss_font(30), "mm")
+    zs_draw.text((100, 70), f"{'+' if diff >= 0 else ''}{diff}%", zsc2, ss_font(30), "mm")
     return zs_img
 
 
-def _ensure_dict(value: object) -> Dict:
-    assert isinstance(value, dict), "str 错误结果已在上游过滤"
-    return value
-
-
-async def draw_info_img(is_save: bool = False):
+async def draw_info_img(is_save: bool = False) -> str | bytes:
+    market = get_market()
     results = await asyncio.gather(
-        get_mtdata("主要指数", pz=100),
-        get_mtdata("行业板块", po=1),
-        get_mtdata("行业板块", po=0),
-        get_mtdata("概念板块", po=1),
-        get_mtdata("概念板块", po=0),
-        get_gg("118.AU9999", "single-stock"),
-        get_gg("220.TLM", "single-stock"),
+        market.board("主要指数", limit=100, sort_asc=False),
+        market.board("行业板块", limit=20, sort_asc=False),
+        market.board("行业板块", limit=20, sort_asc=True),
+        market.board("概念板块", limit=20, sort_asc=False),
+        market.board("概念板块", limit=20, sort_asc=True),
+        market.quote("118.AU9999"),
+        market.quote("220.TLM"),
         get_bar(),
     )
 
-    for result in results:
-        if isinstance(result, str):
-            return result
+    zs_r, hy_z_r, hy_f_r, gn_z_r, gn_f_r, au_q, tlm_q, bars_raw = results
+    for result in (zs_r, hy_z_r, hy_f_r, gn_z_r, gn_f_r, au_q, tlm_q):
+        if is_market_error(result):
+            return result.message
+    if isinstance(bars_raw, str):
+        return bars_raw
+    assert not is_market_error(zs_r)
+    assert not is_market_error(hy_z_r)
+    assert not is_market_error(hy_f_r)
+    assert not is_market_error(gn_z_r)
+    assert not is_market_error(gn_f_r)
+    assert not is_market_error(au_q)
+    assert not is_market_error(tlm_q)
 
-    (
-        data_zs,
-        data_hy_z,
-        data_hy_f,
-        data_gn_z,
-        data_gn_f,
-        data_au,
-        data_tlm,
-        bars,
-    ) = (_ensure_dict(result) for result in results)
+    data_zs_items = board_rows_to_items(zs_r.rows)
+    data_hy_z = board_rows_to_items(hy_z_r.rows)
+    data_hy_f = board_rows_to_items(hy_f_r.rows)
+    data_gn_z = board_rows_to_items(gn_z_r.rows)
+    data_gn_f = board_rows_to_items(gn_f_r.rows)
+    data_zs_items.append(from_quote(au_q))
+    data_zs_items.append(from_quote(tlm_q))
 
-    data_hy_z = data_hy_z["data"]["diff"]
-    data_hy_f = data_hy_f["data"]["diff"]
-    data_gn_z = data_gn_z["data"]["diff"]
-    data_gn_f = data_gn_f["data"]["diff"]
-
-    data_aud: Dict = data_au["data"]
-    data_tlmd: Dict = data_tlm["data"]
-
-    data_aud["f14"] = data_aud["f58"]
-    data_aud["f3"] = data_aud["f170"]
-    data_aud["f6"] = data_aud["f48"]
-    data_aud["f2"] = data_aud["f43"]
-    data_aud["f100"] = "-"
-
-    data_tlmd["f14"] = data_tlmd["f58"]
-    data_tlmd["f3"] = data_tlmd["f170"]
-    data_tlmd["f6"] = data_tlmd["f48"]
-    data_tlmd["f2"] = data_tlmd["f43"]
-    data_tlmd["f100"] = "-"
-
-    data_zs["data"]["diff"].append(data_aud)
-    data_zs["data"]["diff"].append(data_tlmd)
-
+    bars = bars_raw if isinstance(bars_raw, dict) else {}
     zf: List[int] = bars["2"]
     df: List[int] = bars["3"]
     diff_bar: Dict[str, int] = {
@@ -230,7 +192,6 @@ async def draw_info_img(is_save: bool = False):
         "2~3": zf[2],
         "1~2": zf[1],
         "0~1": zf[0],
-        # '0': bars['4'],
         "0~-1": df[0],
         "-1~-2": df[1],
         "-2~-3": df[2],
@@ -249,8 +210,7 @@ async def draw_info_img(is_save: bool = False):
         + diff_bar["-5~-10"]
         + diff_bar["-10+"]
     )
-    # AI 注入：提取大盘概览文本数据
-    _ai_return_market_overview(data_zs, data_hy_z, data_hy_f, up_value, down_value, diff_bar)
+    _ai_return_market_overview(data_zs_items, data_hy_z, data_hy_f, up_value, down_value, diff_bar)
 
     h0 = 90
     h = 1060 + 20 * h0
@@ -284,30 +244,35 @@ async def draw_info_img(is_save: bool = False):
     qz_diff = 0
     sz_diff = 0
 
+    def _match_index(display_name: str, item: DisplayItem) -> bool:
+        base = item.name.split("(")[0].strip()
+        if display_name == base or display_name in item.name:
+            return True
+        if display_name == "黄金9999" and ("黄金" in item.name or "AU9999" in item.code):
+            return True
+        if display_name == "三十债主连" and ("三十债" in item.name or "TL" in item.code.upper()):
+            return True
+        return False
+
     for zs_name in zyzs:
-        for zs_diff in data_zs["data"]["diff"]:
-            diff_name: str = zs_diff["f14"]
-            diff_name = diff_name.split("(")[0].strip()
-
-            if zs_name != diff_name:
+        for item in data_zs_items:
+            if not _match_index(zs_name, item):
                 continue
-
-            zs_diff["f14"] = zs_name
-
-            if diff_name == "中证全指":
-                qz_diff = zs_diff["f3"]
-
-            if diff_name == "上证指数":
-                sz_diff = zs_diff["f3"]
-
-            zs_img = await draw_block(zs_diff)
-
-            img.paste(
-                zs_img,
-                (25 + 200 * (n % 4), 440 + 140 * (n // 4)),
-                zs_img,
+            if "中证全指" in item.name:
+                qz_diff = item.change_pct
+            if "上证指数" in item.name:
+                sz_diff = item.change_pct
+            disp = DisplayItem(
+                name=zs_name,
+                price=item.price,
+                change_pct=item.change_pct,
+                amount=item.amount,
+                code=item.code,
             )
+            zs_img = await draw_block(disp)
+            img.paste(zs_img, (25 + 200 * (n % 4), 440 + 140 * (n // 4)), zs_img)
             n += 1
+            break
 
     img_draw.rectangle((16, 434, 834, 584), None, (246, 180, 0), 5)
 
@@ -440,46 +405,29 @@ async def draw_info_img(is_save: bool = False):
     return res
 
 
-async def draw_bar(sd: List[dict], img: Image.Image, start: int, y: int, h: int = 90):
+async def draw_bar(sd: List[DisplayItem], img: Image.Image, start: int, y: int, h: int = 90) -> None:
     ls = len(sd)
     for hindex, hy in enumerate(sd):
-        hy_diff = hy["f3"]
+        hy_diff = hy.change_pct
         hy_img = Image.new("RGBA", (425, h))
         base_o = int(255 * (((ls + 1) - hindex) / ls))
         if hy_diff >= 0:
             hyc2 = (140, 18, 22, base_o)
             dd = (201, 26, 32, 200)
+            lead = hy.lead_name or ""
+            lead_pct = hy.lead_change_pct
         else:
             hyc2 = (59, 140, 18, base_o)
             dd = (25, 199, 16, 200)
+            lead = hy.fall_name or hy.lead_name or ""
+            lead_pct = hy.fall_change_pct if hy.fall_change_pct is not None else hy.lead_change_pct
 
         hy_draw = ImageDraw.Draw(hy_img)
         hy_draw.rounded_rectangle((23, 2, 403, 57), 0, hyc2)
-        hy_draw.text(
-            (53, 30),
-            f"{hy['f14']}",
-            (255, 255, 255),
-            ss_font(30),
-            "lm",
-        )
-
-        hy_draw.text(
-            (53, 75),
-            f"{hy['f128'] if hy_diff >= 0 else hy['f207']}",
-            dd,
-            # (140, 18, 22) if hy_diff >= 0 else (59, 140, 18),
-            ss_font(24),
-            "lm",
-        )
-        hy_draw.text(
-            (384, 75),
-            f"{'+' if hy_diff >= 0 else ''}{hy['f136'] if hy_diff >= 0 else hy['f222']}%",
-            dd,
-            # (140, 18, 22) if hy_diff >= 0 else (59, 140, 18),
-            ss_font(24),
-            "rm",
-        )
-
+        hy_draw.text((53, 30), hy.name, (255, 255, 255), ss_font(30), "lm")
+        hy_draw.text((53, 75), f"{lead}", dd, ss_font(24), "lm")
+        lp = f"{'+' if (lead_pct or 0) >= 0 else ''}{lead_pct}%" if lead_pct is not None else ""
+        hy_draw.text((384, 75), lp, dd, ss_font(24), "rm")
         hy_draw.text(
             (384, 30),
             f"{'+' if hy_diff >= 0 else ''}{hy_diff}%",
@@ -487,67 +435,35 @@ async def draw_bar(sd: List[dict], img: Image.Image, start: int, y: int, h: int 
             ss_font(30),
             "rm",
         )
-
-        img.paste(
-            hy_img,
-            (start, y + h * hindex),
-            hy_img,
-        )
+        img.paste(hy_img, (start, y + h * hindex), hy_img)
 
 
-def _ai_return_market_overview(data_zs, data_hy_z, data_hy_f, up_value, down_value, diff_bar):
-    """从大盘概览数据中提取文本信息，通过 ai_return 返回给 AI 分析"""
+def _ai_return_market_overview(
+    data_zs: list[DisplayItem],
+    data_hy_z: list[DisplayItem],
+    data_hy_f: list[DisplayItem],
+    up_value: object,
+    down_value: object,
+    diff_bar: dict[str, int],
+) -> None:
+    """从大盘概览语义数据中提取文本，经 ai_return 给 AI。"""
     try:
-        result = "【A股大盘概览】\n"
-
-        # 主要指数
-        zyzs = [
-            "上证指数",
-            "中证全指",
-            "创业板指",
-            "科创综指",
-            "沪深300",
-            "中证500",
-            "中证1000",
-            "中证2000",
-            "中证A500",
-            "北证50",
-            "黄金9999",
-            "三十债主连",
-        ]
-        result += "【主要指数】\n"
-        for zs_name in zyzs:
-            for zs_diff in data_zs["data"]["diff"]:
-                diff_name = zs_diff["f14"].split("(")[0].strip()
-                if zs_name != diff_name:
-                    continue
-                price = zs_diff.get("f2", "N/A")
-                diff = zs_diff.get("f3", 0)
-                result += f"  {zs_name}: {price} ({'+' if diff >= 0 else ''}{diff}%)\n"
-                break
-
-        # 涨跌分布
+        result = "【A股大盘概览】\n【主要指数】\n"
+        for item in data_zs[:12]:
+            result += f"  {item.name}: {item.price} ({'+' if item.change_pct >= 0 else ''}{item.change_pct}%)\n"
         result += f"\n【涨跌分布】上涨 {up_value} 家  下跌 {down_value} 家\n"
         for label, count in diff_bar.items():
             if count > 0:
                 result += f"  {label}: {count}\n"
-
-        # 领涨行业板块
         result += "\n【领涨行业板块】\n"
         for hy in data_hy_z[:5]:
-            name = hy.get("f14", "N/A")
-            diff = hy.get("f3", 0)
-            leader = hy.get("f128", "N/A")
-            result += f"  {name}: {'+' if diff >= 0 else ''}{diff}% (领涨: {leader})\n"
-
-        # 领跌行业板块
+            result += (
+                f"  {hy.name}: {'+' if hy.change_pct >= 0 else ''}{hy.change_pct}% (领涨: {hy.lead_name or 'N/A'})\n"
+            )
         result += "\n【领跌行业板块】\n"
         for hy in data_hy_f[:5]:
-            name = hy.get("f14", "N/A")
-            diff = hy.get("f3", 0)
-            leader = hy.get("f207", "N/A")
-            result += f"  {name}: {'+' if diff >= 0 else ''}{diff}% (领跌: {leader})\n"
-
+            leader = hy.fall_name or hy.lead_name or "N/A"
+            result += f"  {hy.name}: {'+' if hy.change_pct >= 0 else ''}{hy.change_pct}% (领跌: {leader})\n"
         ai_return(result)
-    except Exception as e:
+    except (TypeError, ValueError, KeyError) as e:
         logger.warning(f"[SayuStock] ai_return 大盘概览数据提取失败: {e}")

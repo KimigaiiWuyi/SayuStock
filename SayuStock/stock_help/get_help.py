@@ -21,7 +21,7 @@ async def get_help_data() -> Dict[str, PluginHelp]:
         return json.loads(await file.read())
 
 
-async def get_help():
+async def get_help() -> object:
     return await get_new_help(
         plugin_name="SayuStock",
         plugin_info={f"v{SayuStock_version}": ""},

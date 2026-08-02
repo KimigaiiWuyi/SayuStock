@@ -6,7 +6,7 @@ from bs4 import BeautifulSoup
 from gsuid_core.logger import logger
 
 
-async def get_live_pch_by_symbol(soup, symbol):
+async def get_live_pch_by_symbol(soup: object, symbol: str) -> object:
     table = soup.select_one("table.table.table-hover.sortable-theme-minimal")
 
     if not table:
@@ -37,7 +37,7 @@ async def get_live_pch_by_symbol(soup, symbol):
     return float(pch_td.get_text(strip=True)[:-1]), float(p_td.get_text(strip=True))
 
 
-def calculate_change_rate(a: float, b: float):
+def calculate_change_rate(a: float, b: float) -> object:
     previous_value = b - a
     if previous_value == 0:
         return 0
@@ -46,7 +46,7 @@ def calculate_change_rate(a: float, b: float):
     return diff * 100
 
 
-async def get_jpy():
+async def get_jpy() -> object:
     url = "https://zh.tradingeconomics.com/japan/government-bond-yield"
     symbol_to_find1 = "GJGB30Y:IND"
     symbol_to_find2 = "GJGB10:IND"
@@ -75,20 +75,17 @@ async def get_jpy():
     logger.debug(f"y30: {y30[0]} ({diff30:.2%})")
     logger.debug(f"y10: {y10[0]} ({diff10:.2%})")
 
+    # 语义字段：name / price / change_pct（供 DisplayItem 使用）
     return {
         "JP 30Y": {
-            "f58": "JP 30Y",
-            "f14": "JP 30Y",
-            "f43": y30[1],
-            "f170": diff30,
-            "f48": "",
+            "name": "JP 30Y",
+            "price": y30[1],
+            "change_pct": diff30,
         },
         "JP 10Y": {
-            "f58": "JP 10Y",
-            "f14": "JP 10Y",
-            "f43": y10[1],
-            "f170": diff10,
-            "f48": "",
+            "name": "JP 10Y",
+            "price": y10[1],
+            "change_pct": diff10,
         },
     }
 

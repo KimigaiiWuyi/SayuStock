@@ -3,7 +3,7 @@ from typing import List, Union
 from .constant import VIX_LIST
 
 
-def get_vix_name(code: str):
+def get_vix_name(code: str) -> object:
     code = code.replace(" ", "").upper()
     for vix in VIX_LIST:
         if code == vix:
@@ -28,7 +28,7 @@ def int_to_percentage(value: Union[int, str, float]) -> str:
     return f"{sign}{value:.2f}%"
 
 
-def number_to_chinese(num: float):
+def number_to_chinese(num: float) -> str:
     """
     将大数字转换为保留两位小数的汉字形式
     :param num: 输入的浮点数

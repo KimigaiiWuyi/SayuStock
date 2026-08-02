@@ -59,7 +59,7 @@ def _mark_sent(group_id: Optional[str], news_id: int) -> None:
         text: 无需参数，留空即可
     """,
 )
-async def send_add_subscribe_info(bot: Bot, ev: Event):
+async def send_add_subscribe_info(bot: Bot, ev: Event) -> list[str] | None:
     logger.info("✅ [SayuStock] 开始执行[订阅新闻]")
     new = await get_news()
     if isinstance(new, int):
@@ -87,7 +87,7 @@ async def send_add_subscribe_info(bot: Bot, ev: Event):
         text: 无需参数，留空即可
     """,
 )
-async def send_delete_subscribe_info(bot: Bot, ev: Event):
+async def send_delete_subscribe_info(bot: Bot, ev: Event) -> None:
     logger.info("✅ [SayuStock] 开始执行[取消订阅新闻]")
     await gs_subscribe.delete_subscribe("session", TASK_NAME, ev)
     await bot.send("✅ [SayuStock] 取消订阅雪球新闻成功！")
@@ -95,7 +95,7 @@ async def send_delete_subscribe_info(bot: Bot, ev: Event):
 
 # 每隔十分钟检查一次订阅
 @scheduler.scheduled_job("cron", minute="1-59/5")
-async def send_subscribe_info():
+async def send_subscribe_info() -> None:
     await asyncio.sleep(15 + random.random() * 10)
     datas = await gs_subscribe.get_subscribe(TASK_NAME)
     if datas:
@@ -148,7 +148,7 @@ async def send_subscribe_info():
 
 # 每天凌晨零点，清空NEWS
 @scheduler.scheduled_job("cron", hour=0, minute=0)
-async def clean_news_data():
+async def clean_news_data() -> None:
     logger.info("[SayuStock] 开始执行[清空新闻缓存]")
     await clean_news()
     logger.success("[SayuStock] 清空新闻缓存成功!")

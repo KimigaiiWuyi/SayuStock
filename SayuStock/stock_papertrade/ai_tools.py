@@ -33,14 +33,14 @@ from gsuid_core.ai_core.register import ai_tools
 from gsuid_core.ai_core.planning.runtime import PlanRunContext, get_plan_context
 
 from . import db, account_scope
-from .indicators import klines_to_df, klines_to_df_mins, compute_indicators
+from .indicators import compute_indicators
+from ..utils.market import KlinePeriod, get_market, is_market_error
 from .quote_service import quote_service
 from .trading_calendar import (
     is_trading_time,
     trading_day_summary,
     is_a_share_trading_day,
 )
-from ..utils.stock.request import get_gg
 from ..utils.eastmoney_finance import (
     get_cash_flow,
     get_balance_sheet,
@@ -48,6 +48,7 @@ from ..utils.eastmoney_finance import (
     get_financial_snapshot,
 )
 from ..utils.stock.request_utils import get_code_id
+from ..utils.market.convert.dataframe import kline_to_df
 from ..utils.database.papertrade_models import SayuPaperPosition
 
 # ============================================================
@@ -1461,30 +1462,19 @@ async def stock_indicators(
         )
     is_min_k: bool = kline_period in (5, 15, 30, 60)
 
-    # 拉 K 线（upstream get_gg 无返回类型注解 → 视为 dict | str）
     end: _dt.datetime = _dt.datetime.now()
-    # 分钟 K 拉近几天即可（按 kline_period 自适应）
     if is_min_k:
         start: _dt.datetime = end - _dt.timedelta(days=10)
     else:
         start = end - _dt.timedelta(days=int(periods * 1.5) + 30)
-    # ``get_gg`` 无返回类型注解；运行时返回 ``str`` (错误) 或 ``dict`` 负载。
-    # 显式联合类型让下游 isinstance 有意义，并避免基于 pyright 把它推成
-    # ``Dict[str, Any]`` 后报不必要的 isinstance。
-    raw: str | dict[str, object] = await get_gg(code, f"single-stock-kline-{kline_period}", start, end)
-    if isinstance(raw, str):
-        return f"⚠️ 拉 K 线失败: {raw}"
-    payload: dict[str, object] = raw
-    data: object = payload.get("data")
-    data_dict: dict[str, object] = data if isinstance(data, dict) else {}
-    klines_obj: object = data_dict.get("klines")
-    klines: list[str] = [k for k in klines_obj if isinstance(k, str)] if isinstance(klines_obj, list) else []
-    if not klines:
-        return f"⚠️ {name}({code}) 无 K 线数据 (kline_period={kline_period})"
-    if is_min_k:
-        df = klines_to_df_mins(klines)
-    else:
-        df = klines_to_df(klines)
+    try:
+        period = KlinePeriod(str(kline_period))
+    except ValueError:
+        period = KlinePeriod.D1
+    series = await get_market().kline(code, period, start=start.date(), end=end.date())
+    if is_market_error(series):
+        return f"⚠️ 拉 K 线失败: {series.message}"
+    df = kline_to_df(series)
     if df.empty or len(df) < 20:
         return f"⚠️ K 线数据不足（{len(df)} 行, kline_period={kline_period}）"
     df = df.tail(periods).reset_index(drop=True)

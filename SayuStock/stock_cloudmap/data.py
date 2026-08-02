@@ -1,37 +1,31 @@
-from typing import Any, Dict, List, Union, Optional
+"""云图数据编排：只返回 BoardSnapshot，不经 compat 编码。"""
+
+from __future__ import annotations
+
+from typing import List, Union, Optional
 from datetime import datetime
 from dataclasses import dataclass
 
+from ..utils.market import get_market, is_market_error
 from ..utils.constant import ErroText, bk_dict, market_dict
-from ..utils.eastmoney import EASTMONEY_REQUESTER
+from ..utils.market.models import KlineSeries, BoardSnapshot, IntradaySeries
 
-CloudMapRawData = Union[Dict[str, Any], str]
+MarketPayload = BoardSnapshot | IntradaySeries | KlineSeries
+CloudMapRawData = Union[MarketPayload, str]
 
 
 @dataclass
 class CloudMapDataResult:
-    """云图渲染前的数据聚合结果。
-
-    Attributes:
-        raw_data: 主数据源响应。普通云图和单个股票使用该字段。
-        raw_datas: 多标的分时或 K 线对比使用的数据列表。
-        sector: 经过板块别名、概念菜单解析后的最终 sector。
-        special_cache_key: 需要额外区分缓存文件时使用的字符串。
-    """
+    """云图渲染前的数据聚合结果。"""
 
     raw_data: CloudMapRawData
-    raw_datas: List[Dict[str, Any]]
+    raw_datas: List[IntradaySeries | KlineSeries]
     sector: Optional[str]
     special_cache_key: Optional[str]
 
 
 class CloudMapDataService:
-    """stock_cloudmap 数据请求编排服务。
-
-    该服务只负责根据命令参数组织数据请求，不包含 Plotly 渲染逻辑。东方财富
-    数据统一经由 `EASTMONEY_REQUESTER` 请求类，VIX 与加密货币兼容逻辑继续
-    复用既有封装，避免改变现有功能。
-    """
+    """大盘/行业/概念云图数据请求，只走 MarketDataPort。"""
 
     async def fetch(
         self,
@@ -40,54 +34,33 @@ class CloudMapDataService:
         start_time: Optional[datetime],
         end_time: Optional[datetime],
     ) -> CloudMapDataResult:
-        """获取云图/个股/对比图渲染所需原始数据。
-
-        Args:
-            market: 用户输入的市场、板块或标的文本。
-            sector: 渲染类型或板块筛选条件。
-            start_time: K 线或对比图开始时间。
-            end_time: K 线或对比图结束时间。
-
-        Returns:
-            `CloudMapDataResult`。`raw_data` 为字符串时表示业务错误文本；
-            `raw_datas` 仅在多标的场景中填充。
-        """
+        _ = start_time, end_time
         resolved_sector = self.resolve_sector(market, sector)
-        raw_datas: List[Dict[str, Any]] = []
+        raw_datas: List[IntradaySeries | KlineSeries] = []
         special_cache_key: Optional[str] = None
+        port = get_market()
 
         if market == "大盘云图":
             if resolved_sector:
-                raw_data = await EASTMONEY_REQUESTER.get_market_list(resolved_sector, True, 1, 100)
+                snap = await port.board(resolved_sector, limit=None, sort_asc=False)
             else:
-                raw_data = await EASTMONEY_REQUESTER.get_hotmap()
+                snap = await port.hotmap()
+            raw_data: CloudMapRawData = snap.message if is_market_error(snap) else snap
         elif market == "行业云图":
-            raw_data = await EASTMONEY_REQUESTER.get_hotmap()
+            snap = await port.hotmap()
+            raw_data = snap.message if is_market_error(snap) else snap
         elif market == "概念云图":
             if resolved_sector:
                 resolved_sector, raw_data = await self.fetch_concept(resolved_sector)
             else:
                 raw_data = "概念云图需要后跟概念类型, 例如： 概念云图 华为欧拉"
         else:
-            # 本包的命令只会传 大盘云图/行业云图/概念云图 三种 market，一定命中上面
-            # 三个分支；这里是兜底。个股 / 分时 / 对比的 sector 分支曾从
-            # stock_stockinfo 拷贝过来，但 render.py 早已不分发它们（见其模块注释），
-            # 已于 2026-07-17 删除 —— 个股相关请走 stock_stockinfo。
-            raw_data = await EASTMONEY_REQUESTER.get_market_list(market)
+            snap = await port.board(market, limit=100, sort_asc=False)
+            raw_data = snap.message if is_market_error(snap) else snap
 
         return CloudMapDataResult(raw_data, raw_datas, resolved_sector, special_cache_key)
 
     def resolve_sector(self, market: str, sector: Optional[str]) -> Optional[str]:
-        """解析云图板块别名。
-
-        Args:
-            market: 用户输入市场名称。
-            sector: 原始板块参数。
-
-        Returns:
-            修正后的板块参数。市场命中 `market_dict`/`bk_dict` 时会把市场本身
-            视作筛选板块。
-        """
         if sector != "single-stock":
             if market in market_dict and "b:" in market_dict[market]:
                 return market
@@ -96,23 +69,18 @@ class CloudMapDataService:
         return sector
 
     async def fetch_concept(self, sector: str) -> tuple[str, CloudMapRawData]:
-        """获取概念云图数据。
-
-        Args:
-            sector: 概念名称或概念代码片段。
-
-        Returns:
-            二元组：解析后的概念名称、东方财富行情列表响应；未命中时响应为
-            `ErroText["typemap"]`。
-        """
+        port = get_market()
         upper_sector = sector.upper()
-        concept_menu = await EASTMONEY_REQUESTER.get_menu(3)
-        if upper_sector in concept_menu:
-            return upper_sector, await EASTMONEY_REQUESTER.get_market_list(concept_menu[upper_sector], True, 1, 100)
-
-        for concept_name in concept_menu:
+        menu = await port.sector_menu("concept")
+        if is_market_error(menu):
+            return upper_sector, menu.message
+        if upper_sector in menu:
+            snap = await port.board(str(menu[upper_sector]), limit=None, sort_asc=False)
+            return upper_sector, snap.message if is_market_error(snap) else snap
+        for concept_name, code in menu.items():
             if upper_sector in concept_name:
-                return concept_name, await EASTMONEY_REQUESTER.get_market_list(concept_menu[concept_name], True, 1, 100)
+                snap = await port.board(str(code), limit=None, sort_asc=False)
+                return concept_name, snap.message if is_market_error(snap) else snap
         return upper_sector, ErroText["typemap"]
 
 

@@ -1,16 +1,15 @@
 """渲染前的数据计算层 —— 全插件唯一真相源。
 
-只负责把接口原始数据转换成图表渲染所需的稳定结构，不引入 plotly /
-matplotlib / mplchart，好让 plotly 版（``stock_cloudmap/render.py``，云图）
-和 mpl 版（``stock_stockinfo/render_mpl.py``，个股）共享同一套 pandas 逻辑。
-
-这份共享一直是设计意图，但此前是靠**复制**实现的：两个包各存一份，然后
-不出意外地分叉了 —— 换手率、跨天时间轴（BJT）等修复只进了其中一份。现在
-两边都从这里 re-export。指标数学见 ``utils/indicators.py``。
+只接受领域模型（``IntradaySeries`` / ``KlineSeries`` / ``BoardSnapshot``），
+转成图表渲染所需的稳定结构，不引入 plotly / matplotlib / mplchart。
+plotly 版（``stock_cloudmap/render.py``）与 mpl 版（``stock_stockinfo``）共用。
+指标数学见 ``utils/indicators.py``。
 """
 
+from __future__ import annotations
+
 import math
-from typing import Any, Dict, List
+from typing import Any, List
 from collections import defaultdict
 from dataclasses import dataclass
 
@@ -19,12 +18,12 @@ import pandas as pd
 
 from gsuid_core.logger import logger
 
-from .kline import fill_kline
 from .utils import int_to_percentage, number_to_chinese
 from .constant import ErroText
 from .time_range import is_market_active_now, get_trading_datetimes_bjt
+from .market.models import KlineSeries, BoardSnapshot, IntradaySeries
+from .market.convert.dataframe import kline_to_cn_df
 
-RawDict = Dict[str, Any]
 DataResult = str
 
 
@@ -288,11 +287,7 @@ def _infer_kline_freq(df: pd.DataFrame) -> tuple[str, str, str, pd.Timedelta]:
     return inferred_freq, freq_label, tickformat, median_delta
 
 
-def build_kline_render_data(raw_data: RawDict) -> KlineRenderData | DataResult:
-    df = fill_kline(raw_data)
-    if df is None:
-        return ErroText["notData"]
-
+def _kline_render_from_cn_df(df: pd.DataFrame, title_name: str) -> KlineRenderData | DataResult:
     df = df.copy()
     df["日期"] = pd.to_datetime(df["日期"], errors="coerce")
     df = df.dropna(subset=["日期"])
@@ -339,7 +334,7 @@ def build_kline_render_data(raw_data: RawDict) -> KlineRenderData | DataResult:
     return KlineRenderData(
         df=df,
         chart_df=chart_df,
-        title=f"{raw_data['data']['name']} {freq_label}",
+        title=f"{title_name} {freq_label}",
         freq_label=freq_label,
         tickformat=tickformat,
         median_delta=median_delta,
@@ -348,6 +343,21 @@ def build_kline_render_data(raw_data: RawDict) -> KlineRenderData | DataResult:
         breaks=breaks,
         max_turnovers=max_turnovers,
     )
+
+
+def build_kline_render_data(series: KlineSeries) -> KlineRenderData | DataResult:
+    """从 ``KlineSeries`` 构建渲染数据（供应商无关）。"""
+    if not isinstance(series, KlineSeries):
+        return ErroText["notData"]
+    df = kline_to_cn_df(series)
+    if df.empty:
+        return ErroText["notData"]
+    title = series.symbol.name or "K线"
+    return _kline_render_from_cn_df(df, title)
+
+
+# 兼容旧名
+build_kline_render_data_from_series = build_kline_render_data
 
 
 def _empty_trend_row(dt_obj: object) -> dict[str, Any]:
@@ -393,9 +403,7 @@ def _rows_from_resolved_trends(
     if not fill_session_future and not fill_session_gaps:
         return rows
 
-    session_times = [
-        pd.Timestamp(t).floor("min") for t in get_trading_datetimes_bjt(code_id, now_bjt=now_bjt)
-    ]
+    session_times = [pd.Timestamp(t).floor("min") for t in get_trading_datetimes_bjt(code_id, now_bjt=now_bjt)]
     if not session_times:
         return rows
 
@@ -421,39 +429,65 @@ def _rows_from_resolved_trends(
     if not extra:
         return rows
     rows.extend(extra)
-    rows.sort(
-        key=lambda row: pd.Timestamp(row["datetime"])
-        if row.get("datetime") is not None
-        else pd.Timestamp.min
-    )
+    rows.sort(key=lambda row: pd.Timestamp(row["datetime"]) if row.get("datetime") is not None else pd.Timestamp.min)
     return rows
 
 
-def _full_single_trends(raw_data: RawDict) -> list[dict[str, Any]]:
-    import datetime as _dt
-
-    code_id = str(raw_data["file_name"] if "file_name" in raw_data else "").split("_")[0]
-    trends = list(raw_data["trends"]) if "trends" in raw_data and raw_data["trends"] else []
-    if not trends:
+def _session_rows_from_intraday(
+    series: IntradaySeries,
+    *,
+    now_bjt: Any,
+    fill_session_future: bool,
+    fill_session_gaps: bool,
+) -> list[dict[str, Any]]:
+    """IntradaySeries → 带会话补齐的行（供分时图时间轴）。"""
+    if not series.points:
         return []
-
-    now_bjt = _dt.datetime.now()
+    code_id = series.symbol.provider_symbol or series.symbol.code
+    trends = [
+        {
+            "datetime": p.ts.strftime("%Y-%m-%d %H:%M"),
+            "price": p.price,
+            "money": p.amount,
+            "open": p.open,
+            "high": p.high,
+            "low": p.low,
+            "amount": p.volume,
+            "avg_price": p.avg_price,
+        }
+        for p in series.points
+    ]
     resolved = _resolve_trend_absolute_datetimes(trends, now_bjt=now_bjt)
-    if not resolved:
-        return trends
-
     return _rows_from_resolved_trends(
         resolved,
         code_id=code_id,
         now_bjt=now_bjt,
-        fill_session_future=True,
-        fill_session_gaps=True,
+        fill_session_future=fill_session_future,
+        fill_session_gaps=fill_session_gaps,
     )
 
 
-def build_single_stock_render_data(raw_data: RawDict) -> SingleStockRenderData | DataResult:
-    raw = raw_data["data"]
-    full_data = _full_single_trends(raw_data)
+def build_single_stock_render_data(series: IntradaySeries) -> SingleStockRenderData | DataResult:
+    """从 ``IntradaySeries`` 构建单股分时渲染数据。"""
+    import datetime as _dt
+
+    if not isinstance(series, IntradaySeries) or not series.points:
+        return ErroText["notOpen"]
+
+    now_bjt = _dt.datetime.now()
+    rows = _session_rows_from_intraday(
+        series,
+        now_bjt=now_bjt,
+        fill_session_future=True,
+        fill_session_gaps=True,
+    )
+    # 仅保留有价格的点用于主序列（未来空位不进入 points 语义）
+    priced = [r for r in rows if r.get("price") is not None] if rows else []
+    if priced:
+        full_data = [{"datetime": r["datetime"], "price": r["price"], "money": r.get("money")} for r in priced]
+    else:
+        full_data = [{"datetime": p.ts, "price": p.price, "money": p.amount} for p in series.points]
+
     price_history_pd = pd.DataFrame(
         {
             "datetime": [item["datetime"] for item in full_data],
@@ -464,7 +498,14 @@ def build_single_stock_render_data(raw_data: RawDict) -> SingleStockRenderData |
     if price_history_pd.empty or price_history_pd["price"].iloc[0] is None:
         return ErroText["notOpen"]
 
-    open_price = float(raw["f60"])
+    quote = series.quote
+    if quote is not None and quote.prev_close is not None and quote.prev_close != 0:
+        open_price = float(quote.prev_close)
+    elif quote is not None and quote.open is not None and quote.open != 0:
+        open_price = float(quote.open)
+    else:
+        open_price = float(series.points[0].open or series.points[0].price)
+
     price_history_pd["dt"] = pd.to_datetime(price_history_pd["datetime"], errors="coerce")
     price_history_pd["price"] = _numeric_series(price_history_pd["price"])
     price_history_pd["money"] = _numeric_series(price_history_pd["money"], fill_value=0)
@@ -512,23 +553,14 @@ def build_single_stock_render_data(raw_data: RawDict) -> SingleStockRenderData |
             else:
                 bar_colors.append("grey")
 
-    gained = float(raw["f170"])
+    gained = float(quote.change_pct) if quote is not None and quote.change_pct is not None else 0.0
     custom_info = int_to_percentage(gained)
-    total_amount = number_to_chinese(raw["f48"]) if isinstance(raw["f48"], float) else 0
-    stock_name = str(raw["f58"])
-    # 代码：优先 f57；否则从 file_name 取 secid（如 100.KS11）
-    stock_code = ""
-    if "f57" in raw and raw["f57"] not in (None, "", "-"):
-        stock_code = str(raw["f57"])
-    else:
-        file_name = str(raw_data["file_name"] if "file_name" in raw_data else "")
-        secid = file_name.split("_")[0]
-        if "." in secid:
-            stock_code = secid.split(".", 1)[1]
-        elif secid:
-            stock_code = secid
-    new_price = raw["f43"]
-    turnover_rate = raw["f168"]
+    amount_v = quote.amount if quote is not None else None
+    total_amount = number_to_chinese(amount_v) if isinstance(amount_v, float) else 0
+    stock_name = series.symbol.name or "N/A"
+    stock_code = series.symbol.code
+    new_price = quote.price if quote is not None else series.points[-1].price
+    turnover_rate = quote.turnover_rate if quote is not None else 0
     title_text = (
         f"【{stock_name} 最新价：{new_price}】 开盘价：{open_price} "
         f"涨跌幅：{custom_info} 换手率 {turnover_rate}% "
@@ -555,31 +587,33 @@ def build_single_stock_render_data(raw_data: RawDict) -> SingleStockRenderData |
     )
 
 
-def build_multi_stock_render_data(raw_data_list: List[RawDict]) -> MultiStockRenderData | DataResult:
+# 兼容旧名
+build_single_stock_render_data_from_intraday = build_single_stock_render_data
+
+
+def build_multi_stock_render_data(
+    series_list: List[IntradaySeries],
+) -> MultiStockRenderData | DataResult:
     import datetime as _dt
 
     max_fluctuation = 0.0
     processed_stocks: list[MultiStockItem] = []
     now_bjt = _dt.datetime.now()
 
-    for raw_data in raw_data_list:
-        if not isinstance(raw_data, dict):
+    for series in series_list:
+        if not isinstance(series, IntradaySeries) or not series.points:
             continue
-        raw = raw_data["data"]
-        raw_open = raw["f60"] if "f60" in raw else None
-        open_price = _as_optional_float(raw_open)
+        quote = series.quote
+        open_price = None
+        if quote is not None:
+            open_price = _as_optional_float(quote.prev_close) or _as_optional_float(quote.open)
         if open_price is None:
-            stock_name = raw["f58"] if "f58" in raw else "Unknown"
-            logger.warning(f"[SayuStock] Skipping {stock_name} due to invalid open price: {raw_open}.")
+            open_price = _as_optional_float(series.points[0].open) or _as_optional_float(series.points[0].price)
+        if open_price is None:
+            logger.warning(f"[SayuStock] Skipping {series.symbol.name} due to invalid open price.")
             continue
-        code_id = str(raw_data["file_name"] if "file_name" in raw_data else "").split("_")[0]
-        trends = list(raw_data["trends"]) if "trends" in raw_data and raw_data["trends"] else []
-
-        # 数据绝对时间为准；会话模板仅在盘中补未来占位，不重贴历史点
-        resolved = _resolve_trend_absolute_datetimes(trends, now_bjt=now_bjt)
-        rows = _rows_from_resolved_trends(
-            resolved,
-            code_id=code_id,
+        rows = _session_rows_from_intraday(
+            series,
             now_bjt=now_bjt,
             fill_session_future=True,
             fill_session_gaps=False,
@@ -603,7 +637,7 @@ def build_multi_stock_render_data(raw_data_list: List[RawDict]) -> MultiStockRen
             max_fluctuation = max(max_fluctuation, abs(current_min))
         processed_stocks.append(
             MultiStockItem(
-                name=str(raw["f58"]),
+                name=series.symbol.name or "Unknown",
                 df=price_history_pd,
                 total_volume=float(_frame_column(price_history_pd, "money").sum()),
             )
@@ -636,17 +670,18 @@ def build_multi_stock_render_data(raw_data_list: List[RawDict]) -> MultiStockRen
     )
 
 
-def build_compare_render_data(raw_datas: List[RawDict]) -> CompareRenderData | DataResult:
+def build_compare_render_data(series_list: List[KlineSeries]) -> CompareRenderData | DataResult:
     items: list[CompareStockItem] = []
-    for index, raw_data in enumerate(raw_datas):
-        df = fill_kline(raw_data)
-        if df is None:
+    for index, series in enumerate(series_list):
+        if not isinstance(series, KlineSeries):
+            continue
+        df = kline_to_cn_df(series)
+        if df.empty:
             continue
         df = df.copy()
         df["日期"] = pd.to_datetime(df["日期"], errors="coerce")
         df = df.dropna(subset=["日期"])
-        raw_data_map: RawDict = raw_data["data"]
-        trace_name = f"{raw_data_map['name'] if 'name' in raw_data_map else f'Trace {index}'}"
+        trace_name = series.symbol.name or f"Trace {index}"
         items.append(CompareStockItem(name=trace_name, df=df))
     if not items:
         return ErroText["notData"]
@@ -654,23 +689,25 @@ def build_compare_render_data(raw_datas: List[RawDict]) -> CompareRenderData | D
 
 
 def build_cloudmap_render_data(
-    raw_data: RawDict, market: str, sector: str | None = None, layer: int = 2
+    snap: BoardSnapshot, market: str, sector: str | None = None, layer: int = 2
 ) -> CloudmapRenderData | DataResult:
-    all_stocks: list[RawDict] = []
-    data_map = raw_data["data"]
-    for item in data_map["diff"]:
-        if item["f20"] == "-" or item["f100"] == "-" or item["f3"] == "-":
+    if not isinstance(snap, BoardSnapshot):
+        return ErroText["notData"]
+
+    all_stocks: list[dict[str, Any]] = []
+    for row in snap.rows:
+        if row.market_cap is None or row.change_pct is None or not row.name:
             continue
-        category_name = item["f100"]
-        if item["f14"].startswith(("ST", "*ST")):
+        category_name = row.industry or "-"
+        if row.name.startswith(("ST", "*ST")):
             category_name = "ST"
         all_stocks.append(
             {
                 "category": category_name,
-                "name": item["f14"],
-                "value": float(item["f20"]),
-                "diff_val": float(item["f3"]),
-                "code": item["f12"],
+                "name": row.name,
+                "value": float(row.market_cap),
+                "diff_val": float(row.change_pct),
+                "code": row.code,
                 "sector": sector,
             }
         )
@@ -678,7 +715,7 @@ def build_cloudmap_render_data(
     if not all_stocks:
         return ErroText["notData"]
 
-    grouped_by_category: dict[str, list[RawDict]] = defaultdict(list)
+    grouped_by_category: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for stock in all_stocks:
         grouped_by_category[str(stock["category"])].append(stock)
 
@@ -695,7 +732,7 @@ def build_cloudmap_render_data(
         if not categories_to_process:
             return ErroText["notData"]
 
-    final_stock_list: list[RawDict] = []
+    final_stock_list: list[dict[str, Any]] = []
     for cat_name in categories_to_process:
         stock_items = grouped_by_category[cat_name]
         num_items = len(stock_items)

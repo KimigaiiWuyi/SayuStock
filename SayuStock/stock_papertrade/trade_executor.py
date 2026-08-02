@@ -1,4 +1,3 @@
-# pyright: reportMissingImports=false
 """交易执行抽象层（TradeExecutor）。
 
 把 agent 的"撮合 / 写成交流水 / 改持仓"三步交易操作收敛成一个**可替换的类**：

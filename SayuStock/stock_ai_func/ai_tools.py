@@ -16,9 +16,13 @@ from gsuid_core.ai_core.models import ToolContext
 from gsuid_core.ai_core.register import ai_tools
 from gsuid_core.utils.html_render import render_md_to_bytes
 
+from ..utils.market import (
+    KlinePeriod,
+    get_market,
+    is_market_error,
+)
 from ..utils.get_OKX import get_all_crypto_price
 from ..utils.request import get_news
-from ..utils.stock.request import get_gg, get_vix
 from ..utils.stock.request_utils import get_code_id
 
 
@@ -50,95 +54,49 @@ async def get_market_overview(
     """
     import json as _json
 
-    from ..utils.eastmoney import EASTMONEY_REQUESTER
-
-    # 6 大宽基指数（东财 secid 格式：1=沪市, 0=深市）
-    INDEX_SECIDS: list[tuple[str, str]] = [
-        ("上证指数", "1.000001"),
-        ("深证成指", "0.399001"),
-        ("创业板指", "0.399006"),
-        ("沪深300", "1.000300"),
-        ("中证500", "1.000905"),
-        ("科创50", "1.000688"),
-    ]
+    market = get_market()
+    INDEX_NAMES = ["上证指数", "深证成指", "创业板指", "沪深300", "中证500", "科创50"]
     indices: list[dict[str, object]] = []
     truncated: list[str] = []
-    for name, secid in INDEX_SECIDS:
-        try:
-            data = await EASTMONEY_REQUESTER.get_stock_trends(secid)
-            if isinstance(data, str) or not isinstance(data, list) or not data:
-                truncated.append(name)
-                continue
-            last = data[-1]
-            indices.append(
-                {
-                    "name": name,
-                    "price": last.get("price", 0.0),
-                    "avg_price": last.get("avg_price", 0.0),
-                    "amount": last.get("amount", 0),  # 累计成交额（元）
-                }
-            )
-        except Exception:
+    for name in INDEX_NAMES:
+        q = await market.quote(name)
+        if is_market_error(q):
             truncated.append(name)
             continue
+        indices.append(
+            {
+                "name": name,
+                "price": q.price,
+                "avg_price": q.open if q.open is not None else q.price,
+                "amount": q.amount if q.amount is not None else 0,
+                "change_pct": q.change_pct,
+            }
+        )
 
-    # 沪深两市涨跌家数 + 涨停跌停（用 push2his 的 clist 拉沪深A股一次）
     breadth = {"rise": 0, "fall": 0, "flat": 0, "limit_up": 0, "limit_down": 0}
-    try:
-        # 东财 m:0 t:6 沪深A股 / m:1 t:2 沪深京A股 / fs 行情
-        url = "https://push2.eastmoney.com/api/qt/clist/get"
-        params = [
-            ("pn", "1"),
-            ("pz", "5000"),
-            ("po", "1"),
-            ("np", "1"),
-            ("fltt", "2"),
-            ("invt", "2"),
-            ("fid", "f3"),
-            ("fs", "m:0+t:6+f:!2,m:0+t:13+f:!2,m:0+t:80+f:!2,m:1+t:2+f:!2,m:1+t:23+f:!2"),
-            ("fields", "f1,f2,f3,f12,f14"),
-        ]
-        resp = await EASTMONEY_REQUESTER.stock_request(url, params=params)
-        if isinstance(resp, dict) and "data" in resp and resp["data"]:
-            diff = resp["data"].get("diff", [])
-            for d in diff:
-                chg = d.get("f3", 0) or 0
-                if chg > 0:
-                    breadth["rise"] += 1
-                elif chg < 0:
-                    breadth["fall"] += 1
-                else:
-                    breadth["flat"] += 1
-                # 涨跌幅 ≥ 9.95% 算涨停（创业板/科创板 19.95%）
-                if chg >= 19.0 or (9.5 <= chg < 20 and chg >= 9.95):
-                    breadth["limit_up"] += 1
-                if chg <= -19.0 or (-20 < chg <= -9.5):
-                    breadth["limit_down"] += 1
-    except Exception:
+    snap = await market.board("沪深A", limit=5000, sort_asc=False)
+    if is_market_error(snap):
         truncated.append("breadth")
+    else:
+        for row in snap.rows:
+            chg = row.change_pct if row.change_pct is not None else 0.0
+            if chg > 0:
+                breadth["rise"] += 1
+            elif chg < 0:
+                breadth["fall"] += 1
+            else:
+                breadth["flat"] += 1
+            if chg >= 19.0 or chg >= 9.95:
+                breadth["limit_up"] += 1
+            if chg <= -19.0 or chg <= -9.95:
+                breadth["limit_down"] += 1
 
-    # 北向资金（沪股通+深股通净买入）—— 用 push2.eastmoney.com 北向接口
     north_bound: float | None = None
-    try:
-        url2 = "https://push2.eastmoney.com/api/qt/kamt/get"
-        params2 = [
-            ("fields1", "f1,f2,f3,f4"),
-            ("fields2", "f51,f52,f53,f54,f55,f56"),
-            ("kamt", "1"),  # 1=沪深港通
-            ("fs", "m:1+t:1,m:0+t:1"),  # 沪股通+深股通
-        ]
-        resp2 = await EASTMONEY_REQUESTER.stock_request(url2, params=params2)
-        if isinstance(resp2, dict) and resp2.get("data"):
-            d = resp2["data"]
-            # 沪股通净买入 f55 / 深股通净买入 f56（万元）
-            sh = d.get("f55", 0) or 0
-            sz = d.get("f56", 0) or 0
-            # 转为亿元
-            north_bound = (sh + sz) / 1e4 / 1e4 * 1e4  # 万 → 元 → 亿
-            # 实际东财字段：f55 / f56 已是"万元"
-            north_bound = (sh + sz) / 10000.0  # 万元 → 亿元
-    except Exception:
+    nb = await market.northbound()
+    if is_market_error(nb):
         truncated.append("north_bound")
+    else:
+        north_bound = nb.sh_net_yi + nb.sz_net_yi
 
     # 涨停占比
     total = breadth["rise"] + breadth["fall"] + breadth["flat"]
@@ -192,63 +150,51 @@ async def get_sector_heatmap(
     import json as _json
     import asyncio
 
-    from ..utils.eastmoney import EASTMONEY_REQUESTER
-
-    # 东财板块聚合行情市场：m:90 t:2 行业板块 / t:3 概念板块。
-    # 这一层每条 diff 的 f3 就是**板块指数自身涨跌幅**（聚合值），
-    # 而不是旧实现里 diff[0]（板块内龙头个股）的 f3。
-    board_market: str = "m:90+t:2" if sector_type == "industry" else "m:90+t:3"
+    market = get_market()
+    board_kind = "行业板块" if sector_type == "industry" else "概念板块"
     out: dict[str, object] = {"sector_type": sector_type, "top_rise": [], "top_fall": [], "hot_stocks": []}
 
-    async def _fetch_boards(po: str) -> list[dict[str, object]]:
-        """拉板块聚合排行。po='1' 涨幅降序（取涨幅榜首部），po='0' 涨幅升序（取跌幅榜首部）。"""
-        url = "http://push2.eastmoney.com/api/qt/clist/get"
-        params = [
-            ("pn", "1"),
-            ("pz", str(max(top_n, 1))),
-            ("po", po),
-            ("np", "1"),
-            ("fltt", "2"),
-            ("invt", "2"),
-            ("fid", "f3"),
-            ("fs", board_market),
-            # f3 板块聚合涨跌幅 / f12 板块代码 / f14 板块名 / f104 涨家数 / f105 跌家数
-            # f128 领涨股名 / f136 领涨股涨跌幅 / f140 领涨股代码
-            ("fields", "f3,f12,f14,f104,f105,f128,f136,f140"),
-        ]
-        resp = await EASTMONEY_REQUESTER.stock_request(url, params=params)
-        if not isinstance(resp, dict) or not resp.get("data"):
-            return []
-        rows: list[dict[str, object]] = []
-        for d in resp["data"].get("diff", []) or []:
-            rows.append(
+    def _board_rows(snap_rows: object, reverse: bool) -> list[dict[str, object]]:
+        from ..utils.market.models import BoardRow
+
+        rows_list: list[BoardRow] = list(snap_rows) if isinstance(snap_rows, (list, tuple)) else []
+        rows_list = sorted(
+            rows_list,
+            key=lambda r: r.change_pct if r.change_pct is not None else 0.0,
+            reverse=reverse,
+        )[: max(top_n, 1)]
+        result: list[dict[str, object]] = []
+        for r in rows_list:
+            extras = r.extras
+            result.append(
                 {
-                    "name": str(d.get("f14", "")),
-                    "code": str(d.get("f12", "")),
-                    "change_pct": d.get("f3", 0),  # 板块自身聚合涨跌幅
-                    "up_count": d.get("f104"),
-                    "down_count": d.get("f105"),
-                    "lead_stock": str(d.get("f128", "")),
-                    "lead_stock_code": str(d.get("f140", "")),
-                    "lead_stock_pct": d.get("f136"),  # 领涨股涨幅（可能 +20%，勿当板块涨幅）
+                    "name": r.name,
+                    "code": r.code,
+                    "change_pct": r.change_pct if r.change_pct is not None else 0,
+                    "up_count": extras.up_count if extras is not None else None,
+                    "down_count": extras.down_count if extras is not None else None,
+                    "lead_stock": r.lead_name or "",
+                    "lead_stock_code": extras.lead_code if extras is not None else "",
+                    "lead_stock_pct": r.lead_change_pct,
                 }
             )
-        return rows
+        return result
 
     async def _top_codes(board_code: str) -> list[str]:
-        """为返回榜单里的板块补成分股涨幅 TOP3 代码（数量受 top_n 限制，并发拉取）。"""
-        try:
-            m = await EASTMONEY_REQUESTER.get_market_list(board_code, False, 1, 3)
-        except Exception:
+        snap = await market.board(board_code, limit=3, sort_asc=False)
+        if is_market_error(snap):
             return []
-        if not isinstance(m, dict):
-            return []
-        diff = m.get("data", {}).get("diff", []) or []
-        return [str(d.get("f12", "")) for d in diff[:3] if d.get("f12")]
+        return [r.code for r in snap.rows[:3] if r.code]
 
     try:
-        rise_rows, fall_rows = await asyncio.gather(_fetch_boards("1"), _fetch_boards("0"))
-        # 仅为返回榜单的板块并发补 top3 成分股（去重，bounded ≤ 2*top_n 次）
+        rise_snap = await market.board(board_kind, limit=max(top_n * 2, 10), sort_asc=False)
+        fall_snap = await market.board(board_kind, limit=max(top_n * 2, 10), sort_asc=True)
+        rise_rows: list[dict[str, object]] = []
+        fall_rows: list[dict[str, object]] = []
+        if not is_market_error(rise_snap):
+            rise_rows = _board_rows(rise_snap.rows, reverse=True)
+        if not is_market_error(fall_snap):
+            fall_rows = _board_rows(fall_snap.rows, reverse=False)
         picked_codes = list({str(r["code"]) for r in (rise_rows + fall_rows) if r.get("code")})
         code_lists = await asyncio.gather(*[_top_codes(c) for c in picked_codes])
         code_to_top: dict[str, list[str]] = dict(zip(picked_codes, code_lists))
@@ -256,37 +202,29 @@ async def get_sector_heatmap(
             r["top_stocks"] = code_to_top.get(str(r.get("code", "")), [])
         out["top_rise"] = rise_rows
         out["top_fall"] = fall_rows
-    except Exception as e:
+    except (OSError, TimeoutError, RuntimeError, ValueError, TypeError) as e:
         out["_error"] = str(e)
 
-    # 热门个股 TOP 5（成交额）
     try:
-        url = "https://push2.eastmoney.com/api/qt/clist/get"
-        params = [
-            ("pn", "1"),
-            ("pz", "5"),
-            ("po", "1"),
-            ("np", "1"),
-            ("fltt", "2"),
-            ("invt", "2"),
-            ("fid", "f6"),  # 成交额
-            ("fs", "m:0+t:6+f:!2,m:0+t:13+f:!2,m:0+t:80+f:!2,m:1+t:2+f:!2,m:1+t:23+f:!2"),
-            ("fields", "f12,f14,f2,f3,f6"),
-        ]
-        resp = await EASTMONEY_REQUESTER.stock_request(url, params=params)
-        if isinstance(resp, dict) and resp.get("data"):
-            diff = resp["data"].get("diff", [])
+        hot = await market.board("沪深A", limit=5, sort_asc=False)
+        if not is_market_error(hot):
+            # 按成交额重排
+            hot_sorted = sorted(
+                hot.rows,
+                key=lambda r: r.amount if r.amount is not None else 0.0,
+                reverse=True,
+            )[:5]
             out["hot_stocks"] = [
                 {
-                    "code": d.get("f12", ""),
-                    "name": d.get("f14", ""),
-                    "price": d.get("f2", 0),
-                    "change_pct": d.get("f3", 0),
-                    "amount_yi": (d.get("f6", 0) or 0) / 1e8,  # 成交额（元）→ 亿元
+                    "code": r.code,
+                    "name": r.name,
+                    "price": r.price if r.price is not None else 0,
+                    "change_pct": r.change_pct if r.change_pct is not None else 0,
+                    "amount_yi": (r.amount or 0) / 1e8,
                 }
-                for d in diff
+                for r in hot_sorted
             ]
-    except Exception:
+    except (OSError, TimeoutError, RuntimeError, ValueError, TypeError):
         pass
 
     return _json.dumps(out, ensure_ascii=False, default=str)
@@ -339,16 +277,28 @@ async def get_crypto_prices(
     Returns:
         主流加密货币行情
     """
-    data = await get_all_crypto_price()
-    if not data:
-        return "获取加密货币数据失败"
-
+    # 语义化：经 MarketDataPort/OKX adapter
+    symbols = ["BTC", "ETH", "SOL", "DOGE", "BNB"]
+    market = get_market()
     result = "【加密货币】\n"
-    for name, d in data.items():
-        price = d.get("f43", "N/A")
-        change = d.get("f170", "N/A")
-        result += f"{name}: ${price} ({change}%)\n"
-
+    any_ok = False
+    for name in symbols:
+        q = await market.quote(name)
+        if is_market_error(q):
+            continue
+        any_ok = True
+        chg = f"{q.change_pct}%" if q.change_pct is not None else "N/A"
+        result += f"{name}: ${q.price} ({chg})\n"
+    if not any_ok:
+        data = await get_all_crypto_price()
+        if not data or not isinstance(data, dict):
+            return "获取加密货币数据失败"
+        for name, d in data.items():
+            if not isinstance(d, dict):
+                continue
+            price = d["price"] if "price" in d else "N/A"
+            change = d["change_pct"] if "change_pct" in d else "N/A"
+            result += f"{name}: ${price} ({change}%)\n"
     return result
 
 
@@ -373,22 +323,27 @@ async def get_vix_index(
     Returns:
         VIX指数数据
     """
-    vix_name = f"vix{vix_type.lower()}"
-    data = await get_vix(vix_name)
-
-    if isinstance(data, str):
-        return data
-
-    d = data.get("data", {})
-    name_map = {
-        "vix300": "沪深300 VIX",
-        "vix50": "上证50 VIX",
-        "vixindex1000": "中证1000 VIX",
-        "vixkcb": "科创板 VIX",
-        "vixcyb": "创业板 VIX",
+    query_map = {
+        "300": "300VIX",
+        "50": "50VIX",
+        "1000": "1000VIX",
+        "kcb": "科创板VIX",
+        "cyb": "创业板VIX",
     }
-
-    return f"【{name_map.get(vix_name, vix_name)}】\n当前: {d.get('f43', 'N/A')}  涨跌: {d.get('f170', 'N/A')}%"
+    query = query_map.get(vix_type.lower(), "300VIX")
+    name_map = {
+        "300": "沪深300 VIX",
+        "50": "上证50 VIX",
+        "1000": "中证1000 VIX",
+        "kcb": "科创板 VIX",
+        "cyb": "创业板 VIX",
+    }
+    q = await get_market().quote(query)
+    if is_market_error(q):
+        return q.message
+    label = name_map.get(vix_type.lower(), query)
+    chg = f"{q.change_pct}%" if q.change_pct is not None else "N/A"
+    return f"【{label}】\n当前: {q.price}  涨跌: {chg}"
 
 
 @ai_tools()
@@ -460,44 +415,32 @@ async def get_stock_change_rate(
     if start_dt > end_dt:
         return "开始日期不能晚于结束日期"
 
-    # 获取日K线数据，传入时间范围
-    data = await get_gg(code_id[0], "single-stock-kline-101", start_time=start_dt, end_time=end_dt)
-    if isinstance(data, str):
-        return data
+    series = await get_market().kline(
+        code_id[0],
+        KlinePeriod.D1,
+        start=start_dt.date(),
+        end=end_dt.date(),
+    )
+    if is_market_error(series):
+        return series.message
+    if not series.bars:
+        return f"暂无{series.symbol.name}在{start_date_raw}~{end_date_raw}期间的K线数据"
 
-    klines = data.get("data", {}).get("klines", [])
-    if not klines:
-        stock_name = data.get("data", {}).get("name", stock_code)
-        return f"暂无{stock_name}在{start_date_raw}~{end_date_raw}期间的K线数据"
-
-    # 解析日期并筛选在时间范围内的数据
     start_val, end_val = None, None
+    for bar in series.bars:
+        day = bar.ts.strftime("%Y-%m-%d")
+        if start_dt.strftime("%Y-%m-%d") <= day <= end_dt.strftime("%Y-%m-%d"):
+            if start_val is None:
+                start_val = bar.open
+            end_val = bar.close
 
-    # 将 YYYYMMDD 格式转换为 YYYY-MM-DD 格式用于比较
-    start_date_fmt = f"{start_date_raw[:4]}-{start_date_raw[4:6]}-{start_date_raw[6:8]}"
-    end_date_fmt = f"{end_date_raw[:4]}-{end_date_raw[4:6]}-{end_date_raw[6:8]}"
-
-    for line in klines:
-        values = line.split(",")
-        if len(values) >= 11:
-            date = values[0]  # 格式是 YYYY-MM-DD
-            if start_date_fmt <= date <= end_date_fmt:
-                if start_val is None:
-                    start_val = float(values[1])  # 开盘价
-                end_val = float(values[2])  # 收盘价
-
+    stock_name = series.symbol.name or stock_code
     if start_val is None or end_val is None:
-        stock_name = data.get("data", {}).get("name", stock_code)
-        actual_dates = [line.split(",")[0] for line in klines if len(line.split(",")) >= 11]
-        return (
-            f"在指定时间范围({start_date_fmt}~{end_date_fmt})"
-            f"内未找到{stock_name}的K线数据"
-            f"（实际数据范围: {min(actual_dates)}~{max(actual_dates)}）"
-        )
+        actual_dates = [b.ts.strftime("%Y-%m-%d") for b in series.bars]
+        range_hint = f"{min(actual_dates)}~{max(actual_dates)}" if actual_dates else "无"
+        return f"在指定时间范围内未找到{stock_name}的K线数据（实际数据范围: {range_hint}）"
 
     change_rate = ((end_val - start_val) / start_val) * 100
-    stock_name = data.get("data", {}).get("name", stock_code)
-
     return (
         f"【{stock_name} 涨跌幅分析】\n"
         f"时间范围: {start_date_raw} ~ {end_date_raw}\n"

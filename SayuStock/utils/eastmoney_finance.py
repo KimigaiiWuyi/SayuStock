@@ -35,7 +35,7 @@ _REPORT_KEY = {
 }
 
 
-def _make_decorator(report: FinanceReport):
+def _make_decorator(report: FinanceReport) -> object:
     """为每种报表生成一个带独立 sector key 的 async_file_cache 装饰器"""
     return async_file_cache(
         market="{code}",

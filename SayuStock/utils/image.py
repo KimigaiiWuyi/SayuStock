@@ -14,11 +14,11 @@ view_port: int = STOCK_CONFIG.get_config("mapcloud_viewport").data
 scale: int = STOCK_CONFIG.get_config("mapcloud_scale").data
 
 
-def get_footer():
+def get_footer() -> Image.Image:
     return Image.open(TEXT_PATH / "footer.png")
 
 
-def get_ICON():
+def get_ICON() -> Image.Image:
     return Image.open(Path(__file__).parents[2] / "ICON.png")
 
 

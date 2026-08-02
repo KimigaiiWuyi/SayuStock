@@ -13,8 +13,6 @@ pm=0 + area="GROUP" 在 ``gsuid_core/handler.py`` 框架层做双重门槛：
 ``__init__.py`` 仅做 re-export + 子模块 import 触发 decorator。
 """
 
-# pyright: reportMissingImports=false, reportUnknownVariableType=false, reportUnknownMemberType=false
-
 from gsuid_core.sv import SV
 
 sv_papertrade: SV = SV("模拟盘", pm=3, area="GROUP")

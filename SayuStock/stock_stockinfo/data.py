@@ -1,42 +1,38 @@
+"""个股/云图数据编排：只返回领域模型，不经 compat 编码。"""
+
+from __future__ import annotations
+
 import asyncio
-from typing import Any, Dict, List, Union, Optional
+from typing import List, Union, Optional
 from datetime import datetime
 from dataclasses import dataclass
 
 from gsuid_core.logger import logger
 
-from ..utils.utils import get_vix_name
+from ..utils.market import (
+    KlinePeriod,
+    get_market,
+    is_market_error,
+)
 from ..utils.constant import ErroText, bk_dict, market_dict
-from ..utils.eastmoney import EASTMONEY_REQUESTER
-from ..utils.stock.request import get_gg, get_vix
+from ..utils.market.models import KlineSeries, BoardSnapshot, IntradaySeries
 
-CloudMapRawData = Union[Dict[str, Any], str]
+MarketPayload = BoardSnapshot | IntradaySeries | KlineSeries
+CloudMapRawData = Union[MarketPayload, str]
 
 
 @dataclass
 class CloudMapDataResult:
-    """云图渲染前的数据聚合结果。
-
-    Attributes:
-        raw_data: 主数据源响应。普通云图和单个股票使用该字段。
-        raw_datas: 多标的分时或 K 线对比使用的数据列表。
-        sector: 经过板块别名、概念菜单解析后的最终 sector。
-        special_cache_key: 需要额外区分缓存文件时使用的字符串。
-    """
+    """渲染前数据聚合：payload 为领域模型或错误文本。"""
 
     raw_data: CloudMapRawData
-    raw_datas: List[Dict[str, Any]]
+    raw_datas: List[IntradaySeries | KlineSeries]
     sector: Optional[str]
     special_cache_key: Optional[str]
 
 
 class CloudMapDataService:
-    """stock_cloudmap 数据请求编排服务。
-
-    该服务只负责根据命令参数组织数据请求，不包含 Plotly 渲染逻辑。东方财富
-    数据统一经由 `EASTMONEY_REQUESTER` 请求类，VIX 与加密货币兼容逻辑继续
-    复用既有封装，避免改变现有功能。
-    """
+    """根据命令参数组织 MarketDataPort 请求，不解析供应商原始字段。"""
 
     async def fetch(
         self,
@@ -45,36 +41,27 @@ class CloudMapDataService:
         start_time: Optional[datetime],
         end_time: Optional[datetime],
     ) -> CloudMapDataResult:
-        """获取云图/个股/对比图渲染所需原始数据。
-
-        Args:
-            market: 用户输入的市场、板块或标的文本。
-            sector: 渲染类型或板块筛选条件。
-            start_time: K 线或对比图开始时间。
-            end_time: K 线或对比图结束时间。
-
-        Returns:
-            `CloudMapDataResult`。`raw_data` 为字符串时表示业务错误文本；
-            `raw_datas` 仅在多标的场景中填充。
-        """
         resolved_sector = self.resolve_sector(market, sector)
-        raw_datas: List[Dict[str, Any]] = []
+        raw_datas: List[IntradaySeries | KlineSeries] = []
         special_cache_key: Optional[str] = None
+        port = get_market()
 
         if market == "大盘云图":
             if resolved_sector:
-                raw_data = await EASTMONEY_REQUESTER.get_market_list(resolved_sector, True, 1, 100)
+                snap = await port.board(resolved_sector, limit=None, sort_asc=False)
             else:
-                raw_data = await EASTMONEY_REQUESTER.get_hotmap()
+                snap = await port.hotmap()
+            raw_data: CloudMapRawData = snap.message if is_market_error(snap) else snap
         elif market == "行业云图":
-            raw_data = await EASTMONEY_REQUESTER.get_hotmap()
+            snap = await port.hotmap()
+            raw_data = snap.message if is_market_error(snap) else snap
         elif market == "概念云图":
             if resolved_sector:
                 resolved_sector, raw_data = await self.fetch_concept(resolved_sector)
             else:
                 raw_data = "概念云图需要后跟概念类型, 例如： 概念云图 华为欧拉"
         elif resolved_sector and resolved_sector.startswith("single-stock-kline"):
-            raw_data = await get_gg(market, resolved_sector, start_time, end_time)
+            raw_data = await self._fetch_kline(market, resolved_sector, start_time, end_time)
         elif resolved_sector == "compare-stock":
             raw_data, raw_datas = await self.fetch_compare_stocks(market, start_time, end_time)
             st_f = start_time.strftime("%Y%m%d") if start_time else ""
@@ -83,21 +70,12 @@ class CloudMapDataService:
         elif resolved_sector == "single-stock":
             raw_data, raw_datas = await self.fetch_single_stock_group(market, start_time, end_time)
         else:
-            raw_data = await EASTMONEY_REQUESTER.get_market_list(market)
+            snap = await port.board(market, limit=100, sort_asc=False)
+            raw_data = snap.message if is_market_error(snap) else snap
 
         return CloudMapDataResult(raw_data, raw_datas, resolved_sector, special_cache_key)
 
     def resolve_sector(self, market: str, sector: Optional[str]) -> Optional[str]:
-        """解析云图板块别名。
-
-        Args:
-            market: 用户输入市场名称。
-            sector: 原始板块参数。
-
-        Returns:
-            修正后的板块参数。市场命中 `market_dict`/`bk_dict` 时会把市场本身
-            视作筛选板块。
-        """
         if sector != "single-stock":
             if market in market_dict and "b:" in market_dict[market]:
                 return market
@@ -106,42 +84,43 @@ class CloudMapDataService:
         return sector
 
     async def fetch_concept(self, sector: str) -> tuple[str, CloudMapRawData]:
-        """获取概念云图数据。
-
-        Args:
-            sector: 概念名称或概念代码片段。
-
-        Returns:
-            二元组：解析后的概念名称、东方财富行情列表响应；未命中时响应为
-            `ErroText["typemap"]`。
-        """
+        port = get_market()
         upper_sector = sector.upper()
-        concept_menu = await EASTMONEY_REQUESTER.get_menu(3)
-        if upper_sector in concept_menu:
-            return upper_sector, await EASTMONEY_REQUESTER.get_market_list(concept_menu[upper_sector], True, 1, 100)
-
-        for concept_name in concept_menu:
+        menu = await port.sector_menu("concept")
+        if is_market_error(menu):
+            return upper_sector, menu.message
+        if upper_sector in menu:
+            snap = await port.board(str(menu[upper_sector]), limit=None, sort_asc=False)
+            return upper_sector, snap.message if is_market_error(snap) else snap
+        for concept_name, code in menu.items():
             if upper_sector in concept_name:
-                return concept_name, await EASTMONEY_REQUESTER.get_market_list(concept_menu[concept_name], True, 1, 100)
+                snap = await port.board(str(code), limit=None, sort_asc=False)
+                return concept_name, snap.message if is_market_error(snap) else snap
         return upper_sector, ErroText["typemap"]
+
+    async def _fetch_kline(
+        self,
+        market: str,
+        sector: str,
+        start_time: Optional[datetime],
+        end_time: Optional[datetime],
+    ) -> CloudMapRawData:
+        kline_code = sector.split("-")[-1]
+        try:
+            period = KlinePeriod(kline_code)
+        except ValueError:
+            period = KlinePeriod.D1
+        start_d = start_time.date() if start_time is not None else None
+        end_d = end_time.date() if end_time is not None else None
+        series = await get_market().kline(market, period, start=start_d, end=end_d)
+        return series.message if is_market_error(series) else series
 
     async def fetch_compare_stocks(
         self,
         market: str,
         start_time: Optional[datetime],
         end_time: Optional[datetime],
-    ) -> tuple[CloudMapRawData, List[Dict[str, Any]]]:
-        """获取多个标的的日 K 对比数据。
-
-        Args:
-            market: 以空格分隔的标的列表。
-            start_time: 开始时间。
-            end_time: 结束时间。
-
-        Returns:
-            二元组：`(主响应, 多个标的 K 线响应列表)`。任一请求返回业务错误文本时
-            直接透传该错误文本，避免被上层误判为暂无数据。
-        """
+    ) -> tuple[CloudMapRawData, List[KlineSeries]]:
         markets = [item.strip() for item in market.replace("，", " ").replace(",", " ").split() if item.strip()]
         expanded: List[str] = []
         for item in markets:
@@ -154,122 +133,104 @@ class CloudMapDataService:
             else:
                 expanded.append(query)
 
-        results: List[Dict[str, Any]] = []
+        results: List[KlineSeries] = []
+        start_d = start_time.date() if start_time is not None else None
+        end_d = end_time.date() if end_time is not None else None
+        port = get_market()
         for query in expanded:
-            raw_data = await get_gg(query, "single-stock-kline-111", start_time, end_time)
-            if isinstance(raw_data, str):
+            series = await port.kline(query, KlinePeriod.D1_RECENT, start=start_d, end=end_d)
+            if is_market_error(series):
                 continue
-            results.append(raw_data)
+            results.append(series)
         if not results:
             return ErroText["notData"], []
         return results[0], results
 
-    @staticmethod
-    def _is_sector(raw_data: Dict[str, Any]) -> bool:
-        """检测响应是否为板块（而非个股/ETF）数据。"""
-        data = raw_data.get("data", {})
-        if data.get("f107") == 90:
-            return True
-        f58 = str(data.get("f58", ""))
-        return "(板块)" in f58
-
-    async def _fetch_sector_codes(self, raw_data: Dict[str, Any]) -> List[str]:
-        """从板块响应中提取成分股代码列表（前13只）。"""
-        data = raw_data.get("data", {})
-        bk_code = str(data.get("f57", ""))
-        if not bk_code:
-            return []
-
-        market_list_resp = await EASTMONEY_REQUESTER.get_market_list(bk_code, False, 1, 13)
-        if isinstance(market_list_resp, str) or not market_list_resp.get("data"):
-            return []
-
-        stocks = market_list_resp["data"].get("diff", [])
-        return [str(s.get("f12", "")) for s in stocks if s.get("f12")]
-
     async def _fetch_sector_codes_by_query(self, query: str) -> List[str]:
-        """通过查询词获取板块成分股代码列表；非板块返回空列表。"""
-        raw_data = await get_gg(query, "single-stock", None, None)
-        if isinstance(raw_data, dict) and self._is_sector(raw_data):
-            return await self._fetch_sector_codes(raw_data)
+        port = get_market()
+        menu = await port.sector_menu("industry")
+        if not is_market_error(menu) and query in menu:
+            snap = await port.board(str(menu[query]), limit=13, sort_asc=False)
+            if not is_market_error(snap):
+                return [r.code for r in snap.rows if r.code]
+        menu_c = await port.sector_menu("concept")
+        if not is_market_error(menu_c) and query in menu_c:
+            snap = await port.board(str(menu_c[query]), limit=13, sort_asc=False)
+            if not is_market_error(snap):
+                return [r.code for r in snap.rows if r.code]
+        q = await port.quote(query)
+        if not is_market_error(q) and "(板块)" in q.symbol.name:
+            snap = await port.board(q.symbol.code or query, limit=13, sort_asc=False)
+            if not is_market_error(snap):
+                return [r.code for r in snap.rows if r.code]
         return []
+
+    async def _fetch_sector_codes(self, board_code: str) -> List[str]:
+        snap = await get_market().board(board_code, limit=13, sort_asc=False)
+        if is_market_error(snap):
+            return []
+        return [r.code for r in snap.rows if r.code]
+
+    @staticmethod
+    def _is_sector_series(series: IntradaySeries) -> bool:
+        name = series.symbol.name or ""
+        if series.quote is not None and series.quote.symbol.name:
+            name = series.quote.symbol.name
+        return "(板块)" in name
 
     async def _fetch_sector_stocks(
         self,
-        raw_data: Dict[str, Any],
-    ) -> tuple[CloudMapRawData, List[Dict[str, Any]]]:
-        """获取板块内前13只股票的分时数据，用于 multi 渲染。"""
-        codes = await self._fetch_sector_codes(raw_data)
+        board_code: str,
+    ) -> tuple[CloudMapRawData, List[IntradaySeries]]:
+        codes = await self._fetch_sector_codes(board_code)
         if not codes:
             return ErroText["notData"], []
 
-        tasks = [EASTMONEY_REQUESTER.get_intraday_by_query(code) for code in codes]
-        results = await asyncio.gather(*tasks)
-        valid_results: List[Dict[str, Any]] = []
+        port = get_market()
+        results = await asyncio.gather(*[port.intraday(code) for code in codes])
+        valid: List[IntradaySeries] = []
         for item in results:
-            if isinstance(item, str):
+            if is_market_error(item):
                 continue
-            valid_results.append(item)
-
-        if not valid_results:
+            if item.points:
+                valid.append(item)
+        if not valid:
             return ErroText["notData"], []
-
-        return valid_results[0], valid_results
+        return valid[0], valid
 
     async def fetch_single_stock_group(
         self,
         market: str,
         start_time: Optional[datetime],
         end_time: Optional[datetime],
-    ) -> tuple[CloudMapRawData, List[Dict[str, Any]]]:
-        """获取单个或多个标的分时数据。
-
-        Args:
-            market: 单个标的、多个标的或 VIX 别名。
-            start_time: 兼容保留参数。
-            end_time: 兼容保留参数。
-
-        Returns:
-            单标的时返回 `(raw_data, [])`；多标的时返回 `(首个数据, 全部数据)`。
-            若单标的是板块，则返回板块成分股的 multi 数据。
-        """
-        vix_market = get_vix_name(market)
-        if vix_market is not None:
-            return await get_vix(vix_market), []
-
+    ) -> tuple[CloudMapRawData, List[IntradaySeries]]:
+        _ = start_time, end_time
+        port = get_market()
         market_list = market.split(" ")
         if len(market_list) == 1:
-            raw_data = await get_gg(market_list[0], "single-stock", start_time, end_time)
-            logger.info(
-                f"[SayuStock] 单股结果 {market_list[0]}: type={type(raw_data).__name__}, preview={str(raw_data)[:120]}"
-            )
-            if isinstance(raw_data, dict) and self._is_sector(raw_data):
-                return await self._fetch_sector_stocks(raw_data)
-            return raw_data, []
+            series = await port.intraday(market_list[0])
+            logger.info(f"[SayuStock] 单股结果 {market_list[0]}: type={type(series).__name__}")
+            if is_market_error(series):
+                return series.message, []
+            if self._is_sector_series(series):
+                board_code = series.symbol.code or market_list[0]
+                return await self._fetch_sector_stocks(board_code)
+            return series, []
 
-        tasks: list = []
-        for item in market_list:
-            vix_item = get_vix_name(item)
-            if vix_item is None:
-                tasks.append(get_gg(item, "single-stock", start_time, end_time))
-            else:
-                tasks.append(get_vix(vix_item))
-
+        tasks = [port.intraday(item) for item in market_list]
         gathered = await asyncio.gather(*tasks, return_exceptions=True)
-        valid_results: List[Dict[str, Any]] = []
+        valid_results: List[IntradaySeries] = []
         for idx, item in enumerate(gathered):
             query_name = market_list[idx] if idx < len(market_list) else f"#{idx}"
             if isinstance(item, BaseException):
                 logger.error(f"[SayuStock] 多股查询第{idx + 1}只标的[{query_name}]异常: {item!r}")
                 continue
-            if isinstance(item, str):
-                # 跳过单只标的解析失败的情况，避免任一错误就终止整体多股查询
-                logger.warning(f"[SayuStock] 多股查询跳过失败标的[{query_name}]: {item}")
+            if is_market_error(item):
+                logger.warning(f"[SayuStock] 多股查询跳过失败标的[{query_name}]: {item.message}")
                 continue
-            if not isinstance(item, dict):
+            if not isinstance(item, IntradaySeries):
                 logger.warning(
-                    f"[SayuStock] 多股查询第{idx + 1}只标的[{query_name}]结果类型异常: "
-                    f"type={type(item).__name__}, preview={str(item)[:200]}"
+                    f"[SayuStock] 多股查询第{idx + 1}只标的[{query_name}]结果类型异常: type={type(item).__name__}"
                 )
                 continue
             valid_results.append(item)

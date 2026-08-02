@@ -2,83 +2,40 @@
 
 from __future__ import annotations
 
-import re
 from typing import Any
 
 import pandas as pd
 
 from gsuid_core.logger import logger
 
+from ..utils.market import get_market, board_to_df, is_market_error
 from ..utils.constant import market_dict
 from ..utils.eastmoney import EASTMONEY_REQUESTER
-from ..utils.stock.request import get_menu, get_mtdata
-
-SCREENER_FIELDS = [
-    "f12",  # 代码
-    "f14",  # 名称
-    "f2",  # 最新价
-    "f3",  # 涨跌幅%
-    "f6",  # 成交额
-    "f8",  # 换手%
-    "f9",  # 市盈率
-    "f10",  # 量比
-    "f20",  # 总市值
-    "f21",  # 流通市值
-    "f100",  # 所属行业
-]
-
-_FLOAT_RE = re.compile(r"^-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?$")
-
-
-def _to_float(v: object) -> float | None:
-    if v is None or v == "" or v == "-" or v == "--":
-        return None
-    if isinstance(v, bool):
-        return None
-    if isinstance(v, (int, float)):
-        return float(v)
-    if isinstance(v, str):
-        s = v.strip().replace(",", "")
-        if not s or s in {"-", "--"}:
-            return None
-        if _FLOAT_RE.fullmatch(s):
-            return float(s)
-        return None
-    return None
-
-
-def _dict_str(d: dict[str, Any], key: str) -> str:
-    if key not in d or d[key] is None:
-        return ""
-    return str(d[key])
+from ..utils.market.enums import BoardKind
+from ..utils.market.models import BoardSnapshot
+from ..utils.stock.request import get_menu
+from ..utils.market.adapters.eastmoney.map_fields import CLIST_SCREENER_FIELDS
+from ..utils.market.adapters.eastmoney.parse_board import parse_board_row
 
 
 def rows_to_dataframe(diff: list[dict[str, Any]]) -> pd.DataFrame:
-    rows: list[dict[str, Any]] = []
+    """东财 clist diff → 语义 DataFrame（解析仅在 adapter parse_board_row）。"""
+    board_rows = []
     for d in diff:
         if not isinstance(d, dict):
             continue
-        code = _dict_str(d, "f12")
-        name = _dict_str(d, "f14")
-        if not code:
-            continue
-        industry = _dict_str(d, "f100") or "未分类"
-        rows.append(
-            {
-                "code": code,
-                "name": name,
-                "price": _to_float(d["f2"] if "f2" in d else None),
-                "pct": _to_float(d["f3"] if "f3" in d else None),
-                "amount": _to_float(d["f6"] if "f6" in d else None),
-                "turnover": _to_float(d["f8"] if "f8" in d else None),
-                "pe": _to_float(d["f9"] if "f9" in d else None),
-                "vol_ratio": _to_float(d["f10"] if "f10" in d else None),
-                "mv": _to_float(d["f20"] if "f20" in d else None),
-                "mv_circ": _to_float(d["f21"] if "f21" in d else None),
-                "industry": industry,
-            }
-        )
-    return pd.DataFrame(rows)
+        row = parse_board_row(d)
+        if row is not None:
+            board_rows.append(row)
+    if not board_rows:
+        return pd.DataFrame()
+    snap = BoardSnapshot(kind=BoardKind.CUSTOM, title="clist", rows=tuple(board_rows))
+    df = board_to_df(snap)
+    # 选股期望列名
+    rename = {}
+    if "mv" in df.columns:
+        rename["mv"] = "mv"
+    return df
 
 
 async def fetch_clist(
@@ -86,9 +43,11 @@ async def fetch_clist(
     *,
     pz: int = 100,
     max_pages: int = 20,
-    fid: str = "f20",
+    sort_by_market_cap: bool = True,
 ) -> pd.DataFrame:
-    """按东财 fs 表达式拉取行情列表（可多页）。默认按总市值 f20 排序。"""
+    """按 fs 表达式拉取行情列表（可多页）。默认按总市值排序。"""
+    # sort field id 仅在 EM transport 参数中使用（adapter 字段表）
+    fid = CLIST_SCREENER_FIELDS[8] if sort_by_market_cap else CLIST_SCREENER_FIELDS[3]
     url = "https://push2.eastmoney.com/api/qt/clist/get"
     all_diff: list[dict[str, Any]] = []
     for pn in range(1, max_pages + 1):
@@ -101,7 +60,7 @@ async def fetch_clist(
             ("fid", fid),
             ("pn", str(pn)),
             ("fs", fs),
-            ("fields", ",".join(SCREENER_FIELDS)),
+            ("fields", ",".join(CLIST_SCREENER_FIELDS)),
         ]
         resp = await EASTMONEY_REQUESTER.stock_request(url, "GET", params=params)
         if isinstance(resp, int) or not isinstance(resp, dict):
@@ -131,7 +90,7 @@ async def fetch_clist(
 async def fetch_a_share_universe(*, max_pages: int = 20) -> pd.DataFrame:
     """沪深A 快照：按总市值降序分页（非涨幅榜，避免选股严重偏涨）。"""
     fs = market_dict["沪深A"] if "沪深A" in market_dict else "m:0 t:6,m:0 t:80,m:1 t:2,m:1 t:23"
-    return await fetch_clist(fs, pz=100, max_pages=max_pages, fid="f20")
+    return await fetch_clist(fs, pz=100, max_pages=max_pages, sort_by_market_cap=True)
 
 
 async def resolve_industry_fs(industry_name: str) -> tuple[str, str] | str:
@@ -166,26 +125,16 @@ async def resolve_concept_fs(concept_name: str) -> tuple[str, str] | str:
 
 
 async def fetch_board_members(board_fs: str) -> pd.DataFrame:
-    return await fetch_clist(board_fs, pz=100, max_pages=10, fid="f3")
+    return await fetch_clist(board_fs, pz=100, max_pages=10, sort_by_market_cap=False)
 
 
 async def fetch_industry_pct_map() -> dict[str, float]:
     """行业名 → 当日涨跌幅%（板块指数）。"""
-    resp = await get_mtdata("行业板块", is_loop=False, po=1, pz=100)
+    snap = await get_market().board("行业板块", limit=100, sort_asc=False)
     out: dict[str, float] = {}
-    if isinstance(resp, str) or not isinstance(resp, dict):
+    if is_market_error(snap):
         return out
-    data = resp["data"] if "data" in resp and isinstance(resp["data"], dict) else {}
-    diff: Any = data["diff"] if "diff" in data else []
-    if isinstance(diff, dict):
-        diff = list(diff.values())
-    if not isinstance(diff, list):
-        return out
-    for d in diff:
-        if not isinstance(d, dict):
-            continue
-        name = _dict_str(d, "f14")
-        pct = _to_float(d["f3"] if "f3" in d else None)
-        if name and pct is not None:
-            out[name] = pct
+    for row in snap.rows:
+        if row.name and row.change_pct is not None:
+            out[row.name] = row.change_pct
     return out

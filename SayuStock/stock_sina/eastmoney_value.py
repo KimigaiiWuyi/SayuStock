@@ -25,7 +25,6 @@ from ..utils.eastmoney import (
     EASTMONEY_VALUE_NAME_MAP,
     EastMoneyStockItem,
 )
-from ..utils.stock.request import get_gg
 from ..utils.mplchart_compat import Chart, Price  # noqa: E402
 from ..stock_stockinfo.chart_base import (  # noqa: E402
     _pct_change,
@@ -194,40 +193,40 @@ async def get_eastmoney_pepb_compare(
     return await convert_img(image)
 
 
-def _is_sector(raw_data: dict[str, Any]) -> bool:
-    """检测响应是否为板块（而非个股/ETF）数据。"""
-    data = raw_data.get("data", {})
-    if data.get("f107") == 90:
-        return True
-    f58 = str(data.get("f58", ""))
-    return "(板块)" in f58
+async def _fetch_sector_codes(board_code: str) -> list[str]:
+    """板块代码 → 成分股代码（前13）。"""
+    from ..utils.market import get_market, is_market_error
 
-
-async def _fetch_sector_codes(raw_data: dict[str, Any]) -> list[str]:
-    """从板块响应中提取成分股代码列表（前13只）。"""
-    data = raw_data.get("data", {})
-    bk_code = str(data.get("f57", ""))
-    if not bk_code:
+    snap = await get_market().board(board_code, limit=13, sort_asc=False)
+    if is_market_error(snap):
         return []
-
-    market_list_resp = await EASTMONEY_REQUESTER.get_market_list(bk_code, False, 1, 13)
-    if isinstance(market_list_resp, str) or not market_list_resp.get("data"):
-        return []
-
-    stocks = market_list_resp["data"].get("diff", [])
-    return [str(s.get("f12", "")) for s in stocks if s.get("f12")]
+    return [r.code for r in snap.rows if r.code]
 
 
 async def _parse_stock_input(_input: str) -> list[EastMoneyStockItem]:
+    from ..utils.market import get_market, is_market_error
+
     parts = [p.strip() for p in _input.replace("，", " ").replace(",", " ").split() if p.strip()]
     expanded: list[str] = []
+    market = get_market()
     for part in parts:
-        raw_data = await get_gg(part, "single-stock", None, None)
-        if isinstance(raw_data, dict) and _is_sector(raw_data):
-            codes = await _fetch_sector_codes(raw_data)
-            expanded.extend(codes)
+        q = await market.quote(part)
+        if not is_market_error(q) and q.industry and "板块" in (q.symbol.name or ""):
+            codes = await _fetch_sector_codes(q.symbol.code or part)
+            expanded.extend(codes if codes else [part])
         else:
-            expanded.append(part)
+            # 菜单/板块名
+            menu = await market.sector_menu("industry")
+            if not is_market_error(menu) and part in menu:
+                codes = await _fetch_sector_codes(menu[part])
+                expanded.extend(codes if codes else [part])
+            else:
+                menu_c = await market.sector_menu("concept")
+                if not is_market_error(menu_c) and part in menu_c:
+                    codes = await _fetch_sector_codes(menu_c[part])
+                    expanded.extend(codes if codes else [part])
+                else:
+                    expanded.append(part)
 
     return await EASTMONEY_REQUESTER.parse_stock_input(" ".join(expanded))
 
@@ -236,16 +235,29 @@ async def fetch_eastmoney_value_series(
     stock: EastMoneyStockItem,
     _type: ValueType,
 ) -> Optional[ValueSeries]:
+    from ..utils.market import ValueKind, get_market, is_market_error
+
     logger.info(f"[SayuStock] 获取东方财富{VALUE_NAME_MAP[_type]}历史估值: {stock['code']}")
-    if _type == "pe":
-        raw_series = await EASTMONEY_REQUESTER.get_pe_series(stock)
-    elif _type == "pb":
-        raw_series = await EASTMONEY_REQUESTER.get_pb_series(stock)
-    else:
-        raw_series = await EASTMONEY_REQUESTER.get_dy_series(stock)
-    if isinstance(raw_series, str):
-        logger.warning(raw_series)
+    kind = ValueKind.PE if _type == "pe" else (ValueKind.PB if _type == "pb" else ValueKind.DY)
+    series = await get_market().valuation_series(stock["code"], kind)
+    if is_market_error(series):
+        logger.warning(series.message)
         return None
+    # 转本地 ValueSeries(df)
+    import pandas as pd
+
+    rows = [{"date": p.day.isoformat(), "value": p.value} for p in series.points]
+    if not rows:
+        return None
+    raw_series = {
+        "code": stock["code"],
+        "secid": stock["secid"],
+        "name": stock["name"],
+        "sec_type": stock["sec_type"],
+        "value_type": _type,
+        "value_name": VALUE_NAME_MAP[_type],
+        "rows": rows,
+    }
 
     rows = raw_series["rows"]
     if not rows:

@@ -5,7 +5,6 @@
 """
 
 from ..utils.render_data import (
-    RawDict,
     DataResult,
     KlineRenderData,
     CompareRenderData,
@@ -25,7 +24,6 @@ __all__ = [
     "DataResult",
     "KlineRenderData",
     "MultiStockRenderData",
-    "RawDict",
     "SingleStockRenderData",
     "build_cloudmap_render_data",
     "build_compare_render_data",

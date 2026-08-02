@@ -26,7 +26,7 @@ sv_fund_info = SV("基金持仓信息")
         text: 基金代码或名称，例如 "000001"、"沪深300ETF"、"易方达蓝筹精选"
     """,
 )
-async def send_fund_info(bot: Bot, ev: Event):
+async def send_fund_info(bot: Bot, ev: Event) -> None:
     logger.info("[SayuStock] 开始执行[基金持仓信息]")
     im = await draw_fund_info(ev.text.strip())
     await bot.send(im)
@@ -45,7 +45,7 @@ async def send_fund_info(bot: Bot, ev: Event):
         text: 无需参数，留空即可
     """,
 )
-async def send_stock_info(bot: Bot, ev: Event):
+async def send_stock_info(bot: Bot, ev: Event) -> None:
     logger.info("[SayuStock] 开始执行[大盘概览]")
     im = await draw_info_img()
     await bot.send(im)
@@ -64,7 +64,7 @@ async def send_stock_info(bot: Bot, ev: Event):
         text: 无需参数，留空即可
     """,
 )
-async def send_my_stock(bot: Bot, ev: Event):
+async def send_my_stock(bot: Bot, ev: Event) -> None:
     logger.info("[SayuStock] 开始执行[我的自选]")
     await bot.send(await draw_my_stock_img(ev))
 
@@ -82,12 +82,12 @@ async def send_my_stock(bot: Bot, ev: Event):
         text: 无需参数，留空即可
     """,
 )
-async def send_future_stock(bot: Bot, ev: Event):
+async def send_future_stock(bot: Bot, ev: Event) -> None:
     logger.info("[SayuStock] 开始执行[全天候板块]")
     await bot.send(await draw_future_img())
 
 
 # 每日晚上十一点保存当天数据
 @scheduler.scheduled_job("cron", hour=23, minute=0)
-async def save_data_sayustock():
+async def save_data_sayustock() -> None:
     await draw_info_img(is_save=True)

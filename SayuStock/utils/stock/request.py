@@ -1,16 +1,13 @@
 import asyncio
 from typing import Any, Dict, List, Tuple, Union, Optional
-from datetime import datetime, timedelta
+from datetime import datetime
 
 from gsuid_core.logger import logger
 
-from .utils import async_file_cache, calculate_difference
-from .get_vix import get_vix_data
-from ..get_OKX import analyze_market_target, get_crypto_trend_as_json, get_crypto_history_kline_as_json
-from ..constant import ErroText
+from .utils import calculate_difference
+from ..market import KlinePeriod, get_market, is_market_error
 from ..eastmoney import EASTMONEY_REQUESTER
-from ..load_data import get_full_security_code
-from .request_utils import get_code_id
+from ..market.models import KlineSeries, BoardSnapshot, IntradaySeries
 
 
 async def get_hours_from_em() -> Tuple[float, float, Optional[datetime]]:
@@ -40,7 +37,7 @@ async def get_hours_from_em() -> Tuple[float, float, Optional[datetime]]:
     return ya, y, last_trade_date
 
 
-async def get_bar():
+async def get_bar() -> object:
     URL = "https://quotederivates.eastmoney.com/datacenter/updowndistribution"
     PARAMS = {
         "mcodelist": "0.399002,1.000002,0.899050",
@@ -70,35 +67,12 @@ async def get_menu(mode: int = 3) -> Dict[str, str]:
     return await EASTMONEY_REQUESTER.get_menu(mode)
 
 
-@async_file_cache(market="vix_market", sector="{vix_name}", suffix="json")
-async def get_vix(vix_name: str):
-    trends = await get_vix_data(vix_name)
-    if isinstance(trends, str):
-        return trends
-
-    price_change_percent = 0.0
-    open_price = 0.0
-    # 确保趋势数据非空且开盘价不为0，以避免除零错误
-    if len(trends) > 0:
-        latest_price = trends[-1]["price"]
-        open_price = trends[0]["open"] if trends[0]["open"] != 0 else trends[0]["price"]
-
-        price_change_percent = ((latest_price - open_price) / open_price) * 100
-
-    resp = {
-        "data": {
-            "f43": trends[-1]["price"],
-            "f44": trends[-1]["price"],
-            "f58": vix_name,
-            "f60": open_price,
-            "f48": 0,
-            "f168": 0,
-            "f170": round(float(price_change_percent), 2),
-        },
-        "trends": trends,
-    }
-
-    return resp
+async def get_vix(vix_name: str) -> IntradaySeries | str:
+    """VIX → IntradaySeries（经 MarketDataPort；源数据缓存在 get_vix_data）。"""
+    series = await get_market().intraday(vix_name)
+    if is_market_error(series):
+        return series.message
+    return series
 
 
 async def get_single_fig_data(secid: str) -> Union[List[Dict[str, Union[str, float, int]]], str]:
@@ -111,88 +85,35 @@ async def get_gg(
     sector: str,
     start_time: Optional[datetime] = None,
     end_time: Optional[datetime] = None,
-):
-    logger.info(f"[SayuStock] get_single_fig_data code: {market}")
-
-    _type, formatted_code = analyze_market_target(market)
-
-    if _type == "crypto":
-        pass
-    else:
-        sec_id_data = await get_code_id(market)
-        if sec_id_data is None:
-            return ErroText["notStock"]
-
-        sec_id = get_full_security_code(sec_id_data[0])
-        if sec_id is None:
-            return ErroText["notStock"]
+) -> IntradaySeries | KlineSeries | str:
+    """个股分时/K 线入口：直接返回领域模型。"""
+    logger.info(f"[SayuStock] get_gg code: {market} sector: {sector}")
+    port = get_market()
 
     if sector == "single-stock":
-        if _type == "crypto":
-            result = await get_crypto_trend_as_json(formatted_code)
-        else:
-            result = await _get_gg(sec_id, sec_id_data[2])
-    elif sector.startswith("single-stock-kline"):
+        series = await port.intraday(market)
+        if is_market_error(series):
+            return series.message
+        return series
+
+    if sector.startswith("single-stock-kline"):
         kline_code = sector.split("-")[-1]
-        if kline_code == "100":
-            kline_code = 101
-            out_day = 50
-        elif kline_code == "101":
-            out_day = 400
-        elif kline_code == "102":
-            out_day = 1000
-        elif kline_code == "103":
-            out_day = 3000
-        elif kline_code == "104":
-            out_day = 5000
-        elif kline_code == "105":
-            out_day = 7000
-        elif kline_code == "106":
-            out_day = 13000
-        elif kline_code == "111":
-            kline_code = 101
-            out_day = 365
-        elif kline_code == "30":
-            out_day = 60
-        elif kline_code == "60":
-            out_day = 100
-        elif kline_code == "15":
-            out_day = 40
-        elif kline_code == "5":
-            out_day = 30
-        else:
-            out_day = 1600
+        try:
+            period = KlinePeriod(kline_code)
+        except ValueError:
+            period = KlinePeriod.D1
+        start_d = start_time.date() if start_time is not None else None
+        end_d = end_time.date() if end_time is not None else None
+        series_k = await port.kline(market, period, start=start_d, end=end_d)
+        if is_market_error(series_k):
+            return series_k.message
+        return series_k
 
-        if start_time is None:
-            start_time = datetime.now() - timedelta(days=out_day)
-        if end_time is None:
-            end_time = datetime.now()
-        st_f = start_time.strftime("%Y%m%d") if start_time else ""
-        et_f = end_time.strftime("%Y%m%d") if end_time else ""
-
-        if _type == "crypto":
-            result = await get_crypto_history_kline_as_json(
-                market,
-                str(kline_code),
-                st_f,
-                et_f,
-            )
-        else:
-            result = await _get_gg_kline(
-                sec_id,
-                sec_id_data[2],
-                kline_code,
-                st_f,
-                et_f,
-            )
-    else:
-        result = {}
-
-    return result
+    return "未知 sector"
 
 
 async def _get_gg(sec_id: str, sec_type: str) -> Union[Dict[str, Any], str]:
-    """获取个股实时盘口并合并当日分时。"""
+    """获取个股实时盘口并合并当日分时（底层 HTTP，仅 adapter 使用）。"""
     logger.info(f"[SayuStock] get_single_fig_data secid: {sec_id}")
     return await EASTMONEY_REQUESTER.get_single_stock(sec_id, sec_type)
 
@@ -204,7 +125,7 @@ async def _get_gg_kline(
     start_time: str,
     end_time: str,
 ) -> Union[Dict[str, Any], str]:
-    """获取个股历史 K 线。"""
+    """获取个股历史 K 线（底层 HTTP，仅 adapter 使用）。"""
     logger.info(f"[SayuStock] get_single_fig_data secid: {sec_id}")
     return await EASTMONEY_REQUESTER.get_stock_kline(sec_id, sec_type, kline_code, start_time, end_time)
 
@@ -214,9 +135,25 @@ async def get_mtdata(
     is_loop: bool = False,
     po: int = 1,
     pz: int = 20,
-) -> Union[Dict[str, Any], str]:
-    """获取行情列表/板块成分列表。"""
-    return await EASTMONEY_REQUESTER.get_market_list(market, is_loop, po, pz)
+) -> BoardSnapshot | str:
+    """获取行情列表/板块成分列表（领域模型）。"""
+    port = get_market()
+    if is_loop:
+        # 全量拉取仍走 requester 分页，再解析为 BoardSnapshot
+        raw = await EASTMONEY_REQUESTER.get_market_list(market, is_loop, po, pz)
+        if isinstance(raw, str):
+            return raw
+        from ..market.enums import BoardKind
+        from ..market.adapters.eastmoney.parse_board import parse_board_payload
+
+        snap = parse_board_payload(raw, kind=BoardKind.OTHER, title=market)
+        if is_market_error(snap):
+            return snap.message
+        return snap
+    snap = await port.board(market, limit=pz, sort_asc=po == 1)
+    if is_market_error(snap):
+        return snap.message
+    return snap
 
 
 async def _get_data(
@@ -229,9 +166,12 @@ async def _get_data(
     await EASTMONEY_REQUESTER._append_market_page(resp, url, params, stop_event)
 
 
-async def get_hotmap() -> Union[Dict[str, Any], str]:
-    """获取东方财富股票热力图原始数据并转换为云图结构。"""
-    return await EASTMONEY_REQUESTER.get_hotmap()
+async def get_hotmap() -> BoardSnapshot | str:
+    """获取大盘云图 BoardSnapshot。"""
+    snap = await get_market().hotmap()
+    if is_market_error(snap):
+        return snap.message
+    return snap
 
 
 async def stock_request(*args: Any, **kwargs: Any) -> Union[Dict[str, Any], int]:

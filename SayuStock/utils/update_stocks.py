@@ -11,7 +11,9 @@ import sys
 import json
 import time
 import argparse
+from typing import TypeVar, ParamSpec
 from datetime import datetime
+from collections.abc import Callable
 
 import pandas as pd
 import akshare as ak
@@ -20,13 +22,16 @@ import akshare as ak
 # 重试装饰器
 # ──────────────────────────────────────────────
 
+_P = ParamSpec("_P")
+_R = TypeVar("_R")
 
-def retry(max_attempts=3, delay=3):
+
+def retry(max_attempts: int = 3, delay: float = 3.0) -> Callable[[Callable[_P, _R]], Callable[_P, _R]]:
     """简单重试装饰器"""
 
-    def decorator(func):
-        def wrapper(*args, **kwargs):
-            last_err = None
+    def decorator(func: Callable[_P, _R]) -> Callable[_P, _R]:
+        def wrapper(*args: _P.args, **kwargs: _P.kwargs) -> _R:
+            last_err: BaseException | None = None
             for attempt in range(1, max_attempts + 1):
                 try:
                     return func(*args, **kwargs)
@@ -36,8 +41,11 @@ def retry(max_attempts=3, delay=3):
                         print(f"\n       ⚠️ 第 {attempt} 次失败: {e.__class__.__name__}: {e}")
                         print(f"       等待 {delay}s 后重试...")
                         time.sleep(delay)
+            assert last_err is not None
             raise last_err
 
+        wrapper.__name__ = func.__name__
+        wrapper.__doc__ = func.__doc__
         return wrapper
 
     return decorator
@@ -158,7 +166,7 @@ def fetch_sw_industries() -> dict:
     print(f"       成功构建行业树。共 {total} 个申万三级行业，开始拉取成分股...")
 
     @retry(max_attempts=3, delay=2)
-    def _get_cons(symbol):
+    def _get_cons(symbol: str) -> object:
         return ak.sw_index_third_cons(symbol=symbol)
 
     for i, code in enumerate(l3_codes):
@@ -194,19 +202,19 @@ def fetch_sw_industries() -> dict:
 # ──────────────────────────────────────────────
 
 
-def save_json(mapping: dict, path: str):
+def save_json(mapping: dict, path: str) -> None:
     with open(path, "w", encoding="utf-8") as f:
         json.dump(mapping, f, ensure_ascii=False, indent=2)
     print(f"✅ 已保存 JSON → {path}  ({len(mapping)} 只)")
 
 
-def save_csv(df: pd.DataFrame, path: str):
+def save_csv(df: pd.DataFrame, path: str) -> None:
     df_sorted = df.sort_values("code").reset_index(drop=True)
     df_sorted.to_csv(path, index=False, encoding="utf-8-sig")
     print(f"✅ 已保存 CSV  → {path}  ({len(df_sorted)} 只)")
 
 
-def show_diff(new_mapping: dict, old_path: str):
+def show_diff(new_mapping: dict, old_path: str) -> None:
     if not os.path.exists(old_path):
         print("⚠️  未找到旧版本文件，跳过对比")
         return
@@ -254,7 +262,7 @@ def show_diff(new_mapping: dict, old_path: str):
         print()
 
 
-def main():
+def main() -> None:
     parser = argparse.ArgumentParser(description="更新中国 A 股及行业映射文件")
     parser.add_argument("-o", "--output", default="chinese_stocks.json", help="输出文件名 (默认: chinese_stocks.json)")
     parser.add_argument("--format", choices=["json", "csv", "both"], default="json", help="输出格式")

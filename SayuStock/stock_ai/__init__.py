@@ -20,7 +20,7 @@ sv_stock_kronos = SV("模型预测")
         text: 股票代码或名称，例如 "600000"、"贵州茅台"、"证券ETF"
     """,
 )
-async def send_stock_kronos(bot: Bot, ev: Event):
+async def send_stock_kronos(bot: Bot, ev: Event) -> None:
     logger.info("[SayuStock] 开始执行[模型预测]")
     im = await draw_ai_kline_with_forecast(ev.text.strip(), bot)
     await bot.send(im, at_sender=True)

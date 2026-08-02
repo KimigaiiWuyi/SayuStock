@@ -5,6 +5,8 @@ from __future__ import annotations
 from typing import Any
 from dataclasses import field, dataclass
 
+import pandas as pd
+
 from ..utils.kline import klines_to_df
 from ..utils.indicators import compute_indicators
 
@@ -102,12 +104,19 @@ def build_technical_report(
     name: str,
     code: str,
     period_code: str,
-    klines: list[str],
+    klines: list[str] | None = None,
+    ohlcv_df: pd.DataFrame | None = None,
 ) -> TechnicalReport | str:
-    """从东财 klines 字符串列表构建技术报告。"""
-    if not klines:
+    """从 K 线构建技术报告。
+
+    优先 ``ohlcv_df``（英文列 date/open/high/low/close/...）；否则解析 ``klines`` 字符串。
+    """
+    if ohlcv_df is not None:
+        df = ohlcv_df
+    elif klines:
+        df = klines_to_df(klines)
+    else:
         return "❌暂无K线数据"
-    df = klines_to_df(klines)
     if df.empty or len(df) < 5:
         return "❌K线数据不足，无法分析"
     ind = compute_indicators(df)

@@ -25,7 +25,7 @@ HINT2 = """[SayuStock]
 
 
 @sv_user_info.on_command(("添加自选", "添加个股", "添加股票", "添加持仓", "加入自选"), block=True)
-async def bind_uid(bot: Bot, ev: Event):
+async def bind_uid(bot: Bot, ev: Event) -> list[str] | None:
     qid = ev.user_id
     uid = ev.text.strip()
     logger.info(f"[SayuStock] 开始执行自选绑定, qid={qid}, uid={uid}")
@@ -83,7 +83,7 @@ async def bind_uid(bot: Bot, ev: Event):
     ),
     block=True,
 )
-async def delete_uid(bot: Bot, ev: Event):
+async def delete_uid(bot: Bot, ev: Event) -> list[str] | None:
     qid = ev.user_id
     uid = ev.text.strip()
     logger.info(f"[SayuStock] 开始执行自选解绑, qid={qid}, uid={uid}")
@@ -130,7 +130,7 @@ async def delete_uid(bot: Bot, ev: Event):
 
 
 @sv_user_info.on_command(("清空自选", "清空我的自选"), block=True)
-async def clear_all_uid(bot: Bot, ev: Event):
+async def clear_all_uid(bot: Bot, ev: Event) -> list[str] | None:
     qid = ev.user_id
     logger.info(f"[SayuStock] 开始执行清空自选, qid={qid}")
 

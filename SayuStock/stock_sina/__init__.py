@@ -44,7 +44,7 @@ def _apply_default_three_year_range(
               也可指定具体日期如 "2024.01.01~2024.12.31"
     """,
 )
-async def send_stock_PE_info(bot: Bot, ev: Event):
+async def send_stock_PE_info(bot: Bot, ev: Event) -> None:
     logger.info("[SayuStock] 开始执行[市盈率对比]")
     txt = ev.text.strip()
     try:
@@ -79,7 +79,7 @@ async def send_stock_PE_info(bot: Bot, ev: Event):
               也可指定具体日期如 "2024.01.01~2024.12.31"
     """,
 )
-async def send_stock_PB_info(bot: Bot, ev: Event):
+async def send_stock_PB_info(bot: Bot, ev: Event) -> None:
     logger.info("[SayuStock] 开始执行[市净率对比]")
     txt = ev.text.strip()
     try:
@@ -114,7 +114,7 @@ async def send_stock_PB_info(bot: Bot, ev: Event):
               也可指定具体日期如 "2024.01.01~2024.12.31"
     """,
 )
-async def send_stock_DY_info(bot: Bot, ev: Event):
+async def send_stock_DY_info(bot: Bot, ev: Event) -> None:
     logger.info("[SayuStock] 开始执行[股息率对比]")
     txt = ev.text.strip()
     try:

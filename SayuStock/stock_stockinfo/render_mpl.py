@@ -19,7 +19,7 @@ from gsuid_core.ai_core.trigger_bridge import ai_return
 
 from .data import CLOUDMAP_DATA_SERVICE
 from ..utils import render_text
-from .chart_base import JsonDict, BotSendContent
+from .chart_base import BotSendContent
 from .chart_kline import to_single_fig_kline, draw_single_kline_chart
 from .chart_compare import to_compare_fig, draw_compare_chart
 from .chart_cloudmap import to_fig, draw_cloudmap_chart
@@ -31,6 +31,7 @@ from .chart_intraday import (
 )
 from ..utils.constant import ErroText
 from ..utils.stock.utils import get_file
+from ..utils.market.models import KlineSeries, BoardSnapshot, IntradaySeries
 from ..stock_config.stock_config import STOCK_CONFIG
 
 __all__ = [
@@ -95,12 +96,21 @@ async def render_image_file(
             return file
 
     if sector == "single-stock":
-        fig = await to_multi_fig(raw_datas) if raw_datas else await to_single_fig(raw_data)
+        if raw_datas:
+            fig = await to_multi_fig([s for s in raw_datas if isinstance(s, IntradaySeries)])
+        elif isinstance(raw_data, IntradaySeries):
+            fig = await to_single_fig(raw_data)
+        else:
+            return ErroText["notData"]
     elif sector == "compare-stock":
-        fig = await to_compare_fig(raw_datas)
+        fig = await to_compare_fig([s for s in raw_datas if isinstance(s, KlineSeries)])
     elif sector and sector.startswith("single-stock-kline"):
+        if not isinstance(raw_data, KlineSeries):
+            return ErroText["notData"]
         fig = await to_single_fig_kline(raw_data)
     else:
+        if not isinstance(raw_data, BoardSnapshot):
+            return ErroText["notData"]
         fig = await to_fig(raw_data, market, sector, 2 if market == "大盘云图" else 1)
 
     if isinstance(fig, str):
@@ -113,8 +123,8 @@ async def render_image_file(
 def _emit_ai_text(
     market: str,
     sector: str | None,
-    raw_data: JsonDict,
-    raw_datas: list[JsonDict],
+    raw_data: BoardSnapshot | IntradaySeries | KlineSeries,
+    raw_datas: list[IntradaySeries | KlineSeries],
 ) -> None:
     """按图表种类把图上的数据以文字发给 AI。
 
@@ -123,41 +133,48 @@ def _emit_ai_text(
     """
     if sector == "single-stock":
         if raw_datas:
-            _ai_return_single_stock(raw_datas, is_multi=True)
-        else:
+            _ai_return_single_stock(
+                [s for s in raw_datas if isinstance(s, IntradaySeries)],
+                is_multi=True,
+            )
+        elif isinstance(raw_data, IntradaySeries):
             _ai_return_single_stock(raw_data)
     elif sector == "compare-stock":
-        _ai_return_compare_stock(raw_datas)
+        _ai_return_compare_stock([s for s in raw_datas if isinstance(s, KlineSeries)])
     elif sector and sector.startswith("single-stock-kline"):
-        _ai_return_kline(raw_data, sector)
-    else:
+        if isinstance(raw_data, KlineSeries):
+            _ai_return_kline(raw_data, sector)
+    elif isinstance(raw_data, BoardSnapshot):
         _ai_return_cloudmap(raw_data, market, sector)
 
 
-def _ai_return_single_stock(raw_data: JsonDict | list[JsonDict], is_multi: bool = False) -> None:
+def _ai_return_single_stock(
+    raw_data: IntradaySeries | list[IntradaySeries],
+    is_multi: bool = False,
+) -> None:
     """把分时图的数据以文字发给 AI（部分模型看不到图，文字是它唯一的输入）。"""
     text = render_text.single_stock_text(raw_data, is_multi)
     if text:
         ai_return(text)
 
 
-def _ai_return_kline(raw_data: JsonDict, sector: str) -> None:
+def _ai_return_kline(series: KlineSeries, sector: str) -> None:
     """把 K 线图上的全部指标以文字发给 AI。"""
-    text = render_text.kline_text(raw_data, sector)
+    text = render_text.kline_text(series, sector)
     if text:
         ai_return(text)
 
 
-def _ai_return_compare_stock(raw_datas: list[JsonDict]) -> None:
+def _ai_return_compare_stock(series_list: list[KlineSeries]) -> None:
     """把对比图的归一化涨跌、区间最大涨幅/回撤、极值点以文字发给 AI。"""
-    text = render_text.compare_text(raw_datas)
+    text = render_text.compare_text(series_list)
     if text:
         ai_return(text)
 
 
-def _ai_return_cloudmap(raw_data: JsonDict, market: str, sector: str | None = None) -> None:
+def _ai_return_cloudmap(snap: BoardSnapshot, market: str, sector: str | None = None) -> None:
     """把云图的领涨领跌与涨跌家数以文字发给 AI。"""
-    text = render_text.cloudmap_text(raw_data, market, sector)
+    text = render_text.cloudmap_text(snap, market, sector)
     if text:
         ai_return(text)
 

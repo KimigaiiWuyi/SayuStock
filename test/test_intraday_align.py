@@ -2,24 +2,92 @@
 
 from __future__ import annotations
 
-import datetime as dt
 import json
+import datetime as dt
 from pathlib import Path
 
 import pytest
 
-from SayuStock.utils.render_data import (
-    build_multi_stock_render_data,
-    _resolve_trend_absolute_datetimes,
-    _rows_from_resolved_trends,
-)
 from SayuStock.utils.time_range import (
     MARKET_SESSIONS,
     Market,
+    is_market_active_now,
     get_session_anchor_date,
     get_trading_datetimes_bjt,
-    is_market_active_now,
 )
+from SayuStock.utils.render_data import (
+    _rows_from_resolved_trends,
+    build_multi_stock_render_data,
+    _resolve_trend_absolute_datetimes,
+)
+from SayuStock.utils.market.enums import AssetClass
+from SayuStock.utils.market.models import (
+    Quote,
+    SymbolRef,
+    IntradayPoint,
+    IntradaySeries,
+)
+
+
+def _series_from_trends(
+    name: str,
+    code: str,
+    provider_symbol: str,
+    trends: list[dict[str, object]],
+    *,
+    prev_close: float,
+    change_pct: float,
+) -> IntradaySeries:
+    points: list[IntradayPoint] = []
+    for row in trends:
+        ts_s = str(row["datetime"])
+        try:
+            ts = dt.datetime.strptime(ts_s, "%Y-%m-%d %H:%M")
+        except ValueError:
+            continue
+        price = float(row["price"])  # type: ignore[arg-type]
+        points.append(
+            IntradayPoint(
+                ts=ts,
+                price=price,
+                open=price,
+                high=price,
+                low=price,
+                volume=float(row.get("amount") or 0),
+                amount=float(row.get("money") or 0),
+                avg_price=price,
+            )
+        )
+    symbol = SymbolRef(
+        code=code,
+        name=name,
+        asset_class=AssetClass.EQUITY,
+        exchange="EM",
+        provider_symbol=provider_symbol,
+    )
+    quote = Quote(
+        symbol=symbol,
+        price=points[-1].price if points else prev_close,
+        open=prev_close,
+        high=max((p.high for p in points), default=prev_close),
+        low=min((p.low for p in points), default=prev_close),
+        prev_close=prev_close,
+        change_pct=change_pct,
+        change_amount=None,
+        volume=1.0,
+        amount=1.0,
+        turnover_rate=1.0,
+        pe=None,
+        pb=None,
+        market_cap=None,
+        float_market_cap=None,
+        industry=None,
+        limit_up=None,
+        limit_down=None,
+        as_of=points[-1].ts if points else None,
+    )
+    return IntradaySeries(symbol=symbol, points=tuple(points), quote=quote)
+
 
 DATA = Path(r"F:\gsuid_core\data\SayuStock\data")
 CACHE_FILES = [
@@ -59,9 +127,7 @@ def test_resolve_hhmm_overnight_anchor() -> None:
                 break
             trends.append({"datetime": f"{h:02d}:{m:02d}", "price": float(h * 60 + m)})
 
-    resolved = _resolve_trend_absolute_datetimes(
-        trends, now_bjt=dt.datetime(2026, 7, 24, 1, 5)
-    )
+    resolved = _resolve_trend_absolute_datetimes(trends, now_bjt=dt.datetime(2026, 7, 24, 1, 5))
     assert resolved[0][1] == dt.datetime(2026, 7, 23, 6, 0)
     assert resolved[-1][1] == dt.datetime(2026, 7, 24, 1, 0)
 
@@ -71,9 +137,7 @@ def test_resolve_full_datetime_passthrough() -> None:
         {"datetime": "2026-07-23 06:00", "price": 1.0},
         {"datetime": "2026-07-24 01:00", "price": 2.0},
     ]
-    resolved = _resolve_trend_absolute_datetimes(
-        trends, now_bjt=dt.datetime(2026, 7, 24, 1, 5)
-    )
+    resolved = _resolve_trend_absolute_datetimes(trends, now_bjt=dt.datetime(2026, 7, 24, 1, 5))
     assert [ts.strftime("%Y-%m-%d %H:%M") for _, ts in resolved] == [
         "2026-07-23 06:00",
         "2026-07-24 01:00",
@@ -87,9 +151,7 @@ def test_rows_never_remap_history_via_wrong_session() -> None:
         {"datetime": "2026-07-23 12:00", "price": 101.0, "money": 1},
         {"datetime": "2026-07-24 01:00", "price": 99.0, "money": 1},
     ]
-    resolved = _resolve_trend_absolute_datetimes(
-        trends, now_bjt=dt.datetime(2026, 7, 24, 1, 5)
-    )
+    resolved = _resolve_trend_absolute_datetimes(trends, now_bjt=dt.datetime(2026, 7, 24, 1, 5))
     rows = _rows_from_resolved_trends(
         resolved,
         code_id="103.NQ00Y",
@@ -136,19 +198,25 @@ def test_multi_stock_synthetic_overnight_not_shifted() -> None:
                 }
             )
 
-    raw_list = [
-        {
-            "file_name": "1.600000_single-stock_None_data.json",
-            "data": {"f58": "甲", "f60": 10.0, "f170": 1.0, "f48": 1.0, "f43": 10.1, "f168": 1.0},
-            "trends": day_session,
-        },
-        {
-            "file_name": "103.FAKE_single-stock_None_data.json",
-            "data": {"f58": "乙", "f60": 100.0, "f170": -1.0, "f48": 1.0, "f43": 99.0, "f168": 1.0},
-            "trends": overnight,
-        },
+    series_list = [
+        _series_from_trends(
+            "甲",
+            "600000",
+            "1.600000",
+            day_session,
+            prev_close=10.0,
+            change_pct=1.0,
+        ),
+        _series_from_trends(
+            "乙",
+            "FAKE",
+            "103.FAKE",
+            overnight,
+            prev_close=100.0,
+            change_pct=-1.0,
+        ),
     ]
-    result = build_multi_stock_render_data(raw_list)
+    result = build_multi_stock_render_data(series_list)
     assert not isinstance(result, str), result
     assert len(result.stocks) == 2
 
@@ -174,21 +242,39 @@ def test_multi_stock_synthetic_overnight_not_shifted() -> None:
 )
 def test_multi_stock_cache_prefix_103_overnight() -> None:
     """真实缓存：用 file_name 前缀 103. 识别美期，不用中文名。"""
-    raw_list = [json.loads((DATA / f).read_text(encoding="utf-8")) for f in CACHE_FILES]
-    for raw in raw_list:
+    from SayuStock.utils.market.errors import is_market_error
+    from SayuStock.utils.market.adapters.eastmoney.parse_quote import parse_quote_payload
+    from SayuStock.utils.market.adapters.eastmoney.parse_intraday import (
+        parse_intraday_from_trends_list,
+    )
+
+    series_list: list[IntradaySeries] = []
+    for f in CACHE_FILES:
+        raw = json.loads((DATA / f).read_text(encoding="utf-8"))
         file_name = str(raw.get("file_name", ""))
         secid = file_name.split("_")[0]
-        # 统一：按 trends 序列本身还原日期（不按品种名分支不同 now）
-        # 缓存采集于 7/24 ~01:00 会话；给一个覆盖「末点 ≤ now」的 now 即可
         now = dt.datetime(2026, 7, 24, 1, 5)
         stamped = _resolve_trend_absolute_datetimes(raw["trends"], now_bjt=now)
-        # 若是日盘 HH:MM 且 last_clock > 01:05，会锚到 7/23 —— 正是我们要的
-        raw["trends"] = [
-            {**item, "datetime": ts.strftime("%Y-%m-%d %H:%M")} for item, ts in stamped
-        ]
-        raw["_secid"] = secid
+        trends = [{**item, "datetime": ts.strftime("%Y-%m-%d %H:%M")} for item, ts in stamped]
+        q = parse_quote_payload(raw, provider_symbol=secid, sec_type="")
+        symbol = (
+            q.symbol
+            if not is_market_error(q)
+            else SymbolRef(
+                code=secid.split(".")[-1],
+                name=secid,
+                asset_class=AssetClass.EQUITY,
+                exchange="EM",
+                provider_symbol=secid,
+            )
+        )
+        quote = None if is_market_error(q) else q
+        parsed = parse_intraday_from_trends_list(trends, symbol, quote)
+        if not is_market_error(parsed):
+            series_list.append(parsed)
 
-    result = build_multi_stock_render_data(raw_list)
+    result = build_multi_stock_render_data(series_list)
+
     assert not isinstance(result, str), result
 
     for stock in result.stocks:

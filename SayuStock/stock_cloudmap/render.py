@@ -12,7 +12,6 @@
 渲染前的数据层见 ``utils/render_data.py``，给 AI 的文字见 ``utils/render_text.py``。
 """
 
-from typing import Any
 from pathlib import Path
 from datetime import datetime, timedelta
 
@@ -29,19 +28,14 @@ from .render_data import (
 from ..utils.image import render_image_by_pw
 from ..utils.constant import ErroText
 from ..utils.stock.utils import get_file
+from ..utils.market.models import BoardSnapshot
 from ..stock_config.stock_config import STOCK_CONFIG
 
 PLOTLY_COLORS = ["#1f77b4", "#ff7f0e", "#2ca02c", "#d62728", "#9467bd", "#17becf", "#e377c2"]
 
 
-def _dict_value(data: dict[str, Any], key: str, default: Any) -> Any:
-    if key in data:
-        return data[key]
-    return default
-
-
-async def to_fig(raw_data: dict[str, Any], market: str, sector: str | None = None, layer: int = 2):
-    data = build_cloudmap_render_data(raw_data, market, sector, layer)
+async def to_fig(snap: BoardSnapshot, market: str, sector: str | None = None, layer: int = 2) -> object:
+    data = build_cloudmap_render_data(snap, market, sector, layer)
     if isinstance(data, str):
         return data
     cloudmap = data
@@ -102,6 +96,8 @@ async def render_html(
     sector = data_result.sector
     if isinstance(raw_data, str):
         return raw_data
+    if not isinstance(raw_data, BoardSnapshot):
+        return ErroText["notData"]
 
     # 文字必须在缓存判断**之前**发：部分模型看不到图，ai_return 的文字是它唯一的
     # 输入，而命中 HTML 缓存会直接 return，绕过下面的出图 —— 那样同一命令在刷新
@@ -124,9 +120,9 @@ async def render_html(
     return file
 
 
-def _ai_return_cloudmap(raw_data: dict[str, Any], market: str, sector: str | None = None) -> None:
+def _ai_return_cloudmap(snap: BoardSnapshot, market: str, sector: str | None = None) -> None:
     """把云图的领涨领跌与涨跌家数以文字发给 AI。"""
-    text = render_text.cloudmap_text(raw_data, market, sector)
+    text = render_text.cloudmap_text(snap, market, sector)
     if text:
         ai_return(text)
 
@@ -136,7 +132,7 @@ async def render_image(
     sector: str | None = None,
     start_time: datetime | None = None,
     end_time: datetime | None = None,
-):
+) -> str | bytes:
     html_path = await render_html(market, sector, start_time, end_time)
     if isinstance(html_path, str):
         return html_path

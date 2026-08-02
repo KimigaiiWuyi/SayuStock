@@ -10,9 +10,7 @@ from dataclasses import field, dataclass
 from gsuid_core.logger import logger
 
 from .universe import fetch_industry_pct_map
-from ..utils.load_data import get_full_security_code
-from ..utils.stock.request import get_gg
-from ..utils.stock.request_utils import get_code_id
+from ..utils.market import get_market, is_market_error
 
 _FLOAT_RE = re.compile(r"^-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?$")
 
@@ -90,78 +88,22 @@ def _risk_level(hhi: float, top1: float) -> str:
     return "分散"
 
 
-async def _fetch_extra_industry(secid: str) -> str:
-    """个股 get 默认字段未必含 f100，单独补拉行业。"""
-    from ..utils.eastmoney import EASTMONEY_REQUESTER
-
-    url = "https://push2.eastmoney.com/api/qt/stock/get"
-    params = [
-        ("secid", secid),
-        ("fields", "f57,f58,f100,f127"),
-        ("fltt", "2"),
-        ("invt", "2"),
-    ]
-    resp = await EASTMONEY_REQUESTER.stock_request(url, "GET", params=params)
-    if isinstance(resp, int) or not isinstance(resp, dict):
-        return "未分类"
-    if "data" not in resp or not isinstance(resp["data"], dict):
-        return "未分类"
-    data = resp["data"]
-    ind = ""
-    if "f100" in data and data["f100"] not in (None, "", "-", "--"):
-        ind = str(data["f100"]).strip()
-    elif "f127" in data and data["f127"] not in (None, "", "-", "--"):
-        ind = str(data["f127"]).strip()
-    if not ind or ind in {"-", "--", "None"}:
-        return "未分类"
-    return ind
-
-
 async def _fetch_one(code: str) -> HoldingRow | None:
     try:
-        raw = await get_gg(code, "single-stock")
+        q = await get_market().quote(code)
     except (OSError, TimeoutError, RuntimeError, ValueError, TypeError) as e:
         logger.warning(f"[portfolio] fetch {code} fail: {e}")
         return None
-
-    if isinstance(raw, str) or not isinstance(raw, dict):
+    if is_market_error(q):
         return None
-    if "data" not in raw or not isinstance(raw["data"], dict):
-        return None
-    data = raw["data"]
-
-    name = str(data["f58"] if "f58" in data and data["f58"] else code)
-    if " (" in name:
-        name = name.split(" (")[0]
-    price_f = _ff(data["f43"] if "f43" in data else None)
-    pct_f = _ff(data["f170"] if "f170" in data else None)
-
-    industry = ""
-    if "f100" in data and data["f100"] not in (None, "", "-", "--"):
-        industry = str(data["f100"]).strip()
-    elif "f127" in data and data["f127"] not in (None, "", "-", "--"):
-        industry = str(data["f127"]).strip()
-
-    if not industry or industry in {"-", "--", "None", "未分类"}:
-        cid = await get_code_id(code)
-        if cid:
-            try:
-                secid = get_full_security_code(cid[0])
-            except ValueError:
-                secid = cid[0] if "." in str(cid[0]) else ""
-            if secid:
-                industry = await _fetch_extra_industry(secid)
-        if not industry or industry in {"-", "--"}:
-            industry = "未分类"
-
-    stock_code = str(data["f57"] if "f57" in data and data["f57"] else code)
+    industry = q.industry if q.industry and q.industry not in {"-", "--", "None"} else "未分类"
     return HoldingRow(
-        code=stock_code,
-        name=name,
+        code=q.symbol.code or code,
+        name=q.symbol.name.split(" (")[0] if " (" in q.symbol.name else q.symbol.name,
         industry=industry,
         weight=0.0,
-        pct=pct_f,
-        price=price_f,
+        pct=q.change_pct,
+        price=q.price,
     )
 
 

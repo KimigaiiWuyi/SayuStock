@@ -45,23 +45,23 @@ __all__ = [
 ]
 
 
-if _NativePrice is not None:
-    Price = _NativePrice
-else:
+class _PriceCompat(LinePlot):
+    """新版 mplchart 无 Price 时的兼容实现：等价于画指定价格列的 LinePlot。"""
 
-    class Price(LinePlot):  # type: ignore[no-redef]
-        """新版 mplchart 无 Price 时的兼容实现：等价于画指定价格列的 LinePlot。"""
+    def __init__(
+        self,
+        item: str = "close",
+        *,
+        width: float = 1.0,
+        alpha: float = 1.0,
+        color: str | None = None,
+    ) -> None:
+        # 列名作为 indicator 传入：新旧 DataView/calc 都能按列解析
+        super().__init__(item, width=width, alpha=alpha, color=color, label=str(item))
 
-        def __init__(
-            self,
-            item: str = "close",
-            *,
-            width: float = 1.0,
-            alpha: float = 1.0,
-            color: str | None = None,
-        ) -> None:
-            # 列名作为 indicator 传入：新旧 DataView/calc 都能按列解析
-            super().__init__(item, width=width, alpha=alpha, color=color, label=str(item))
+
+# 统一导出名 Price：有原生类用原生，否则用兼容实现（避免 class 重定义触发 no-redef）
+Price: type[LinePlot] = _NativePrice if _NativePrice is not None else _PriceCompat
 
 
 _CHART_INIT_PARAMS = inspect.signature(_MplChart.__init__).parameters

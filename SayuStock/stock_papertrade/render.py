@@ -25,10 +25,10 @@ def _draw_text(
     img: Image.Image,
     xy: tuple,
     text: str,
-    color=(240, 240, 240),
+    color: str | tuple[int, ...] = (240, 240, 240),
     size: int = 22,
     anchor: str = "lt",
-):
+) -> None:
     draw = ImageDraw.Draw(img)
     draw.text(xy, text, fill=color, font=_font(size), anchor=anchor)
 

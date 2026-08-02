@@ -32,7 +32,7 @@ sv_analysis = SV("股票分析")
               - 技术分析 60k 000001
     """,
 )
-async def send_technical_analysis(bot: Bot, ev: Event):
+async def send_technical_analysis(bot: Bot, ev: Event) -> None:
     logger.info("[SayuStock] 技术分析")
     text = ev.text.strip()
     if text.startswith("技术分析"):
@@ -52,7 +52,7 @@ async def send_technical_analysis(bot: Bot, ev: Event):
         text: 股票代码或名称，例如 "茅台"、"600519"、"证券ETF"
     """,
 )
-async def send_stock_card(bot: Bot, ev: Event):
+async def send_stock_card(bot: Bot, ev: Event) -> None:
     logger.info("[SayuStock] 股票卡片")
     text = ev.text.strip()
     for p in ("股票卡片", "交易卡片", "交易卡"):
@@ -82,7 +82,7 @@ async def send_stock_card(bot: Bot, ev: Event):
               支持：行业 名称、概念 名称（不可同时）
     """,
 )
-async def send_auto_screener(bot: Bot, ev: Event):
+async def send_auto_screener(bot: Bot, ev: Event) -> None:
     logger.info("[SayuStock] 自动选股")
     text = ev.text.strip()
     if text.startswith("自动选股"):
@@ -103,7 +103,7 @@ async def send_auto_screener(bot: Bot, ev: Event):
         text: 可选，空格分隔的股票代码/名称；为空则读自选
     """,
 )
-async def send_portfolio_check(bot: Bot, ev: Event):
+async def send_portfolio_check(bot: Bot, ev: Event) -> None:
     logger.info("[SayuStock] 组合体检")
     text = ev.text.strip()
     for p in ("组合体检", "行业集中度"):

@@ -16,8 +16,9 @@ MACD / CMF，AI 一个都拿不到，等于让它裸看 K 线数字瞎猜。对�
 新增图表元素时，请同步在这里补上对应文字，并在 ``test/test_render_text.py`` 加断言。
 """
 
-from .kline import klines_to_df
 from .indicators import swing_stats, normalize_pct, compute_indicators
+from .market.models import KlineSeries, BoardSnapshot, IntradaySeries
+from .market.convert.dataframe import kline_to_df
 
 __all__ = [
     "cloudmap_text",
@@ -73,19 +74,16 @@ def period_name(sector: str) -> str:
     return PERIOD_NAMES.get(code, "K线")
 
 
-def kline_text(raw_data: dict, sector: str) -> str:
+def kline_text(series: KlineSeries, sector: str) -> str:
     """K 线图的全量文字版：图上每一条线都在这里有对应读数。
 
     含：最新价/区间极值与涨跌幅/均线与排列/BBI/BOLL 双轨/KDJ/RSI 三线/MACD/
     CMF/量比/乖离/ATR/支撑压力/叉信号，外加最近 10 根明细。
     """
-    data = raw_data.get("data") or {}
-    klines = list(data.get("klines") or [])
-    if not klines:
+    if not isinstance(series, KlineSeries) or not series.bars:
         return ""
-
-    name = data.get("name") or data.get("f58") or "N/A"
-    df = klines_to_df(klines)
+    name = series.symbol.name or "N/A"
+    df = kline_to_df(series)
     if df.empty:
         return ""
 
@@ -203,20 +201,18 @@ def _is_pos(value: object) -> bool:
     return isinstance(value, (int, float)) and not isinstance(value, bool) and value > 0
 
 
-def compare_text(raw_datas: list[dict]) -> str:
+def compare_text(series_list: list[KlineSeries]) -> str:
     """个股对比图的文字版。
 
     图上每条线标了「最高点/最低点/区间最大涨幅/区间最大回撤/末点累计涨跌」，
     这里逐条给出同样的读数 —— 用的是与图完全相同的 ``swing_stats``。
     """
     blocks: list[str] = []
-    for rd in raw_datas:
-        data = rd.get("data") or {}
-        name = data.get("name") or data.get("f58") or "N/A"
-        klines = list(data.get("klines") or [])
-        if not klines:
+    for series in series_list:
+        if not isinstance(series, KlineSeries) or not series.bars:
             continue
-        df = klines_to_df(klines)
+        name = series.symbol.name or "N/A"
+        df = kline_to_df(series)
         if df.empty:
             continue
 
@@ -241,56 +237,70 @@ def compare_text(raw_datas: list[dict]) -> str:
     return header + "\n" + "\n".join(blocks)
 
 
-def single_stock_text(raw_data: dict | list[dict], is_multi: bool = False) -> str:
-    """分时图的文字版（单只或多只）。"""
-    if is_multi or isinstance(raw_data, list):
-        items = raw_data if isinstance(raw_data, list) else [raw_data]
+def single_stock_text(
+    series: IntradaySeries | list[IntradaySeries],
+    is_multi: bool = False,
+) -> str:
+    """分时图的文字版（单只或多只），读 Quote / IntradaySeries 语义字段。"""
+    if is_multi or isinstance(series, list):
+        items = series if isinstance(series, list) else [series]
         parts: list[str] = []
-        for rd in items:
-            data = rd.get("data") or {}
+        for item in items:
+            if not isinstance(item, IntradaySeries):
+                continue
+            q = item.quote
+            name = item.symbol.name
+            if q is None:
+                last = item.points[-1].price if item.points else None
+                parts.append(f"{name}: 最新 {last}")
+                continue
             parts.append(
-                f"{data.get('f58', 'N/A')}: 最新 {data.get('f43', 'N/A')}  "
-                f"涨跌幅 {data.get('f170', 'N/A')}%  换手率 {data.get('f168', 'N/A')}%  "
-                f"成交额 {data.get('f48', 'N/A')}"
+                f"{q.symbol.name}: 最新 {q.price}  涨跌幅 {q.change_pct}%  换手率 {q.turnover_rate}%  成交额 {q.amount}"
             )
         if not parts:
             return ""
         return "【多股分时行情】\n" + "\n".join(parts)
 
-    data = raw_data.get("data") or {}
+    if not isinstance(series, IntradaySeries):
+        return ""
+    q = series.quote
+    if q is None:
+        last = series.points[-1].price if series.points else None
+        return f"【{series.symbol.name} 分时行情】\n最新价: {last}"
     return (
-        f"【{data.get('f58', 'N/A')} 分时行情】\n"
-        f"最新价: {data.get('f43', 'N/A')}  涨跌幅: {data.get('f170', 'N/A')}%\n"
-        f"开盘价: {data.get('f60', 'N/A')}  "
-        f"最高价: {data.get('f44', 'N/A')}  最低价: {data.get('f45', 'N/A')}\n"
-        f"换手率: {data.get('f168', 'N/A')}%  成交额: {data.get('f48', 'N/A')}  "
-        f"成交量: {data.get('f47', 'N/A')}"
+        f"【{q.symbol.name} 分时行情】\n"
+        f"最新价: {q.price}  涨跌幅: {q.change_pct}%\n"
+        f"开盘价: {q.prev_close}  "
+        f"最高价: {q.high}  最低价: {q.low}\n"
+        f"换手率: {q.turnover_rate}%  成交额: {q.amount}  "
+        f"成交量: {q.volume}"
     )
 
 
-def cloudmap_text(raw_data: dict, market: str, sector: str | None = None, top_n: int = 10) -> str:
-    """云图（大盘/行业/概念）的文字版：领涨领跌 + 涨跌家数分布。"""
-    data = raw_data.get("data") or {}
-    diff = list(data.get("diff") or [])
-    if not diff:
+def cloudmap_text(
+    snap: BoardSnapshot,
+    market: str,
+    sector: str | None = None,
+    top_n: int = 10,
+) -> str:
+    """云图文字版：直接读 BoardSnapshot。"""
+    if not isinstance(snap, BoardSnapshot):
         return ""
-
-    valid = [i for i in diff if i.get("f3") != "-" and i.get("f14")]
+    valid = [r for r in snap.rows if r.change_pct is not None and r.name]
     if not valid:
         return ""
-    valid.sort(key=lambda x: float(x["f3"]), reverse=True)
+    valid.sort(key=lambda r: float(r.change_pct or 0), reverse=True)
 
     title = market or "板块云图"
     if sector and market not in ("大盘云图",):
         title = f"{market} - {sector}"
 
-    def _row(item: dict) -> str:
-        return f"  {item['f14']}({item.get('f100', '-')}): {item['f3']}%"
+    def _row(item) -> str:
+        ind = item.industry or "-"
+        return f"  {item.name}({ind}): {item.change_pct}%"
 
     lines = [f"【{title}】共 {len(valid)} 个标的"]
     if len(valid) <= top_n * 2:
-        # 标的太少时切 Top/Bottom 会两边重叠 —— 涨停股同时出现在「领跌」里，
-        # 看不到图的 AI 只会照单全收。直接给全量排名。
         lines.append("全部（按涨跌幅降序）:")
         lines.extend(_row(i) for i in valid)
     else:
@@ -299,11 +309,11 @@ def cloudmap_text(raw_data: dict, market: str, sector: str | None = None, top_n:
         lines.append(f"领跌 Top{top_n}:")
         lines.extend(_row(i) for i in valid[-top_n:][::-1])
 
-    up = sum(1 for i in valid if float(i["f3"]) > 0)
-    down = sum(1 for i in valid if float(i["f3"]) < 0)
-    limit_up = sum(1 for i in valid if float(i["f3"]) >= 9.8)
-    limit_down = sum(1 for i in valid if float(i["f3"]) <= -9.8)
-    avg = sum(float(i["f3"]) for i in valid) / len(valid)
+    up = sum(1 for i in valid if float(i.change_pct or 0) > 0)
+    down = sum(1 for i in valid if float(i.change_pct or 0) < 0)
+    limit_up = sum(1 for i in valid if float(i.change_pct or 0) >= 9.8)
+    limit_down = sum(1 for i in valid if float(i.change_pct or 0) <= -9.8)
+    avg = sum(float(i.change_pct or 0) for i in valid) / len(valid)
     lines.append(
         f"统计: 上涨 {up} 家, 下跌 {down} 家, 平盘 {len(valid) - up - down} 家；"
         f"涨停约 {limit_up} 家, 跌停约 {limit_down} 家；平均涨跌幅 {avg:+.2f}%"

@@ -109,8 +109,8 @@ async def _select_first_account_by_group(group_id: str) -> Optional[SayuPaperAcc
     async with async_maker() as session:
         stmt = (
             select(SayuPaperAccount)
-            .where(col(col(SayuPaperAccount.group_id)) == group_id)
-            .order_by(col(col(SayuPaperAccount.created_at)).desc(), col(col(SayuPaperAccount.id)).asc())
+            .where(col(SayuPaperAccount.group_id) == group_id)
+            .order_by(col(SayuPaperAccount.created_at).desc(), col(SayuPaperAccount.id).asc())
             .limit(1)
         )
         result = await session.execute(stmt)
@@ -125,8 +125,8 @@ async def _resolve_bot_id_for_group(group_id: str) -> str:
     async with async_maker() as session:
         stmt = (
             select(col(SayuPaperAccount.bot_id))
-            .where(col(col(SayuPaperAccount.group_id)) == group_id)
-            .order_by(col(col(SayuPaperAccount.created_at)).desc(), col(col(SayuPaperAccount.id)).asc())
+            .where(col(SayuPaperAccount.group_id) == group_id)
+            .order_by(col(SayuPaperAccount.created_at).desc(), col(SayuPaperAccount.id).asc())
             .limit(1)
         )
         result = await session.execute(stmt)

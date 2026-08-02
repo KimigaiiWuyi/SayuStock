@@ -121,13 +121,13 @@ def get_file(
     suffix: str,
     sector: Optional[str] = None,
     sp: Optional[str] = None,
-):
+) -> object:
     a = f"{market}_{sector}_{sp}_data"
     a = a[:254]
     return DATA_PATH / f"{a}.{suffix}"
 
 
-def get_adjusted_date():
+def get_adjusted_date() -> object:
     now = datetime.now()
     target_time = now.replace(hour=9, minute=30, second=0, microsecond=0)
     # 判断当前时间是否在当天的9:30之前

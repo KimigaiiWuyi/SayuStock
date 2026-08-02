@@ -32,7 +32,7 @@ NEWS: XueQiu7x24 = {
 XUEQIU_TOKEN = ""
 
 
-async def get_token():
+async def get_token() -> object:
     global XUEQIU_TOKEN
     async with async_playwright() as p:
         # 启动浏览器（默认 Chromium）
@@ -63,7 +63,7 @@ async def get_token():
             await browser.close()
 
 
-async def clean_news():
+async def clean_news() -> None:
     global NEWS
     NEWS = {
         "next_max_id": 0,

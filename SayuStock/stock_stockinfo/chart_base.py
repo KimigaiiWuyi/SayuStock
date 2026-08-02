@@ -18,7 +18,7 @@
 
 import asyncio
 from io import BytesIO
-from typing import TypeVar, ParamSpec
+from typing import TypeVar, Protocol, ParamSpec, runtime_checkable
 from datetime import datetime
 from collections.abc import Callable, Sequence
 
@@ -111,6 +111,8 @@ __all__ = [
     "_dodge_label_point_offsets",
     "_draw_dodged_text_labels",
     "_draw_end_point_labels",
+    "_estimate_text_box_pts",
+    "_leader_arrowprops",
     "_draw_in_thread",
     "_fig_to_image",
     "_format_detail_legend_label",
@@ -331,6 +333,25 @@ def _format_detail_legend_label(
     return f"{name}\n{start_tag} {_format_metric_value(start)}  {end_tag} {_format_metric_value(end)}  {pct:+.2f}%"
 
 
+@runtime_checkable
+class _LegendSetLoc(Protocol):
+    def set_loc(self, loc: str | int) -> None: ...
+
+
+@runtime_checkable
+class _LegendPrivLoc(Protocol):
+    _loc: str | int
+
+
+def _set_legend_loc(legend: object, loc: str) -> None:
+    """跨 matplotlib 版本设置图例位置（公开 set_loc 或私有 _loc）。"""
+    if isinstance(legend, _LegendSetLoc):
+        legend.set_loc(loc)
+        return
+    if isinstance(legend, _LegendPrivLoc):
+        legend._loc = loc
+
+
 def _apply_detail_legend(
     ax: Axes,
     labels: Sequence[str],
@@ -343,11 +364,7 @@ def _apply_detail_legend(
     legend = ax.get_legend()
     if legend is None:
         return
-    # 不同 matplotlib 版本 API 略有差异
-    if hasattr(legend, "set_loc"):
-        legend.set_loc(loc)
-    else:
-        legend._loc = loc  # type: ignore[attr-defined]
+    _set_legend_loc(legend, loc)
     frame = legend.get_frame()
     frame.set_facecolor(BG_COLOR)
     frame.set_edgecolor(AXIS_COLOR)
@@ -363,10 +380,41 @@ def _apply_detail_legend(
             text.set_color(FG_COLOR)
 
 
-def _ensure_axes_renderer(ax: Axes):
+def _ensure_axes_renderer(ax: Axes) -> object:
     fig = ax.figure
     fig.canvas.draw()
     return fig.canvas.get_renderer()
+
+
+def _estimate_text_box_pts(text: str, fontsize: float, *, pad_pts: float = 4.0) -> tuple[float, float]:
+    """按文本行数/最长行估算标签框 (宽, 高)，单位 points（含边距）。"""
+    lines = [line for line in str(text).split("\n") if line is not None]
+    if not lines:
+        lines = [""]
+    # 中文约 0.95em，数字/英文约 0.55em；取偏大估计避免框比真实窄
+    max_w = 0.0
+    for line in lines:
+        w = 0.0
+        for ch in line:
+            w += fontsize * (0.92 if ord(ch) > 127 else 0.58)
+        max_w = max(max_w, w)
+    width = max(max_w + pad_pts * 2.0, fontsize * 2.0)
+    height = max(len(lines) * fontsize * 1.38 + pad_pts * 2.0, fontsize * 1.6)
+    return width, height
+
+
+def _leader_arrowprops(color: str, *, linewidth: float = 1.0, alpha: float = 0.88) -> dict[str, object]:
+    """锚点圆点 → 标签的虚线引出。"""
+    return {
+        "arrowstyle": "-",
+        "color": color,
+        "alpha": alpha,
+        "linewidth": linewidth,
+        "linestyle": (0, (3.2, 2.2)),
+        "connectionstyle": "arc3,rad=0",
+        "shrinkA": 0,
+        "shrinkB": 2,
+    }
 
 
 def _dodge_end_label_offsets(
@@ -376,11 +424,12 @@ def _dodge_end_label_offsets(
     min_sep_pts: float = 20.0,
     x_base_pts: float = 16.0,
     x_stagger_pts: float = 6.0,
+    heights_pts: Sequence[float] | None = None,
 ) -> list[tuple[float, float]]:
-    """为曲线末端标签计算 (x_offset, y_offset)（单位：points），使相近标签纵向避让。
+    """为曲线末端标签计算 (x_offset, y_offset)（单位：points），纵向 AABB 避让。
 
     返回值可直接用于 ``AnnotationBbox(..., xybox=offset, boxcoords="offset points")``。
-    当标签相对数据点纵向挪开时，配合 ``arrowprops`` 即可画出点→标签的引出线。
+    标签框高度可用 ``heights_pts`` 传入；缺省时用 ``min_sep_pts`` 作为统一间距。
     """
     n = len(y_values)
     if n == 0:
@@ -391,45 +440,55 @@ def _dodge_end_label_offsets(
     renderer = _ensure_axes_renderer(ax)
     dpi = float(ax.figure.dpi)
     px_per_pt = dpi / 72.0
-    min_sep_px = min_sep_pts * px_per_pt
+
+    if heights_pts is None:
+        half_h = [min_sep_pts * 0.5 * px_per_pt for _ in range(n)]
+    else:
+        if len(heights_pts) != n:
+            raise ValueError("heights_pts 与 y_values 长度必须一致")
+        half_h = [max(float(h), min_sep_pts) * 0.5 * px_per_pt for h in heights_pts]
+    gap_px = 4.0 * px_per_pt  # 框与框之间最小空隙
 
     display_ys = [float(ax.transData.transform((0.0, float(y)))[1]) for y in y_values]
     order = sorted(range(n), key=lambda i: display_ys[i])
-    sorted_y = [display_ys[i] for i in order]
+    packed = [display_ys[i] for i in order]
+    half_sorted = [half_h[i] for i in order]
 
-    # 自下而上按最小间距挤开
-    packed = sorted_y[:]
     for i in range(1, n):
-        packed[i] = max(packed[i], packed[i - 1] + min_sep_px)
+        min_center = packed[i - 1] + half_sorted[i - 1] + half_sorted[i] + gap_px
+        if packed[i] < min_center:
+            packed[i] = min_center
 
-    # 碰撞簇整体回中，尽量贴近原始 y
     cluster_start = 0
     while cluster_start < n:
         cluster_end = cluster_start
-        while cluster_end + 1 < n and abs((packed[cluster_end + 1] - packed[cluster_end]) - min_sep_px) < 1e-6:
-            cluster_end += 1
+        while cluster_end + 1 < n:
+            need = packed[cluster_end] + half_sorted[cluster_end] + half_sorted[cluster_end + 1] + gap_px
+            if abs(packed[cluster_end + 1] - need) < 1.0:
+                cluster_end += 1
+            else:
+                break
         if cluster_end > cluster_start:
             size = cluster_end - cluster_start + 1
-            orig_mean = sum(sorted_y[cluster_start : cluster_end + 1]) / size
+            orig_mean = sum(display_ys[order[k]] for k in range(cluster_start, cluster_end + 1)) / size
             pack_mean = sum(packed[cluster_start : cluster_end + 1]) / size
             shift = orig_mean - pack_mean
             for k in range(cluster_start, cluster_end + 1):
                 packed[k] += shift
         cluster_start = cluster_end + 1
 
-    # 回中后可能重新重叠，再做一次前向/后向收紧
     for i in range(1, n):
-        if packed[i] < packed[i - 1] + min_sep_px:
-            packed[i] = packed[i - 1] + min_sep_px
+        min_center = packed[i - 1] + half_sorted[i - 1] + half_sorted[i] + gap_px
+        if packed[i] < min_center:
+            packed[i] = min_center
     for i in range(n - 2, -1, -1):
-        if packed[i] > packed[i + 1] - min_sep_px:
-            packed[i] = packed[i + 1] - min_sep_px
+        max_center = packed[i + 1] - half_sorted[i + 1] - half_sorted[i] - gap_px
+        if packed[i] > max_center:
+            packed[i] = max_center
 
-    # 限制在坐标轴可视范围内
     bbox = ax.get_window_extent(renderer=renderer)
-    margin = min_sep_px * 0.35
-    y_lo = float(bbox.y0) + margin
-    y_hi = float(bbox.y1) - margin
+    y_lo = float(bbox.y0) + half_sorted[0] + gap_px
+    y_hi = float(bbox.y1) - half_sorted[-1] - gap_px
     if packed[0] < y_lo:
         shift = y_lo - packed[0]
         packed = [p + shift for p in packed]
@@ -437,20 +496,33 @@ def _dodge_end_label_offsets(
         shift = packed[-1] - y_hi
         packed = [p - shift for p in packed]
     for i in range(1, n):
-        if packed[i] < packed[i - 1] + min_sep_px:
-            packed[i] = packed[i - 1] + min_sep_px
+        min_center = packed[i - 1] + half_sorted[i - 1] + half_sorted[i] + gap_px
+        if packed[i] < min_center:
+            packed[i] = min_center
     if packed[-1] > y_hi:
         for i in range(n - 2, -1, -1):
-            if packed[i + 1] - packed[i] < min_sep_px:
-                packed[i] = packed[i + 1] - min_sep_px
+            max_center = packed[i + 1] - half_sorted[i + 1] - half_sorted[i] - gap_px
+            if packed[i] > max_center:
+                packed[i] = max_center
 
-    # 映射回 points 偏移；纵向挪得越远，横向略加错开，引出线更清晰
+    span_need = packed[-1] - packed[0]
+    span_have = max(y_hi - y_lo, 1.0)
+    if span_need > span_have and n > 1:
+        scale = span_have / span_need
+        mid = (packed[0] + packed[-1]) / 2.0
+        packed = [mid + (p - mid) * scale for p in packed]
+        for i in range(1, n):
+            min_center = packed[i - 1] + half_sorted[i - 1] + half_sorted[i] + gap_px * 0.5
+            if packed[i] < min_center:
+                packed[i] = min_center
+
     results: list[tuple[float, float]] = [(x_base_pts, 0.0) for _ in range(n)]
     for rank, orig_i in enumerate(order):
         y_offset_pts = (packed[rank] - display_ys[orig_i]) / px_per_pt
-        stagger = (rank - (n - 1) / 2.0) * (x_stagger_pts * 0.15)
-        fan = min(abs(y_offset_pts) * 0.12, 18.0)
-        x_offset_pts = x_base_pts + fan + stagger
+        stagger = (rank - (n - 1) / 2.0) * x_stagger_pts
+        fan = min(abs(y_offset_pts) * 0.18, 28.0)
+        density_fan = min(n * 1.2, 14.0)
+        x_offset_pts = x_base_pts + fan + abs(stagger) * 0.35 + density_fan * (0.5 + 0.5 * (rank % 2))
         results[orig_i] = (x_offset_pts, y_offset_pts)
     return results
 
@@ -460,12 +532,16 @@ def _dodge_label_point_offsets(
     preferred_offsets: Sequence[tuple[float, float]],
     ax: Axes,
     *,
-    min_sep_pts: float = 32.0,
-    max_iter: int = 60,
+    min_sep_pts: float = 8.0,
+    max_iter: int = 120,
+    sizes_pts: Sequence[tuple[float, float]] | None = None,
+    ha: str = "center",
+    va_from_offset: bool = True,
 ) -> list[tuple[float, float]]:
-    """对任意位置的点标注做 2D 互斥避让，返回调整后的 offset points。
+    """对任意位置的点标注做 2D AABB 互斥避让，返回调整后的 offset points。
 
-    用于极值点、分红事件、副图峰值等「点 + 引出线」标签。
+    ``sizes_pts`` 为每个标签 (宽, 高) points；缺省时用 ``min_sep_pts`` 当方形框。
+    ``ha`` / ``va_from_offset`` 与绘制时对齐一致，用于从 offset 推算框中心。
     """
     n = len(xy_data)
     if n == 0:
@@ -473,53 +549,164 @@ def _dodge_label_point_offsets(
     if n != len(preferred_offsets):
         raise ValueError("xy_data 与 preferred_offsets 长度必须一致")
     if n == 1:
-        return [preferred_offsets[0]]
+        return [list(preferred_offsets)[0]]
 
-    _ensure_axes_renderer(ax)
+    renderer = _ensure_axes_renderer(ax)
     dpi = float(ax.figure.dpi)
     px_per_pt = dpi / 72.0
-    min_sep_px = min_sep_pts * px_per_pt
+    margin_px = max(min_sep_pts, 4.0) * px_per_pt
 
-    # 锚点 display 坐标 + 首选标签 display 位置
+    if sizes_pts is None:
+        box_wh = [(min_sep_pts * 2.5 * px_per_pt, min_sep_pts * 1.2 * px_per_pt) for _ in range(n)]
+    else:
+        if len(sizes_pts) != n:
+            raise ValueError("sizes_pts 与 xy_data 长度必须一致")
+        box_wh = [(max(float(w), 8.0) * px_per_pt, max(float(h), 8.0) * px_per_pt) for w, h in sizes_pts]
+
     anchor_disp: list[tuple[float, float]] = []
-    label_disp: list[list[float]] = []
+    label_center: list[list[float]] = []
+    half_w = [w * 0.5 for w, _ in box_wh]
+    half_h = [h * 0.5 for _, h in box_wh]
+
+    def _offset_to_center(ox_pts: float, oy_pts: float, hw: float, hh: float) -> tuple[float, float]:
+        ox_px = float(ox_pts) * px_per_pt
+        oy_px = float(oy_pts) * px_per_pt
+        if ha == "left":
+            cx = ox_px + hw
+        elif ha == "right":
+            cx = ox_px - hw
+        else:
+            cx = ox_px
+        if va_from_offset:
+            if oy_pts >= 0:
+                cy = oy_px + hh
+            else:
+                cy = oy_px - hh
+        else:
+            cy = oy_px
+        return cx, cy
+
+    def _center_to_offset(cx_px: float, cy_px: float, hw: float, hh: float) -> tuple[float, float]:
+        if ha == "left":
+            ox_px = cx_px - hw
+        elif ha == "right":
+            ox_px = cx_px + hw
+        else:
+            ox_px = cx_px
+        if va_from_offset:
+            if cy_px >= 0:
+                oy_px = cy_px - hh
+            else:
+                oy_px = cy_px + hh
+        else:
+            oy_px = cy_px
+        return ox_px / px_per_pt, oy_px / px_per_pt
+
     for (x, y), (ox, oy) in zip(xy_data, preferred_offsets, strict=True):
         ax_x, ax_y = ax.transData.transform((float(x), float(y)))
         anchor_disp.append((float(ax_x), float(ax_y)))
-        label_disp.append([float(ax_x) + float(ox) * px_per_pt, float(ax_y) + float(oy) * px_per_pt])
+        i = len(label_center)
+        dcx, dcy = _offset_to_center(float(ox), float(oy), half_w[i], half_h[i])
+        label_center.append([float(ax_x) + dcx, float(ax_y) + dcy])
+
+    ax_bbox = ax.get_window_extent(renderer=renderer)
+    pad = 3.0 * px_per_pt
+
+    def _clamp_center(i: int) -> None:
+        lo_x = float(ax_bbox.x0) + half_w[i] + pad
+        hi_x = float(ax_bbox.x1) - half_w[i] - pad
+        lo_y = float(ax_bbox.y0) + half_h[i] + pad
+        hi_y = float(ax_bbox.y1) - half_h[i] - pad
+        if lo_x <= hi_x:
+            label_center[i][0] = min(max(label_center[i][0], lo_x), hi_x)
+        if lo_y <= hi_y:
+            label_center[i][1] = min(max(label_center[i][1], lo_y), hi_y)
+
+    for i in range(n):
+        _clamp_center(i)
 
     for _ in range(max_iter):
         moved = False
         for i in range(n):
             for j in range(i + 1, n):
-                dx = label_disp[j][0] - label_disp[i][0]
-                dy = label_disp[j][1] - label_disp[i][1]
-                dist = float(np.hypot(dx, dy))
-                if dist >= min_sep_px:
+                dx = label_center[j][0] - label_center[i][0]
+                dy = label_center[j][1] - label_center[i][1]
+                need_x = half_w[i] + half_w[j] + margin_px
+                need_y = half_h[i] + half_h[j] + margin_px
+                overlap_x = need_x - abs(dx)
+                overlap_y = need_y - abs(dy)
+                if overlap_x <= 0 or overlap_y <= 0:
                     continue
-                if dist < 1e-6:
-                    # 完全重合时优先纵向推开
-                    dx, dy, dist = 0.0, 1.0, 1.0
-                push = (min_sep_px - dist) / 2.0
-                ux, uy = dx / dist, dy / dist
-                # 更偏向纵向分离，阅读更清晰
-                if abs(uy) < 0.25:
-                    uy = 1.0 if dy >= 0 else -1.0
-                    ux = 0.15 if dx >= 0 else -0.15
-                    norm = float(np.hypot(ux, uy)) or 1.0
-                    ux, uy = ux / norm, uy / norm
-                label_disp[i][0] -= ux * push
-                label_disp[i][1] -= uy * push
-                label_disp[j][0] += ux * push
-                label_disp[j][1] += uy * push
+                if overlap_y <= overlap_x:
+                    push = overlap_y / 2.0 + 0.5
+                    sign = 1.0 if dy >= 0 else -1.0
+                    if abs(dy) < 1e-6:
+                        sign = 1.0 if (i + j) % 2 == 0 else -1.0
+                    label_center[i][1] -= sign * push
+                    label_center[j][1] += sign * push
+                else:
+                    push = overlap_x / 2.0 + 0.5
+                    sign = 1.0 if dx >= 0 else -1.0
+                    if abs(dx) < 1e-6:
+                        sign = 1.0 if (i + j) % 2 == 0 else -1.0
+                    label_center[i][0] -= sign * push
+                    label_center[j][0] += sign * push
+                moved = True
+        for i in range(n):
+            before = (label_center[i][0], label_center[i][1])
+            _clamp_center(i)
+            if abs(label_center[i][0] - before[0]) > 0.01 or abs(label_center[i][1] - before[1]) > 0.01:
                 moved = True
         if not moved:
             break
 
+    for i in range(n):
+        ax_x, ax_y = anchor_disp[i]
+        pref_ox, pref_oy = preferred_offsets[i]
+        tcx, tcy = _offset_to_center(float(pref_ox), float(pref_oy), half_w[i], half_h[i])
+        target_x, target_y = ax_x + tcx, ax_y + tcy
+        label_center[i][0] += (target_x - label_center[i][0]) * 0.08
+        label_center[i][1] += (target_y - label_center[i][1]) * 0.08
+        _clamp_center(i)
+
+    for _ in range(40):
+        moved = False
+        for i in range(n):
+            for j in range(i + 1, n):
+                dx = label_center[j][0] - label_center[i][0]
+                dy = label_center[j][1] - label_center[i][1]
+                need_x = half_w[i] + half_w[j] + margin_px
+                need_y = half_h[i] + half_h[j] + margin_px
+                if need_x - abs(dx) <= 0 or need_y - abs(dy) <= 0:
+                    continue
+                if need_y - abs(dy) <= need_x - abs(dx):
+                    push = (need_y - abs(dy)) / 2.0 + 0.5
+                    sign = 1.0 if dy >= 0 else -1.0
+                    if abs(dy) < 1e-6:
+                        sign = 1.0 if i < j else -1.0
+                    label_center[i][1] -= sign * push
+                    label_center[j][1] += sign * push
+                else:
+                    push = (need_x - abs(dx)) / 2.0 + 0.5
+                    sign = 1.0 if dx >= 0 else -1.0
+                    if abs(dx) < 1e-6:
+                        sign = 1.0 if i < j else -1.0
+                    label_center[i][0] -= sign * push
+                    label_center[j][0] += sign * push
+                moved = True
+        if not moved:
+            break
+        for i in range(n):
+            _clamp_center(i)
+
     results: list[tuple[float, float]] = []
     for i in range(n):
-        ox = (label_disp[i][0] - anchor_disp[i][0]) / px_per_pt
-        oy = (label_disp[i][1] - anchor_disp[i][1]) / px_per_pt
+        ax_x, ax_y = anchor_disp[i]
+        cx = label_center[i][0] - ax_x
+        cy = label_center[i][1] - ax_y
+        ox, oy = _center_to_offset(cx, cy, half_w[i], half_h[i])
+        if abs(ox) < 6.0 and abs(oy) < 6.0:
+            oy = 14.0 if cy >= 0 else -14.0
         results.append((ox, oy))
     return results
 
@@ -533,29 +720,45 @@ def _draw_end_point_labels(
     x_stagger_pts: float = 8.0,
     value_color_fn: Callable[[str], str] | None = None,
 ) -> None:
-    """绘制曲线末端「点 + 引出线 + 名称/数值」标签，并做纵向避让。
+    """绘制曲线末端「圆点 + 虚线引出 + 名称/数值」标签，并做纵向 AABB 避让。
 
     entries 每项为 ``(x, y, name, value_text, color)``，value_text 含前导空格，如 `` +1.23%``。
     """
     if not entries:
         return
+    fontsize = 11.0
+    heights: list[float] = []
+    for item in entries:
+        name, value_text = item[2], item[3]
+        _, h = _estimate_text_box_pts(f"{name}{value_text}", fontsize, pad_pts=5.0)
+        heights.append(h)
+
     offsets = _dodge_end_label_offsets(
         [item[1] for item in entries],
         ax,
         min_sep_pts=min_sep_pts,
         x_base_pts=x_base_pts,
         x_stagger_pts=x_stagger_pts,
+        heights_pts=heights,
     )
     for (x, y, name, value_text, color), (x_off, y_off) in zip(entries, offsets, strict=True):
-        ax.scatter([x], [y], color=color, edgecolor=BG_COLOR, s=40, zorder=5)
+        ax.scatter(
+            [x],
+            [y],
+            color=color,
+            edgecolor=BG_COLOR,
+            s=48,
+            zorder=5,
+            linewidths=1.1,
+        )
         value_color = value_color_fn(value_text) if value_color_fn is not None else FG_COLOR
         name_area = TextArea(
             name,
-            textprops={"color": color, "fontsize": 11, "fontweight": "bold"},
+            textprops={"color": color, "fontsize": fontsize, "fontweight": "bold"},
         )
         value_area = TextArea(
             value_text,
-            textprops={"color": value_color, "fontsize": 11, "fontweight": "bold"},
+            textprops={"color": value_color, "fontsize": fontsize, "fontweight": "bold"},
         )
         label_box = HPacker(children=[name_area, value_area], align="center", pad=0, sep=1)
         artist = AnnotationBbox(
@@ -566,17 +769,14 @@ def _draw_end_point_labels(
             boxcoords="offset points",
             box_alignment=(0, 0.5),
             frameon=True,
-            pad=0.25,
-            bboxprops={"facecolor": BG_COLOR, "edgecolor": color, "alpha": 0.78},
-            arrowprops={
-                "arrowstyle": "-",
-                "color": color,
-                "alpha": 0.85,
-                "linewidth": 1.0,
-                "connectionstyle": "arc3,rad=0",
-                "shrinkA": 0,
-                "shrinkB": 1,
+            pad=0.28,
+            bboxprops={
+                "facecolor": BG_COLOR,
+                "edgecolor": color,
+                "alpha": 0.82,
+                "boxstyle": "round,pad=0.25",
             },
+            arrowprops=_leader_arrowprops(color, linewidth=1.05),
             zorder=6,
         )
         ax.add_artist(artist)
@@ -586,14 +786,14 @@ def _draw_dodged_text_labels(
     ax: Axes,
     entries: Sequence[tuple[float, float, str, str, tuple[float, float]]],
     *,
-    min_sep_pts: float = 34.0,
+    min_sep_pts: float = 6.0,
     fontsize: float = 10.0,
     ha: str = "center",
     va_from_offset: bool = True,
     scatter: bool = True,
-    scatter_size: float = 42.0,
+    scatter_size: float = 48.0,
 ) -> None:
-    """绘制「点 + 引出线 + 文本框」标签，并对首选偏移做 2D 避让。
+    """绘制「圆点 + 虚线引出 + 文本框」标签，按文本框 AABB 做 2D 避让。
 
     entries 每项为 ``(x, y, text, color, preferred_offset_pts)``。
     """
@@ -601,10 +801,27 @@ def _draw_dodged_text_labels(
         return
     xy_data = [(float(item[0]), float(item[1])) for item in entries]
     preferred = [item[4] for item in entries]
-    offsets = _dodge_label_point_offsets(xy_data, preferred, ax, min_sep_pts=min_sep_pts)
+    sizes = [_estimate_text_box_pts(item[2], fontsize, pad_pts=5.0) for item in entries]
+    offsets = _dodge_label_point_offsets(
+        xy_data,
+        preferred,
+        ax,
+        min_sep_pts=min_sep_pts,
+        sizes_pts=sizes,
+        ha=ha,
+        va_from_offset=va_from_offset,
+    )
     for (x, y, text, color, _), (ox, oy) in zip(entries, offsets, strict=True):
         if scatter:
-            ax.scatter([x], [y], color=color, edgecolor=BG_COLOR, s=scatter_size, zorder=5)
+            ax.scatter(
+                [x],
+                [y],
+                color=color,
+                edgecolor=BG_COLOR,
+                s=scatter_size,
+                zorder=5,
+                linewidths=1.1,
+            )
         if va_from_offset:
             va = "bottom" if oy >= 0 else "top"
         else:
@@ -619,16 +836,14 @@ def _draw_dodged_text_labels(
             fontweight="bold",
             ha=ha,
             va=va,
-            bbox={"facecolor": BG_COLOR, "edgecolor": color, "alpha": 0.75, "pad": 2.5},
-            arrowprops={
-                "arrowstyle": "-",
-                "color": color,
-                "alpha": 0.8,
-                "linewidth": 0.9,
-                "connectionstyle": "arc3,rad=0",
-                "shrinkA": 0,
-                "shrinkB": 1,
+            bbox={
+                "facecolor": BG_COLOR,
+                "edgecolor": color,
+                "alpha": 0.82,
+                "pad": 2.8,
+                "boxstyle": "round,pad=0.28",
             },
+            arrowprops=_leader_arrowprops(color, linewidth=0.95),
             zorder=6,
         )
 

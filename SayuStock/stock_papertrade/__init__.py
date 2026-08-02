@@ -15,14 +15,6 @@
   strategy / candidate_pool / trading_calendar）按需导入。
 """
 
-# pyright/basedpyright 文件级指令 —— 仅作用于本文件。
-# - gsuid_core.* 根包在本文件解析路径下不可达
-# - @with_session 等装饰器动态隐藏 session 形参，基于 pyright 看不到该变换
-# - @sv_*.on_* 装饰器接收未注解的 func
-# - framework.Event / Event.user_pm 联级未注解
-# 上游这些是已知限制，不是本文件代码错误。
-# pyright: reportMissingImports=false, reportImportCycles=false, reportCallIssue=false, reportUnknownVariableType=false, reportUnknownMemberType=false, reportUnknownArgumentType=false, reportUnknownParameterType=false, reportUntypedFunctionDecorator=false, reportUnusedParameter=false, reportUnusedImport=false, reportImplicitStringConcatenation=false
-
 from pathlib import Path
 
 from gsuid_core.logger import logger

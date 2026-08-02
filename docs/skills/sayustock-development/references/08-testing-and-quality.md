@@ -1,0 +1,97 @@
+# 八、测试与质量门
+
+> **返回主入口**：[`../SKILL.md`](../SKILL.md) · **上一章**：[七](./07-config-database-cache.md) · **下一章**：[九、已知坑](./09-developer-pitfalls.md)
+
+## 8.1 测试布局
+
+```
+test/
+├── kline_fixtures.py              # 合成 K 线字符串
+├── market/
+│   ├── fixtures/                  # 东财样例 JSON
+│   ├── test_parse_quote.py
+│   ├── test_parse_kline_board_finance.py
+│   ├── test_okx_parse.py
+│   └── test_composite_routing.py
+├── test_render_text.py            # 文字完整性 + 与 indicators 一致
+├── test_ai_text_delivery.py       # 冷/热缓存都发 ai_return
+├── test_intraday_align.py         # 跨天分时轴
+├── test_indicators.py
+├── test_stock_analysis_unit.py
+├── test_papertrade_*.py           # 日历/撮合/策略/候选池/账户 scope…
+└── test_end_label_dodge.py
+```
+
+## 8.2 怎么跑
+
+在 monorepo 或插件上下文设置 `PYTHONPATH` 指向含 `gsuid_core` 的根，例如：
+
+```powershell
+$env:PYTHONPATH="F:\gsuid_core"
+cd F:\gsuid_core\gsuid_core\plugins\SayuStock
+python -m pytest test/ -q
+```
+
+当前规模约 **235 passed + 1 skipped**（本地缓存缺失时 `test_intraday_align` 部分 skip）。
+
+## 8.3 分层测什么
+
+| 层 | 测什么 | 不要测什么 |
+|----|--------|------------|
+| market parse | fixture JSON → 模型字段 | 真网 HTTP（CI 默认） |
+| composite | query 路由到哪个 fake port | |
+| render_text | 指标标签齐全、数值 ≈ compute_indicators | 真 LLM |
+| ai_text_delivery | mock fetch + 真 render_image_file 缓存路径 | 真行情 |
+| indicators | 纯函数数学 | |
+| papertrade | 日历/撮合/策略纯逻辑 | 真下单 |
+
+构造模型：优先直接 `Quote`/`KlineSeries`/`BoardSnapshot` dataclass；adapter 测试可用
+`compat` 仅做对照。
+
+## 8.4 静态检查
+
+```powershell
+python -m ruff check SayuStock/
+python -m pyright SayuStock/   # 或 basedpyright；exclude Kronos
+```
+
+`pyproject.toml`：
+
+- `include = ["SayuStock"]`  
+- `exclude = ["SayuStock/Kronos"]`  
+- `extraPaths` 指向 Core  
+
+## 8.5 代码风格红线（与 GsCore 对齐）
+
+若仓库有 `docs/LLM.md`，以之为准。插件侧实践：
+
+1. **禁止**用 `try/except` 吞类型错误；外部 JSON 可解析处按需收窄。  
+2. **禁止**业务里 `dict.get`/`getattr` 兜底读 `f*` —— 用模型字段。  
+3. 函数参数/返回值有类型注解。  
+4. 可能阻塞的网络/画图用 `async` + `asyncio.to_thread`。  
+5. `#` 注释宜短（≤2 行、行宽克制）。
+
+## 8.6 改核心链路时的最小回归集
+
+| 改动 | 必跑 |
+|------|------|
+| market parse / Port | `test/market/` |
+| render_data / 分时轴 | `test_intraday_align` + `test_render_text` |
+| ai_return / 缓存 | `test_ai_text_delivery` |
+| indicators | `test_indicators` + `test_render_text` 一致性用例 |
+| papertrade | 对应 `test_papertrade_*` |
+| 大范围重构 | 全量 `pytest test/` |
+
+## 8.7 Fixtures 约定
+
+- `test/market/fixtures/*.json`：真实响应裁剪，勿提交密钥 Cookie  
+- `kline_fixtures.make_klines(n, seed)`：可复现 OHLC 序列  
+- 测试写缓存到用户 `DATA_PATH` 时：**前后 unlink**，勿污染真实数据目录  
+
+## 8.8 手工冒烟（改出图后）
+
+1. `个股 茅台` / `个股 日k 茅台`  
+2. `大盘云图` / `行业云图 半导体` / `概念云图 xxx`  
+3. `对比个股 沪深300 中证白酒`  
+4. `我的个股`（需先添加自选）  
+5. 若有 AI：同命令问两次，确认第二次仍有文字（热缓存）  

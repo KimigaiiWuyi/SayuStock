@@ -81,6 +81,8 @@ def _load_chart_base():
 chart_base = _load_chart_base()
 _dodge_end_label_offsets = chart_base._dodge_end_label_offsets
 _dodge_label_point_offsets = chart_base._dodge_label_point_offsets
+_estimate_text_box_pts = chart_base._estimate_text_box_pts
+_leader_arrowprops = chart_base._leader_arrowprops
 _format_detail_legend_label = chart_base._format_detail_legend_label
 _pct_change = chart_base._pct_change
 
@@ -102,6 +104,21 @@ def test_dodge_identical_ys_are_spread():
         assert y_offs[1] - y_offs[0] >= 18.0
         assert y_offs[2] - y_offs[1] >= 18.0
         assert all(o[0] > 0 for o in offsets)
+    finally:
+        plt.close(fig)
+
+
+def test_dodge_with_explicit_heights_spreads_more():
+    """高多行标签应按框高拉开，而不是固定 20pt 中心距。"""
+    fig, ax = _make_ax(y_min=-5, y_max=5)
+    try:
+        ys = [0.0, 0.0, 0.0]
+        heights = [40.0, 40.0, 40.0]
+        offsets = _dodge_end_label_offsets(ys, ax, min_sep_pts=12.0, heights_pts=heights)
+        y_offs = sorted(o[1] for o in offsets)
+        # 半高 20 + gap → 中心距至少约 40pt 量级
+        assert y_offs[1] - y_offs[0] >= 28.0
+        assert y_offs[2] - y_offs[1] >= 28.0
     finally:
         plt.close(fig)
 
@@ -147,15 +164,46 @@ def test_point_offsets_repel_overlapping_preferred():
     try:
         xy = [(1.0, 1.0), (1.0, 1.05), (1.0, 1.1)]
         preferred = [(-14.0, 14.0), (-14.0, 14.0), (-14.0, 14.0)]
-        offsets = _dodge_label_point_offsets(xy, preferred, ax, min_sep_pts=30.0)
+        sizes = [(80.0, 36.0), (80.0, 36.0), (80.0, 36.0)]
+        offsets = _dodge_label_point_offsets(xy, preferred, ax, min_sep_pts=6.0, sizes_pts=sizes)
         assert len(offsets) == 3
-        # 三个标签不应仍落在完全相同的 offset
         assert len({(round(o[0], 2), round(o[1], 2)) for o in offsets}) >= 2
-        # 至少有纵向被推开
         y_offs = [o[1] for o in offsets]
-        assert max(y_offs) - min(y_offs) >= 10.0
+        assert max(y_offs) - min(y_offs) >= 12.0
     finally:
         plt.close(fig)
+
+
+def test_point_offsets_aabb_for_multiline_near_same_point():
+    """同点附近的多行大标签应被推开到框不重叠。"""
+    fig, ax = _make_ax(y_min=-20, y_max=20)
+    try:
+        xy = [(5.0, 0.0), (5.0, 0.2), (5.0, -0.2), (5.1, 0.0)]
+        preferred = [(-20.0, 20.0)] * 4
+        sizes = [(90.0, 48.0)] * 4
+        offsets = _dodge_label_point_offsets(xy, preferred, ax, min_sep_pts=6.0, sizes_pts=sizes, max_iter=150)
+        # 四个 offset 不应全相同
+        uniq = {(round(o[0], 1), round(o[1], 1)) for o in offsets}
+        assert len(uniq) >= 3
+        # 至少一对在 y 上拉开
+        ys = [o[1] for o in offsets]
+        assert max(ys) - min(ys) >= 20.0
+    finally:
+        plt.close(fig)
+
+
+def test_estimate_text_box_grows_with_lines():
+    w1, h1 = _estimate_text_box_pts("甲", 10.0)
+    w2, h2 = _estimate_text_box_pts("甲\n涨幅 +1.2%\n区间最大涨幅 +3%", 10.0)
+    assert h2 > h1 * 2
+    assert w2 >= w1
+
+
+def test_leader_arrow_is_dashed():
+    props = _leader_arrowprops("#fff")
+    assert "linestyle" in props
+    ls = props["linestyle"]
+    assert ls == "-" or (isinstance(ls, tuple) and len(ls) == 2)
 
 
 def test_detail_legend_label_format():

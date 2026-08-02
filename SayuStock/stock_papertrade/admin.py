@@ -9,19 +9,12 @@ PM gate + private chat gate 完全交给框架层（``gsuid_core/handler.py`` �
   消息 → DB 状态总览）。
 """
 
-# pyright/basedpyright 文件级指令 —— 仅作用于本文件。
-# - gsuid_core.* 根包在本文件解析路径下不可达
-# - @with_session 等装饰器动态隐藏 session 形参，基于 pyright 看不到该变换
-# - framework.Event / Event.user_pm 联级未注解
-# - ai_core 的 LLM / Kanban / agent / proactive emitter 上游未注解
-# - 上述模块返回对象 (AIAgentTask / scheduler / profile) 大量字段为 Any
-# 上游这些是已知限制，不是本文件代码错误。
-# pyright: reportMissingImports=false, reportCallIssue=false, reportUnknownVariableType=false, reportUnknownMemberType=false, reportUnknownArgumentType=false, reportUnknownParameterType=false, reportUntypedFunctionDecorator=false, reportUnusedParameter=false, reportUnusedImport=false, reportImplicitStringConcatenation=false, reportAny=false, reportExplicitAny=false
-
 import time as _time
 import asyncio
 import datetime as _dt
 from typing import Any
+
+from apscheduler.schedulers.base import BaseScheduler
 
 from gsuid_core.bot import Bot
 from gsuid_core.models import Event
@@ -42,7 +35,7 @@ from ..utils.database.papertrade_models import (
 @sv_papertrade_admin.on_fullmatch(
     ("模拟盘清盘"),
 )
-async def send_clear_all(bot: Bot, ev: Event):
+async def send_clear_all(bot: Bot, ev: Event) -> list[str] | None:
     """一键清掉 模拟盘在 DB / Kanban / APScheduler 上的所有残留。
 
     清理范围（按顺序）：
@@ -217,7 +210,7 @@ async def send_clear_all(bot: Bot, ev: Event):
 @sv_papertrade_admin.on_fullmatch(
     ("模拟盘模拟测试"),
 )
-async def send_dry_run(bot: Bot, ev: Event):
+async def send_dry_run(bot: Bot, ev: Event) -> list[str] | None:
     """真 agent 端到端压测（master-only，5 段决策流 + auto-cleanup）。
 
     ⚠️ **会真调 LLM API 并烧 token** + **会真调东财/雪球接口** +
@@ -317,16 +310,20 @@ async def send_dry_run(bot: Bot, ev: Event):
                 preflight_lines.append(f"✅ {p} 已注册")
 
     # 2) APScheduler 运行检查
-    sched: Any = None
+    sched: BaseScheduler | None = None
     try:
         from gsuid_core.aps import scheduler as aps_scheduler  # noqa: E402  -- 懒加载
 
-        sched = aps_scheduler
-    except Exception as e:
+        if isinstance(aps_scheduler, BaseScheduler):
+            sched = aps_scheduler
+        else:
+            preflight_ok = False
+            preflight_lines.append(f"❌ APScheduler 类型异常: {type(aps_scheduler)!r}")
+    except (ImportError, RuntimeError, AttributeError) as e:
         preflight_ok = False
         preflight_lines.append(f"❌ 加载 APScheduler 失败: {e}")
     if sched is not None:
-        running: bool = bool(getattr(sched, "running", False))
+        running: bool = bool(sched.running)
         preflight_lines.append(f"{'✅' if running else '❌'} APScheduler running={running}")
         if not running:
             preflight_ok = False

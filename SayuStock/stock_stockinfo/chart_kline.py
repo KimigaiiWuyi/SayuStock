@@ -19,7 +19,6 @@ from .chart_base import (
     Figure,
     Volume,
     BarPlot,
-    JsonDict,
     LinePlot,
     Indicator,
     Rectangle,
@@ -28,9 +27,7 @@ from .chart_base import (
     FuncFormatter,
     np,
     pd,
-    _as_dict,
     _setup_mpl,
-    _dict_value,
     _style_axis,
     _fig_to_image,
     _frame_column,
@@ -46,6 +43,7 @@ from .chart_base import (
 )
 from .render_data import build_kline_render_data
 from ..utils.constant import ErroText
+from ..utils.market.models import KlineSeries
 
 # BOLL 带的填充色（与 mplchart 自带 BBANDS 的观感一致：短期红、中期紫）
 BOLL20_COLOR = "#c0392b"
@@ -73,22 +71,23 @@ class BOLL(Indicator):
         # get_label 优先取 .label；color_scheme 用它做键来指定填充色
         self.label = f"BOLL({period},{nbdev})"
 
-    # mplchart 的 Indicator.__call__ 是抽象方法且没标返回类型，pyright 只能从空函数体
-    # 推断成 None —— 于是任何返回值的实现都算"不兼容重写"，mplchart 自带的每个指标
-    # （含 BBANDS）都一样，只是 site-packages 不受检查。这是库的标注缺失，不是本地错误。
-    def __call__(self, prices: pd.DataFrame) -> pd.DataFrame:  # pyright: ignore[reportIncompatibleMethodOverride]
+    def _compute(self, prices: pd.DataFrame) -> pd.DataFrame:
         _mid, upper, lower = ind.boll(_frame_column(prices, "close"), self.period, self.nbdev)
         return pd.DataFrame({"upperband": upper, "lowerband": lower})
 
+    # mplchart.Indicator.__call__ stub 无返回类型，直接 override 会报 incompatible；
+    # 用同名可调用属性挂到实例协议上，运行时与 __call__ 等价。
+    __call__ = _compute
 
-async def to_single_fig_kline(raw_data: JsonDict, sp: str | None = None) -> DrawResult:
-    return await _draw_in_thread(draw_single_kline_chart, raw_data, sp)
+
+async def to_single_fig_kline(series: KlineSeries, sp: str | None = None) -> DrawResult:
+    return await _draw_in_thread(draw_single_kline_chart, series, sp)
 
 
-def draw_single_kline_chart(raw_data: JsonDict, sp: str | None = None) -> DrawResult:
+def draw_single_kline_chart(series: KlineSeries, sp: str | None = None) -> DrawResult:
     _ = sp
     _setup_mpl()
-    data = build_kline_render_data(raw_data)
+    data = build_kline_render_data(series)
     if isinstance(data, str):
         return data
     kline = data
@@ -132,8 +131,7 @@ def draw_single_kline_chart(raw_data: JsonDict, sp: str | None = None) -> DrawRe
     prices["rsi24"] = ind.rsi(close, 24)
     prices["macd_dif"], prices["macd_dea"], prices["macd_bar"] = ind.macd(close)
 
-    raw_info = _as_dict(raw_data["data"])
-    raw_title_name = str(_dict_value(raw_info, "name", "")).strip()
+    raw_title_name = (series.symbol.name or "").strip()
     kline_title = f"{raw_title_name} {kline.freq_label}" if raw_title_name else kline.title
 
     chart = Chart(

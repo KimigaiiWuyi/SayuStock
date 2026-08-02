@@ -16,7 +16,7 @@ sv_stock_cloudmap = SV("大盘云图")
 
 # 每日零点二十清理过期缓存数据，避免每天全量清空影响长周期缓存。
 @scheduler.scheduled_job("cron", hour=0, minute=20)
-async def delete_all_data():
+async def delete_all_data() -> None:
     retention_days = int(STOCK_CONFIG.get_config("stock_cache_retention_days").data)
     expired_before = datetime.datetime.now() - timedelta(days=retention_days)
     logger.info(f"[SayuStock] 开始执行[清理{retention_days}天前缓存数据]")
@@ -41,7 +41,7 @@ async def delete_all_data():
               例如 "" 或 "医药" 或 "科技"
     """,
 )
-async def send_cloudmap_img(bot: Bot, ev: Event):
+async def send_cloudmap_img(bot: Bot, ev: Event) -> None:
     logger.info("开始执行[大盘云图]")
     im = await render_image("大盘云图", ev.text.strip())
     await bot.send(im)
@@ -58,7 +58,7 @@ async def send_cloudmap_img(bot: Bot, ev: Event):
         text: 行业板块名称，例如 "半导体"、"新能源"、"医药"、"白酒"
     """,
 )
-async def send_typemap_img(bot: Bot, ev: Event):
+async def send_typemap_img(bot: Bot, ev: Event) -> None:
     logger.info("开始执行[板块云图]")
     im = await render_image("行业云图", ev.text.strip())
     await bot.send(im)
@@ -76,7 +76,7 @@ async def send_typemap_img(bot: Bot, ev: Event):
         text: 概念板块名称，例如 "华为欧拉"、"人工智能"、"机器人"、"芯片"
     """,
 )
-async def send_gn_img(bot: Bot, ev: Event):
+async def send_gn_img(bot: Bot, ev: Event) -> None:
     logger.info("开始执行[概念云图]")
     im = await render_image("概念云图", ev.text.strip())
     await bot.send(im)

@@ -12,7 +12,7 @@ sv_stock_help = SV("SayuStock帮助", priority=1)
 
 
 @sv_stock_help.on_fullmatch(("股票帮助", "SayuStock帮助"), block=True)
-async def send_stock_help_img(bot: Bot, ev: Event):
+async def send_stock_help_img(bot: Bot, ev: Event) -> None:
     logger.info("[SayuStock] 开始执行[股票帮助]")
     await bot.send(await get_help())
 

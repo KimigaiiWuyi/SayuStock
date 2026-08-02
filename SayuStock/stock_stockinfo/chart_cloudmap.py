@@ -3,7 +3,6 @@
 from .chart_base import (
     BG_COLOR,
     FG_COLOR,
-    JsonDict,
     Sequence,
     Rectangle,
     DrawResult,
@@ -15,10 +14,13 @@ from .chart_base import (
     _draw_in_thread,
 )
 from .render_data import build_cloudmap_render_data
+from ..utils.market.models import BoardSnapshot
+
+CloudmapItem = dict[str, object]
 
 
-async def to_fig(raw_data: JsonDict, market: str, sector: str | None = None, layer: int = 2) -> DrawResult:
-    return await _draw_in_thread(draw_cloudmap_chart, raw_data, market, sector, layer)
+async def to_fig(snap: BoardSnapshot, market: str, sector: str | None = None, layer: int = 2) -> DrawResult:
+    return await _draw_in_thread(draw_cloudmap_chart, snap, market, sector, layer)
 
 
 def _color_for_diff(diff: float) -> tuple[float, float, float]:
@@ -31,8 +33,8 @@ def _color_for_diff(diff: float) -> tuple[float, float, float]:
 
 
 def _split_rect(
-    items: Sequence[JsonDict], x: float, y: float, w: float, h: float
-) -> list[tuple[JsonDict, float, float, float, float]]:
+    items: Sequence[CloudmapItem], x: float, y: float, w: float, h: float
+) -> list[tuple[CloudmapItem, float, float, float, float]]:
     if not items:
         return []
     if len(items) == 1:
@@ -64,9 +66,9 @@ def _split_rect(
     return _split_rect(first, x, y, w, first_h) + _split_rect(second, x, y + first_h, w, h - first_h)
 
 
-def draw_cloudmap_chart(raw_data: JsonDict, market: str, sector: str | None = None, layer: int = 2) -> DrawResult:
+def draw_cloudmap_chart(snap: BoardSnapshot, market: str, sector: str | None = None, layer: int = 2) -> DrawResult:
     _setup_mpl()
-    data = build_cloudmap_render_data(raw_data, market, sector, layer)
+    data = build_cloudmap_render_data(snap, market, sector, layer)
     if isinstance(data, str):
         return data
     cloudmap = data
@@ -79,7 +81,7 @@ def draw_cloudmap_chart(raw_data: JsonDict, market: str, sector: str | None = No
     ax.set_ylim(0, 1)
     ax.axis("off")
 
-    items: list[JsonDict] = cloudmap.df.to_dict("records")
+    items: list[CloudmapItem] = cloudmap.df.to_dict("records")
     for item, x, y, w, h in _split_rect(items, 0.0, 0.0, 1.0, 1.0):
         pad = 0.0025
         rx = x + pad

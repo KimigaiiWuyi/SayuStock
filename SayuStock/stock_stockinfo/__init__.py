@@ -44,7 +44,7 @@ MS_MAP = {
         text: 无需参数，留空即可
     """,
 )
-async def send_my_stock_img(bot: Bot, ev: Event):
+async def send_my_stock_img(bot: Bot, ev: Event) -> list[str] | None:
     logger.info("开始执行[我的个股数据]")
     user_id = ev.at if ev.at else ev.user_id
     uid = await SsBind.get_uid_list_by_game(user_id, ev.bot_id)
@@ -84,7 +84,7 @@ async def send_my_stock_img(bot: Bot, ev: Event):
               - VIX指数：例如 "300vix"（仅支持分时，不支持K线）
     """,
 )
-async def send_stock_img(bot: Bot, ev: Event):
+async def send_stock_img(bot: Bot, ev: Event) -> list[str] | None:
     logger.info("开始执行[个股数据]")
     content = ev.text.strip().lower()
     if not content:
@@ -129,7 +129,7 @@ async def send_stock_img(bot: Bot, ev: Event):
               - 不指定标的则对比用户自选列表
     """,
 )
-async def send_compare_img(bot: Bot, ev: Event):
+async def send_compare_img(bot: Bot, ev: Event) -> list[str] | None:
     logger.info("开始执行[对比个股]")
     txt = (
         ev.text.strip()

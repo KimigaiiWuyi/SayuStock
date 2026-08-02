@@ -8,12 +8,12 @@ from gsuid_core.utils.image.convert import convert_img
 from gsuid_core.ai_core.trigger_bridge import ai_return
 
 from ..utils.image import get_footer
-from .draw_my_info import DIFF_MAP, TEXT_PATH, draw_bar
-from ..utils.stock.request import get_gg
+from .draw_my_info import DIFF_MAP, TEXT_PATH, draw_bar_from_quote
+from ..utils.market import get_market, is_market_error
 from ..utils.stock.request_utils import get_code_id, get_fund_pos_list
 
 
-async def draw_fund_info(fcode: Union[str, int]):
+async def draw_fund_info(fcode: Union[str, int]) -> str | bytes:
     _code = await get_code_id(str(fcode))
     if _code is None:
         return "基金代码有误，请检查后重新输入~"
@@ -38,20 +38,15 @@ async def draw_fund_info(fcode: Union[str, int]):
     )
 
     all_p = 0.0
+    market = get_market()
     for index, d in enumerate(fund_data["Datas"]):
         share_code: str = d["ShareCode"]
-        data = await get_gg(
-            share_code,
-            "single-stock",
-        )
+        q = await market.quote(share_code)
         percent = f"{d['ShareProportion']}%"
-        if isinstance(data, str):
+        if is_market_error(q):
             continue
-        bar = draw_bar(data, _code[0], percent=percent)
-        if isinstance(data["data"]["f170"], str):
-            all_p += 0
-        else:
-            all_p += data["data"]["f170"]
+        bar = draw_bar_from_quote(q, _code[0], percent=percent)
+        all_p += float(q.change_pct) if q.change_pct is not None else 0.0
         img.paste(bar, (0, 400 + index * 110), bar)
 
     avg_p = all_p / len(fund_data["Datas"])
@@ -84,7 +79,7 @@ async def draw_fund_info(fcode: Union[str, int]):
     return res
 
 
-def _ai_return_fund_info(code_info, fund_data, all_p):
+def _ai_return_fund_info(code_info: dict[str, object], fund_data: list[object], all_p: list[object]) -> None:
     """从基金持仓数据中提取文本信息，通过 ai_return 返回给 AI 分析"""
     try:
         fund_name = code_info[1]

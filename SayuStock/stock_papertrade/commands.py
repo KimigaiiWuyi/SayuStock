@@ -273,7 +273,7 @@ Args:
     text: 自定义初始资金（如 2000000），留空用默认 100w
 """,
 )
-async def send_init_command(bot: Bot, ev: Event):
+async def send_init_command(bot: Bot, ev: Event) -> list[str] | None:
     """用户输入「模拟盘初始化」时执行。
 
     完整 6 步：
@@ -477,7 +477,7 @@ async def _kick_after_kanban_ready(ev: Event, group_id: str, bot_id: str, init_i
 @sv_papertrade.on_fullmatch(
     ("模拟盘查看",),
 )
-async def send_view(bot: Bot, ev: Event):
+async def send_view(bot: Bot, ev: Event) -> list[str] | None:
     gid, bid = await _scope.resolve_account_key(ev)
     if not gid or not bid:
         return await bot.send("ℹ️ 尚未开通模拟盘，请群主/管理员发送「模拟盘初始化」")
@@ -491,7 +491,7 @@ async def send_view(bot: Bot, ev: Event):
 @sv_papertrade.on_prefix(
     ("模拟盘收益",),
 )
-async def send_pnl(bot: Bot, ev: Event):
+async def send_pnl(bot: Bot, ev: Event) -> list[str] | None:
     text: str = ev.text.strip()
     # 把"近 N 天"和"自某日期"两类周期统一到 since: datetime | None。
     # 关键修复：ytd = 今年 1/1 至今，不是 now-365d，否则 6 月份触发会少算 6 个月。
@@ -547,7 +547,7 @@ async def send_pnl(bot: Bot, ev: Event):
 @sv_papertrade.on_fullmatch(
     ("模拟盘记录",),
 )
-async def send_records(bot: Bot, ev: Event):
+async def send_records(bot: Bot, ev: Event) -> list[str] | None:
     gid, bid = await _scope.resolve_account_key(ev)
     if not gid or not bid:
         return await bot.send("ℹ️ 尚未开通模拟盘，请群主/管理员发送「模拟盘初始化」")
@@ -570,7 +570,7 @@ async def send_records(bot: Bot, ev: Event):
 @sv_papertrade.on_fullmatch(
     ("模拟盘排行",),
 )
-async def send_leaderboard(bot: Bot, ev: Event):
+async def send_leaderboard(bot: Bot, ev: Event) -> list[str] | None:
     if not await check_admin(ev):
         return await bot.send("⚠️ 仅群主/管理员可看跨群排行")
     img = await draw_leaderboard()
@@ -583,7 +583,7 @@ async def send_leaderboard(bot: Bot, ev: Event):
 @sv_papertrade.on_prefix(
     ("模拟盘查询",),
 )
-async def send_query_group(bot: Bot, ev: Event):
+async def send_query_group(bot: Bot, ev: Event) -> list[str] | None:
     if not await check_admin(ev):
         return await bot.send("⚠️ 仅群主/管理员可跨群查询")
     target: str = ev.text.strip()

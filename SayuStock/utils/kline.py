@@ -12,11 +12,9 @@
 指标数学见 ``SayuStock/utils/indicators.py``。
 """
 
-from typing import Dict, Optional
+from typing import Optional
 
 import pandas as pd
-
-from .indicators import ma, normalize_pct
 
 KLINE_HEADERS = [
     "日期",
@@ -50,36 +48,15 @@ KLINE_COLUMNS = [
 _NUMERIC_COLS = KLINE_HEADERS[1:]
 
 
-def fill_kline(raw_data: Dict) -> Optional[pd.DataFrame]:
-    """把东财 K 线接口返回解析成 DataFrame，并补上均线与归一化列。
+def fill_kline(series: object) -> Optional[pd.DataFrame]:
+    """``KlineSeries`` → 中文列 DataFrame（画图链路）。"""
+    from .market.models import KlineSeries
+    from .market.convert.dataframe import kline_to_cn_df
 
-    ``归一化`` = 相对首日收盘的累计涨跌幅（小数），多标的对比时把不同价位的
-    股票拉到同一起点 —— 注意它是**累计涨跌幅**而非价格，两点相减只是百分点
-    之差，算区间涨跌请用 ``indicators.swing_stats``。
-    """
-    if not raw_data["data"]["klines"]:
+    if not isinstance(series, KlineSeries):
         return None
-
-    kline_dict: Dict[str, list] = {header: [] for header in KLINE_HEADERS}
-    for line in raw_data["data"]["klines"]:
-        values = line.split(",")
-        for header, value in zip(KLINE_HEADERS, values):
-            kline_dict[header].append(value)
-    df = pd.DataFrame(kline_dict)
-
-    for col in _NUMERIC_COLS:
-        if col in df.columns:
-            df[col] = pd.to_numeric(df[col], errors="coerce")  # coerce 处理无法转换的值
-
-    # 计算均线前先确保关键列没有 NaN，否则均线也会是 NaN
-    df = df.dropna(subset=["开盘", "收盘", "成交量"]).reset_index(drop=True)
-
-    df["5日均线"] = ma(df["收盘"], 5)
-    df["10日均线"] = ma(df["收盘"], 10)
-    df["换手率"] = df["换手率"].astype(float)
-    df["归一化"] = normalize_pct(df["收盘"])
-
-    return df
+    df = kline_to_cn_df(series)
+    return None if df.empty else df
 
 
 def klines_to_df(klines: list[str]) -> pd.DataFrame:

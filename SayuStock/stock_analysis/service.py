@@ -1,12 +1,13 @@
-"""分析命令编排：拉数 → 报告 → 出图。"""
+"""分析命令编排：拉数 → 报告 → 出图。
+
+出图结果统一为 ``BotSendContent``（``str | bytes``），与 ``Bot.send`` 入参对齐；
+内部 PIL ``Image`` 仅在 render 层出现，编排层负责 ``convert_img``。
+"""
 
 from __future__ import annotations
 
-from typing import Union
-
-from PIL import Image
-
 from gsuid_core.logger import logger
+from gsuid_core.utils.image.convert import convert_img
 
 from .card import build_trade_card
 from .render import (
@@ -23,47 +24,48 @@ from .technical import (
     parse_period_and_query,
 )
 from ..utils.utils import convert_list
-from ..utils.stock.request import get_gg
+from ..utils.market import KlinePeriod, get_market, kline_to_df, is_market_error
+from ..stock_stockinfo.chart_base import BotSendContent
 
-DrawOut = Union[str, Image.Image]
 _RENDER_ERRORS = (OSError, RuntimeError, ValueError, TypeError, MemoryError)
 
 
-async def run_technical_analysis(text: str) -> DrawOut:
+def _period_to_enum(code: str) -> KlinePeriod:
+    try:
+        return KlinePeriod(code)
+    except ValueError:
+        return KlinePeriod.D1
+
+
+async def run_technical_analysis(text: str) -> BotSendContent:
     period, query = parse_period_and_query(text)
     if not query:
         return "❌请后跟股票代码或名称，例如：技术分析 茅台\n可选周期：日k/周k/月k/60k  例如：技术分析 周k 600519"
-    sector = f"single-stock-kline-{period}"
-    raw = await get_gg(query, sector)
-    if isinstance(raw, str):
-        return raw
-    if not isinstance(raw, dict):
-        return "❌无法获取K线数据"
-    data = raw["data"] if "data" in raw and isinstance(raw["data"], dict) else {}
-    klines_raw = data["klines"] if "klines" in data and isinstance(data["klines"], list) else []
-    klines = [str(x) for x in klines_raw]
-    name = str(
-        data["name"] if "name" in data and data["name"] else (data["f58"] if "f58" in data and data["f58"] else query)
+    series = await get_market().kline(query, _period_to_enum(period))
+    if is_market_error(series):
+        return series.message
+    df = kline_to_df(series)
+    report = build_technical_report(
+        name=series.symbol.name,
+        code=series.symbol.code,
+        period_code=period,
+        ohlcv_df=df,
     )
-    code = str(
-        data["code"] if "code" in data and data["code"] else (data["f57"] if "f57" in data and data["f57"] else query)
-    )
-    report = build_technical_report(name=name, code=code, period_code=period, klines=klines)
     if isinstance(report, str):
         return report
     try:
-        return render_technical_image(report)
+        return await convert_img(render_technical_image(report))
     except _RENDER_ERRORS as e:
         logger.exception(f"[stock_analysis] technical render fail: {e}")
         return report_to_text(report)
 
 
-async def run_stock_card(text: str) -> DrawOut:
+async def run_stock_card(text: str) -> BotSendContent:
     card = await build_trade_card(text)
     if isinstance(card, str):
         return card
     try:
-        return render_card_image(card)
+        return await convert_img(render_card_image(card))
     except _RENDER_ERRORS as e:
         logger.exception(f"[stock_analysis] card render fail: {e}")
         lines = [
@@ -78,12 +80,12 @@ async def run_stock_card(text: str) -> DrawOut:
         return "\n".join(lines)
 
 
-async def run_auto_screener(text: str) -> DrawOut:
+async def run_auto_screener(text: str) -> BotSendContent:
     result = await run_screener(text)
     if result.error:
         return result.error
     try:
-        return render_screener_image(result)
+        return await convert_img(render_screener_image(result))
     except _RENDER_ERRORS as e:
         logger.exception(f"[stock_analysis] screener render fail: {e}")
         if result.df.empty:
@@ -99,7 +101,7 @@ async def run_auto_screener(text: str) -> DrawOut:
         return "\n".join(lines)
 
 
-async def run_portfolio_check(text: str, *, user_codes: list[str] | None = None) -> DrawOut:
+async def run_portfolio_check(text: str, *, user_codes: list[str] | None = None) -> BotSendContent:
     """text 可为空（用自选）或空格分隔代码。"""
     codes: list[str] = []
     if text and text.strip():
@@ -114,7 +116,7 @@ async def run_portfolio_check(text: str, *, user_codes: list[str] | None = None)
     if isinstance(report, str):
         return report
     try:
-        return render_portfolio_image(report)
+        return await convert_img(render_portfolio_image(report))
     except _RENDER_ERRORS as e:
         logger.exception(f"[stock_analysis] portfolio render fail: {e}")
         return "\n".join(report.messages)

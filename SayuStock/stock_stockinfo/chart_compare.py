@@ -12,7 +12,6 @@ from .chart_base import (
     HLine,
     Price,
     Figure,
-    JsonDict,
     DrawResult,
     FuncFormatter,
     np,
@@ -35,15 +34,16 @@ from .chart_base import (
 )
 from .render_data import build_compare_render_data
 from ..utils.constant import ErroText
+from ..utils.market.models import KlineSeries
 
 
-async def to_compare_fig(raw_datas: list[JsonDict]) -> DrawResult:
-    return await _draw_in_thread(draw_compare_chart, raw_datas)
+async def to_compare_fig(series_list: list[KlineSeries]) -> DrawResult:
+    return await _draw_in_thread(draw_compare_chart, series_list)
 
 
-def draw_compare_chart(raw_datas: list[JsonDict]) -> DrawResult:
+def draw_compare_chart(series_list: list[KlineSeries]) -> DrawResult:
     _setup_mpl()
-    data = build_compare_render_data(raw_datas)
+    data = build_compare_render_data(series_list)
     if isinstance(data, str):
         return data
     compare = data
@@ -161,7 +161,8 @@ def draw_compare_chart(raw_datas: list[JsonDict]) -> DrawResult:
                         stock_color,
                     )
                 )
-            ax.set_xlim(-1, x_right + max(9, 5 + len(end_entries)))
+            # 右侧多留白：末端标签横向扇出 + 虚线引出
+            ax.set_xlim(-1, x_right + max(12, 6 + len(end_entries) * 1.4))
 
             def _end_value_color(value_text: str) -> str:
                 try:
@@ -169,7 +170,14 @@ def draw_compare_chart(raw_datas: list[JsonDict]) -> DrawResult:
                 except ValueError:
                     return FG_COLOR
 
-            _draw_end_point_labels(ax, end_entries, value_color_fn=_end_value_color)
+            _draw_end_point_labels(
+                ax,
+                end_entries,
+                min_sep_pts=24.0,
+                x_base_pts=20.0,
+                x_stagger_pts=10.0,
+                value_color_fn=_end_value_color,
+            )
 
             # 标注每条对比序列的最高点、最低点，并显示区间最大涨幅/回撤。
             # 区间涨幅/回撤的终点是波段自己的峰/谷，不一定是全局极值点，
@@ -188,8 +196,8 @@ def draw_compare_chart(raw_datas: list[JsonDict]) -> DrawResult:
                 color: str,
                 above: bool,
             ) -> None:
-                # 极值点 tag 向左侧偏移，避免与右侧的“最后一点”标签重叠
-                preferred = (-18.0, 16.0 if above else -16.0)
+                # 极值点默认向左上/左下；密集时 AABB 避让会再推开，虚线仍连回锚点
+                preferred = (-22.0, 22.0 if above else -22.0)
                 extreme_entries.append((float(position), float(value), text, color, preferred))
 
             for compare_index, column_name in enumerate(compare_columns):
@@ -280,7 +288,7 @@ def draw_compare_chart(raw_datas: list[JsonDict]) -> DrawResult:
                         above=False,
                     )
 
-            _draw_dodged_text_labels(ax, extreme_entries, min_sep_pts=36.0, fontsize=10.0)
+            _draw_dodged_text_labels(ax, extreme_entries, min_sep_pts=6.0, fontsize=10.0)
 
             # 末端标签的 xlim 已在上方设定；极值标注完成后保持右侧留白
             _apply_month_ticks(ax, prices.index)

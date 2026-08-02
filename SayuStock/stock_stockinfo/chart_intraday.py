@@ -20,7 +20,6 @@ from .chart_base import (
     Price,
     Figure,
     NDArray,
-    JsonDict,
     DrawResult,
     FuncFormatter,
     np,
@@ -46,6 +45,7 @@ from .render_data import (
     build_single_stock_render_data,
 )
 from ..utils.constant import ErroText
+from ..utils.market.models import IntradaySeries
 
 
 def _clean_stock_display_name(name: str) -> str:
@@ -108,14 +108,14 @@ def _draw_single_stock_bg_watermark(ax: Axes, stock: SingleStockRenderData) -> N
     ax.text(0.5, y2, line2, fontsize=58, color=accent, alpha=0.50, **base)
 
 
-async def to_single_fig(raw_data: JsonDict) -> DrawResult:
-    return await _draw_in_thread(draw_single_stock_chart, raw_data)
+async def to_single_fig(series: IntradaySeries) -> DrawResult:
+    return await _draw_in_thread(draw_single_stock_chart, series)
 
 
-def draw_single_stock_chart(raw_data: JsonDict) -> DrawResult:
+def draw_single_stock_chart(series: IntradaySeries) -> DrawResult:
     _setup_mpl()
     logger.info("[SayuStock] 开始获取图形...")
-    data = build_single_stock_render_data(raw_data)
+    data = build_single_stock_render_data(series)
     if isinstance(data, str):
         return data
     stock = data
@@ -248,14 +248,14 @@ def draw_single_stock_chart(raw_data: JsonDict) -> DrawResult:
     return _fig_to_image(fig)
 
 
-async def to_multi_fig(raw_data_list: list[JsonDict]) -> DrawResult:
-    return await _draw_in_thread(draw_multi_stock_chart, raw_data_list)
+async def to_multi_fig(series_list: list[IntradaySeries]) -> DrawResult:
+    return await _draw_in_thread(draw_multi_stock_chart, series_list)
 
 
-def draw_multi_stock_chart(raw_data_list: list[JsonDict]) -> DrawResult:
+def draw_multi_stock_chart(series_list: list[IntradaySeries]) -> DrawResult:
     _setup_mpl()
     logger.info("[SayuStock] Starting to generate multi-stock figure with multi-line title...")
-    data = build_multi_stock_render_data(raw_data_list)
+    data = build_multi_stock_render_data(series_list)
     if isinstance(data, str):
         return data
     multi = data

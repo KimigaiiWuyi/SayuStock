@@ -44,8 +44,6 @@ from gsuid_core.logger import logger
 # 常量
 # ============================================================
 QUOTE_CACHE_TTL: float = 60.0  # 内存缓存秒数；超过即穿透去拉
-QUOTE_FIELDS: str = "f43,f44,f45,f46,f60,f57"  # 仅 6 字段，对应：价/涨跌额/涨跌幅/振幅/昨收/名称
-QUOTE_ENDPOINT: str = "https://push2.eastmoney.com/api/qt/stock/get"
 QUOTE_TIMEOUT_S: float = 8.0  # 单只 HTTP 超时
 
 
@@ -214,67 +212,32 @@ class QuoteService:
     # 内部：单次 HTTP
     # ----------------------------------------------------------------
     async def _fetch_one(self, secid: str) -> tuple[Optional[float], Optional[float], Optional[float], Optional[str]]:
-        """拉一次；返回 ``(price, last_close, change_pct, name)``，出错返回 ``(None, None, None, None)``。
+        """拉一次；返回 ``(price, last_close, change_pct, name)``。
 
-        f43=现价, f45=涨跌幅(%), f60=昨收, f57=名称
+        经东财 adapter 解析：现价/昨收/涨跌幅(f170)/名称(f58)，不再误用 f45/f57。
         """
         from ..utils.eastmoney import EASTMONEY_REQUESTER
+        from ..utils.market.errors import is_market_error
+        from ..utils.market.adapters.eastmoney.parse_quote import parse_quote_payload
 
-        params = [
-            ("fields", QUOTE_FIELDS),
-            ("invt", "2"),
-            ("fltt", "2"),
-            ("secid", secid),
-        ]
         try:
             resp = await asyncio.wait_for(
-                EASTMONEY_REQUESTER.stock_request(QUOTE_ENDPOINT, "GET", params=params),
+                EASTMONEY_REQUESTER.get_single_stock(secid, ""),
                 timeout=QUOTE_TIMEOUT_S,
             )
         except asyncio.TimeoutError:
             logger.debug(f"[PaperTrade][Quote] secid={secid} 超时 (>={QUOTE_TIMEOUT_S}s)")
             return (None, None, None, None)
-        except Exception as e:
+        except (OSError, RuntimeError, ValueError, TypeError) as e:
             logger.debug(f"[PaperTrade][Quote] secid={secid} HTTP 失败: {e}")
             return (None, None, None, None)
 
-        if isinstance(resp, int):  # -999 / -400016 等错误码
+        if isinstance(resp, str):
             return (None, None, None, None)
-        if not isinstance(resp, dict):
+        parsed = parse_quote_payload(resp, provider_symbol=secid, sec_type="")
+        if is_market_error(parsed) or parsed.price <= 0:
             return (None, None, None, None)
-        data = resp.get("data")
-        if not isinstance(data, dict):
-            return (None, None, None, None)
-        raw_price = data.get("f43")
-        if raw_price is None:
-            return (None, None, None, None)
-        try:
-            price = float(raw_price)
-        except (TypeError, ValueError):
-            return (None, None, None, None)
-        if price <= 0:
-            return (None, None, None, None)
-        # 昨收价
-        last_close: Optional[float] = None
-        raw_lc = data.get("f60")
-        if raw_lc is not None:
-            try:
-                lc = float(raw_lc)
-                if lc > 0:
-                    last_close = lc
-            except (TypeError, ValueError):
-                pass
-        # 涨跌幅（百分比数值，如 9.99 表示 9.99%）
-        change_pct: Optional[float] = None
-        raw_chg = data.get("f45")
-        if raw_chg is not None:
-            try:
-                change_pct = float(raw_chg)
-            except (TypeError, ValueError):
-                pass
-        name_raw = data.get("f57")
-        name = str(name_raw) if name_raw else None
-        return (price, last_close, change_pct, name)
+        return (parsed.price, parsed.prev_close, parsed.change_pct, parsed.symbol.name)
 
     # ----------------------------------------------------------------
     # 调试 / 维护

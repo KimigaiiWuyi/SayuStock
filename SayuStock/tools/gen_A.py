@@ -2,7 +2,7 @@ import json
 from pathlib import Path
 
 
-def extract_secu_codes(input_folder: Path, output_file: Path):
+def extract_secu_codes(input_folder: Path, output_file: Path) -> None:
     """
     从指定文件夹中的所有 JSON 文件提取 SECUCODE，并生成新的 JSON 文件。
 
