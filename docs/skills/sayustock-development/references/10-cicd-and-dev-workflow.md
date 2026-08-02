@@ -198,6 +198,14 @@ test/conftest.py
 
 **正确做法**：依赖 `test/conftest.py` 包壳；或像 `test_indicators` 一样 importlib 搭骨架且**不要** `exec_module` 顶层 `__init__.py`。
 
+### 10.5.1b `ModuleNotFoundError: No module named 'typing_extensions'`（indicators / 扁平）
+
+**现象**：`test_render_text` collection 炸在 `utils/market/errors.py` 的 `from typing_extensions import TypeIs`。
+
+**原因**：轻量 job 只装 `pandas numpy pytest`；`TypeIs` 在 **3.12 不在 stdlib**（3.13+ 才进 `typing`），运行时直 import `typing_extensions` 会挂。
+
+**正确做法**：类型专用符号放 `if TYPE_CHECKING:` 下，并保留 `from __future__ import annotations`（注解不在运行时求值）。不要为了轻量 job 再装一堆 typing 包；也不要把 `TypeIs` 降成 `TypeGuard`（收窄语义不同，见 `errors.is_market_error` 注释）。
+
 ### 10.5.2 `ModuleNotFoundError: No module named 'SayuStock'`（Full suite / market 测试）
 
 **现象**：`test/market/test_*.py` collection 失败；其它手写 `sys.path` 的用例可能仍过。
@@ -325,6 +333,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent.parent.parent.parent
 | ID | 症状 | 处理 |
 |----|------|------|
 | C-1 | indicators：`No module named 'gsuid_core'` | 包壳 / 勿 exec `SayuStock/__init__` |
+| C-1b | indicators：`No module named 'typing_extensions'` | `TypeIs` 等放 `TYPE_CHECKING`；勿运行时直 import |
 | C-2 | full suite：`No module named 'SayuStock'` | `[tool.pytest.ini_options]` + conftest + pythonpath |
 | C-3 | basedpyright exit 3 缺 `.venv` | 去掉 pyrightconfig 的 venvPath/venv |
 | C-4 | pyright unknown rule | 改用 basedpyright |

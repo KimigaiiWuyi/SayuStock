@@ -2,8 +2,14 @@
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
 from dataclasses import dataclass
-from typing_extensions import TypeIs
+
+# TypeIs：3.13+ 在 typing；3.12 需 typing_extensions。注解仅在类型检查期使用，
+# 且本文件有 from __future__ import annotations，运行时不必真的 import TypeIs。
+# 这样 Indicator math 轻量 CI（只装 pandas/numpy/pytest）也能 import 本模块。
+if TYPE_CHECKING:
+    from typing_extensions import TypeIs
 
 
 @dataclass(frozen=True, slots=True)
