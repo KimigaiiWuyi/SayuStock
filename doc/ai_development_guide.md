@@ -72,8 +72,8 @@ async def send_cloudmap_img(bot: Bot, ev: Event):
 **文件：** `utils/stock/request_utils.py` 的 `get_code_id()`
 
 股票代码不是简单的字符串，涉及：
-- **市场后缀**：`.h` (港股), `.hk` (港股), `.us` (美股), `.a` (A股)
-- **优先级参数**：`priority="h"` 强制匹配港股
+- **市场后缀**：`.h`/`.hk` (港股), `.us` (美股), `.kr` (韩股), `.a` (A股)
+- **优先级参数**：`priority="h"` 强制匹配港股；`priority="kr"` 强制匹配韩股
 - **债券特殊处理**：`us10y`, `cn30y` 等国债代码走债券逻辑
 - **点号前缀**：`0.xxxxxx` = 深市, `1.xxxxxx` = 沪市, `100.xxx` = 国际指数
 - **别名映射**：`上证指数` -> `1.000001`，在 `code_id_dict` 中维护

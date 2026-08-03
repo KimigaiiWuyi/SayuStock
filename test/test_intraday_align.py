@@ -135,10 +135,7 @@ def test_a_share_trading_day_window_includes_lunch() -> None:
 def test_a_share_session_fill_extends_to_close() -> None:
     """盘中 9:34 只有前几分钟数据时，会话补齐必须延伸到 15:00。"""
     now = dt.datetime(2026, 8, 3, 9, 34)
-    trends = [
-        {"datetime": f"2026-08-03 09:{m:02d}", "price": 10.0 + m * 0.01, "money": 100.0}
-        for m in range(31, 35)
-    ]
+    trends = [{"datetime": f"2026-08-03 09:{m:02d}", "price": 10.0 + m * 0.01, "money": 100.0} for m in range(31, 35)]
     resolved = _resolve_trend_absolute_datetimes(trends, now_bjt=now)
     rows = _rows_from_resolved_trends(
         resolved,
@@ -167,10 +164,7 @@ def test_single_stock_render_keeps_future_nan_axis(monkeypatch: pytest.MonkeyPat
 
     monkeypatch.setattr(dt, "datetime", _FixedDateTime)
 
-    trends = [
-        {"datetime": f"2026-08-03 09:{m:02d}", "price": 10.0 + m * 0.01, "money": 100.0}
-        for m in range(31, 35)
-    ]
+    trends = [{"datetime": f"2026-08-03 09:{m:02d}", "price": 10.0 + m * 0.01, "money": 100.0} for m in range(31, 35)]
     series = _series_from_trends(
         "测试股",
         "600000",

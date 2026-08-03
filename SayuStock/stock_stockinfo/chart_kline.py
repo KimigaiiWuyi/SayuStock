@@ -131,7 +131,7 @@ def draw_single_kline_chart(series: KlineSeries, sp: str | None = None) -> DrawR
     prices["rsi24"] = ind.rsi(close, 24)
     prices["macd_dif"], prices["macd_dea"], prices["macd_bar"] = ind.macd(close)
 
-    raw_title_name = (series.symbol.name or "").strip()
+    raw_title_name = (series.symbol.display_name or series.symbol.name or "").strip()
     kline_title = f"{raw_title_name} {kline.freq_label}" if raw_title_name else kline.title
 
     chart = Chart(

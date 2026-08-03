@@ -93,16 +93,21 @@ def parse_kline_payload(
     if not bars:
         return empty_error("K 线解析后为空", provider=PROVIDER)
 
-    # 名称以 payload 为准补全（去掉 sec_type 后缀）
+    # 名称以 payload 为准补全（去掉 sec_type 后缀）；版块标签保留在 sec_type
     name = opt_str(data, "name")
     if name:
         clean = name.split(" (")[0].strip()
+        # 若 payload 带 " (韩股)" 等且 fallback 无 sec_type，从后缀回填
+        sec_type = symbol.sec_type
+        if not sec_type and " (" in name and name.endswith(")"):
+            sec_type = name.rsplit(" (", 1)[-1].rstrip(")").strip()
         symbol = SymbolRef(
             code=symbol.code,
             name=clean,
             asset_class=symbol.asset_class,
             exchange=symbol.exchange,
             provider_symbol=symbol.provider_symbol,
+            sec_type=sec_type,
         )
     code = opt_str(data, "code")
     if code:
@@ -112,6 +117,7 @@ def parse_kline_payload(
             asset_class=symbol.asset_class,
             exchange=symbol.exchange,
             provider_symbol=symbol.provider_symbol,
+            sec_type=symbol.sec_type,
         )
 
     return KlineSeries(symbol=symbol, period=period, bars=tuple(bars), adjusted=adjusted)
@@ -124,10 +130,14 @@ def symbol_from_kline_payload(payload: Mapping[str, object], fallback: SymbolRef
     code = opt_str(data, "code") or fallback.code
     name_raw = opt_str(data, "name") or fallback.name
     name = name_raw.split(" (")[0].strip() if " (" in name_raw else name_raw
+    sec_type = fallback.sec_type
+    if not sec_type and " (" in name_raw and name_raw.endswith(")"):
+        sec_type = name_raw.rsplit(" (", 1)[-1].rstrip(")").strip()
     return SymbolRef(
         code=code,
         name=name,
         asset_class=fallback.asset_class,
         exchange=fallback.exchange,
         provider_symbol=fallback.provider_symbol,
+        sec_type=sec_type,
     )

@@ -3,7 +3,7 @@
 公开命令：
 1. ``send_init_command``  — ``模拟盘初始化`` (群主 / 管理员权限)
 2. ``send_view``          — ``模拟盘查看``
-3. ``send_holdings``      — ``模拟盘自选``（持仓简图，含今日涨跌+持仓浮盈）
+3. ``send_holdings``      — ``模拟盘自选`` / ``模拟盘持仓``（持仓简图，含今日涨跌+持仓浮盈）
 4. ``send_pnl``           — ``模拟盘收益`` (周期: 日/周/月/季/年/ytd/总)
 5. ``send_records``       — ``模拟盘记录``
 6. ``send_leaderboard``   — ``模拟盘排行`` (群主 / 管理员权限)
@@ -487,14 +487,14 @@ async def send_view(bot: Bot, ev: Event) -> list[str] | None:
 
 
 # ============================================================
-# 2b) 模拟盘自选（持仓简图，仿「我的自选」）
+# 2b) 模拟盘自选 / 模拟盘持仓（持仓简图，仿「我的自选」）
 # ============================================================
 @sv_papertrade.on_fullmatch(
-    ("模拟盘自选",),
+    ("模拟盘自选", "模拟盘持仓"),
     block=True,
     to_ai="""查看 AI 模拟盘当前持仓的简化版卡片图（类似「我的自选」）。
 
-    当用户问「模拟盘自选」「模拟盘持仓图」「你持仓怎么样发张图」「仓位图」时调用。
+    当用户问「模拟盘自选」「模拟盘持仓」「模拟盘持仓图」「你持仓怎么样发张图」「仓位图」时调用。
     图上含：账户摘要（现金/总资产/浮盈）、每只持仓的数量/成本/现价、
     **今日涨跌** 与 **持仓收益率**。
 
@@ -506,11 +506,11 @@ async def send_view(bot: Bot, ev: Event) -> list[str] | None:
     """,
 )
 async def send_holdings(bot: Bot, ev: Event) -> list[str] | None:
-    """用户命令：模拟盘自选 → 持仓简图（无需 agent）。"""
+    """用户命令：模拟盘自选 / 模拟盘持仓 → 持仓简图（无需 agent）。"""
     from gsuid_core.logger import logger
     from gsuid_core.ai_core.trigger_bridge import ai_return
 
-    logger.info("[SayuStock] 开始执行[模拟盘自选]")
+    logger.info("[SayuStock] 开始执行[模拟盘自选/模拟盘持仓]")
     gid, bid = await _scope.resolve_account_key(ev)
     if not gid or not bid:
         return await bot.send("ℹ️ 尚未开通模拟盘，请群主/管理员发送「模拟盘初始化」")

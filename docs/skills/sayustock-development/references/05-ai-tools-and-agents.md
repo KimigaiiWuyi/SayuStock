@@ -106,11 +106,11 @@ ai_entity(KnowledgeBase(id=…, content=PAPERTRADE_GUIDE.md, …))
 
 与图共用 `utils/indicators.py` / 或 `papertrade/indicators.py` 包装（改口径两边一起看）。
 
-### 模拟盘自选（命令 + 工具）
+### 模拟盘自选 / 模拟盘持仓（命令 + 工具）
 
 | 入口 | 名称 |
 |------|------|
-| 用户命令 | **`模拟盘自选`**（`send_holdings`，`to_ai` 桥接，**无需 agent**） |
+| 用户命令 | **`模拟盘自选`** / **`模拟盘持仓`**（`send_holdings`，`to_ai` 桥接，**无需 agent**） |
 | `@ai_tools` | `papertrade_holdings_image`（与命令同一渲染） |
 
 - **简化版**：账户摘要 + 持仓条（**今日涨跌** + **持仓收益率**）；**无**流水 / 决策日志。  

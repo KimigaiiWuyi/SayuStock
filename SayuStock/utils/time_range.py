@@ -24,6 +24,7 @@ class Market(Enum):
     CRYPTO = auto()  # 加密货币
     # —— 东方财富 PREFIX 100 开头的全球指数（按各自主市场时段）——
     # 备注：美股指数（道琼/纳指/标普）复用 US_STOCK；恒生指数复用 HK_STOCK
+    KR_STOCK = auto()  # 韩股个股（东财 PREFIX 177，如 177.005930 三星电子）
     KR_INDEX = auto()  # 韩国交易所指数（KOSPI/KOSPI200）
     JP_INDEX = auto()  # 日本交易所指数（日经225 等）
     CA_INDEX = auto()  # 加拿大 S&P/TSX
@@ -95,6 +96,10 @@ MARKET_SESSIONS: Dict[Market, List[Tuple[str, str]]] = {
     ],
     Market.CRYPTO: [  # 加密货币
         ("00:00", "23:59"),
+    ],
+    # 韩股个股（PREFIX 177）：与 KOSPI 同时段 09:00-15:30 KST = 08:00-14:30 BJT
+    Market.KR_STOCK: [
+        ("08:00", "14:30"),
     ],
     # —— 全球指数（东方财富 PREFIX 100）：按各自主市场本土开收盘 —— #
     # 韩国（KST = UTC+9，无夏令时；BJT 比 KST 晚 1 小时 = UTC+8）
@@ -191,6 +196,9 @@ def _parse_em_code(code: str) -> Market:
             return Market.US_STOCK
         if prefix == "116":
             return Market.HK_STOCK
+        # 韩股个股：177.005930 三星电子 等
+        if prefix == "177":
+            return Market.KR_STOCK
         # PREFIX 100 = 东方财富全球指数（按 main_code 区分到对应市场）
         if prefix == "100":
             mc = main_code.upper()

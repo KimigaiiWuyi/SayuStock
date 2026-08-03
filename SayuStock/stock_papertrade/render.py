@@ -201,6 +201,31 @@ def _title_num_for_avg(avg_p: float) -> str:
     return "11"
 
 
+def _fit_text(
+    draw: ImageDraw.ImageDraw,
+    text: str,
+    font: ImageFont.FreeTypeFont,
+    max_width: int,
+) -> str:
+    """单行文本超出 max_width 时用省略号截断。"""
+    if not text:
+        return text
+    bbox = draw.textbbox((0, 0), text, font=font)
+    if bbox[2] - bbox[0] <= max_width:
+        return text
+    ell = "…"
+    lo, hi = 0, len(text)
+    while lo < hi:
+        mid = (lo + hi + 1) // 2
+        candidate = text[:mid] + ell
+        bb = draw.textbbox((0, 0), candidate, font=font)
+        if bb[2] - bb[0] <= max_width:
+            lo = mid
+        else:
+            hi = mid - 1
+    return text[:lo] + ell if lo else ell
+
+
 def _draw_holding_bar(row: HoldingBarRow) -> Image.Image:
     """仿 draw_bar_from_quote：右侧今日涨跌，中间持仓收益率。"""
     day = row.day_change_pct
@@ -221,6 +246,7 @@ def _draw_holding_bar(row: HoldingBarRow) -> Image.Image:
         sub_color = (175, 231, 170)
 
     b_title = (row.name or row.code).split(" (")[0]
+    # 副标题可用宽度约到中间「持仓%」列（x≈520）
     s_title = (
         f"({row.code}) {row.qty}股  成本 {row.avg_cost:.2f}  现价 {row.current_price:.2f}  市值 {row.market_value:,.0f}"
     )
@@ -231,12 +257,32 @@ def _draw_holding_bar(row: HoldingBarRow) -> Image.Image:
     hold_label = f"持{row.unrealized_pnl_pct:+.2f}%"
 
     draw = ImageDraw.Draw(bar)
-    draw.text((82, 40), b_title, (255, 255, 255), ss_font(32), "lm")
-    draw.text((82, 75), s_title, sub_color, ss_font(18), "lm")
+    title_font = ss_font(32)
+    sub_font = ss_font(18)
+    draw.text((82, 40), _fit_text(draw, b_title, title_font, 420), (255, 255, 255), title_font, "lm")
+    draw.text((82, 75), _fit_text(draw, s_title, sub_font, 430), sub_color, sub_font, "lm")
     # 中间：持仓收益（相对成本）；右侧：今日涨跌（相对昨收）
     draw.text((580, 55), hold_label, (240, 240, 240), ss_font(26), "mm")
     draw.text((758, 55), day_label, (255, 255, 255), ss_font(26), "mm")
     return bar
+
+
+# 持仓简图垂直布局（对齐「我的自选」：bar5 高 90，条卡高 110）
+_HS_INDEX_Y = 308
+_HS_SUMMARY_Y = 448
+_HS_SUMMARY_H = 100
+_HS_BAR5_GAP = 8  # 摘要 → 「我的持仓」banner
+_HS_BAR5_H = 90
+_HS_ROW_H = 110
+_HS_FOOTER_PAD = 60
+
+
+def _holdings_layout(n_rows: int) -> tuple[int, int, int]:
+    """返回 (canvas_h, bar5_y, rows_y0)。"""
+    bar5_y = _HS_SUMMARY_Y + _HS_SUMMARY_H + _HS_BAR5_GAP
+    rows_y0 = bar5_y + _HS_BAR5_H + 8
+    body_h = rows_y0 + max(n_rows, 1) * _HS_ROW_H + _HS_FOOTER_PAD
+    return body_h, bar5_y, rows_y0
 
 
 async def draw_holdings_snapshot(
@@ -253,8 +299,7 @@ async def draw_holdings_snapshot(
     列表：每只持仓条同时展示 **今日涨跌** 与 **持仓收益率**。
     """
     n = len(holdings)
-    # 单列布局；高度：标题区 + 指数 + 摘要条 + n*持仓条 + footer
-    body_h = 541 + max(n, 1) * 110 + 80
+    body_h, bar5_y, rows_y0 = _holdings_layout(n)
     img = Image.new("RGBA", (900, body_h), (7, 9, 27))
 
     # —— 宽基指数（与我的自选一致，失败则跳过）——
@@ -285,11 +330,11 @@ async def draw_holdings_snapshot(
                     ss_font(30),
                     "mm",
                 )
-                img.paste(zs_img, (50 + 200 * ni, 308), zs_img)
+                img.paste(zs_img, (50 + 200 * ni, _HS_INDEX_Y), zs_img)
                 ni += 1
                 break
 
-    # —— 账户摘要条 ——
+    # —— 账户摘要条（两行指标，避免单行撑破 850 宽）——
     pos_value = sum(h.market_value for h in holdings)
     total_equity = cash + pos_value
     total_unreal = sum(h.unrealized_pnl for h in holdings)
@@ -299,28 +344,32 @@ async def draw_holdings_snapshot(
     day_vals = [h.day_change_pct for h in holdings if h.day_change_pct is not None]
     avg_day = sum(day_vals) / len(day_vals) if day_vals else 0.0
 
-    summary = Image.new("RGBA", (850, 90), (20, 24, 48, 220))
+    summary = Image.new("RGBA", (850, _HS_SUMMARY_H), (20, 24, 48, 220))
     sd = ImageDraw.Draw(summary)
-    sd.rounded_rectangle((0, 0, 849, 89), 8, (20, 24, 48, 220))
-    sd.text(
-        (20, 22),
-        f"模拟盘持仓简图 · 群 {group_id}",
-        (255, 210, 120),
-        ss_font(22),
-        "lm",
+    sd.rounded_rectangle((0, 0, 849, _HS_SUMMARY_H - 1), 8, (20, 24, 48, 220))
+    head_font = ss_font(22)
+    line_font = ss_font(17)
+    # 左右各留 20px
+    max_text_w = 810
+    head = _fit_text(sd, f"模拟盘持仓简图 · 群 {group_id}", head_font, max_text_w)
+    line1 = _fit_text(
+        sd,
+        f"总资产 {total_equity:,.0f}  ·  现金 {cash:,.0f}  ·  持仓市值 {pos_value:,.0f}",
+        line_font,
+        max_text_w,
     )
-    sd.text(
-        (20, 58),
-        (
-            f"总资产 {total_equity:,.0f}  现金 {cash:,.0f}  持仓市值 {pos_value:,.0f}  "
-            f"浮盈 {total_unreal:+,.0f}({total_unreal_pct:+.2f}%)  "
-            f"累计 {total_pnl:+,.0f}({total_pnl_pct:+.2f}%)"
-        ),
-        (220, 220, 230),
-        ss_font(18),
-        "lm",
+    line2 = _fit_text(
+        sd,
+        f"浮盈 {total_unreal:+,.0f}({total_unreal_pct:+.2f}%)  ·  "
+        f"累计 {total_pnl:+,.0f}({total_pnl_pct:+.2f}%)  ·  "
+        f"持仓 {n} 只",
+        line_font,
+        max_text_w,
     )
-    img.paste(summary, (25, 448), summary)
+    sd.text((20, 18), head, (255, 210, 120), head_font, "lm")
+    sd.text((20, 50), line1, (220, 220, 230), line_font, "lm")
+    sd.text((20, 76), line2, (200, 210, 220), line_font, "lm")
+    img.paste(summary, (25, _HS_SUMMARY_Y), summary)
 
     # —— 标题情绪图（按持仓等权日均涨跌）——
     title_num = _title_num_for_avg(avg_day)
@@ -329,22 +378,22 @@ async def draw_holdings_snapshot(
         title = Image.open(title_path)
         img.paste(title, (25, -31), title)
 
+    # —— 「我的持仓」banner：必须在摘要下方，持仓条再在其下 ——
     bar5_path = _MY_STOCK_TEX / "bar5.png"
     if bar5_path.is_file():
         bar5 = Image.open(bar5_path)
-        img.paste(bar5, (25, 538), bar5)
+        img.paste(bar5, (25, bar5_y), bar5)
 
     # —— 持仓条 ——
-    y0 = 541
     if not holdings:
         empty = Image.new("RGBA", (850, 90), (30, 30, 40, 200))
         ed = ImageDraw.Draw(empty)
         ed.text((425, 45), "（当前无持仓）", (160, 160, 170), ss_font(28), "mm")
-        img.paste(empty, (25, y0), empty)
+        img.paste(empty, (25, rows_y0), empty)
     else:
         for i, row in enumerate(holdings):
             bar = _draw_holding_bar(row)
-            img.paste(bar, (0, y0 + i * 110), bar)
+            img.paste(bar, (0, rows_y0 + i * _HS_ROW_H), bar)
 
     footer = get_footer()
     img.paste(footer, (25, img.size[1] - 55), footer)

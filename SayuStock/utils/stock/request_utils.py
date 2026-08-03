@@ -77,16 +77,19 @@ async def get_code_id(code: str, priority: Optional[str] = None) -> Optional[Tup
     code:可以是代码或简称或英文
     """
     if code.endswith(".h"):
-        code = code.replace(".h", "")
+        code = code[: -len(".h")]
         priority = "h"
     elif code.endswith(".hk"):
-        code = code.replace(".hk", "")
+        code = code[: -len(".hk")]
         priority = "h"
     elif code.endswith(".us"):
-        code = code.replace(".us", "")
+        code = code[: -len(".us")]
         priority = "us"
+    elif code.endswith(".kr"):
+        code = code[: -len(".kr")]
+        priority = "kr"
     elif code.endswith(".a"):
-        code = code.replace(".a", "")
+        code = code[: -len(".a")]
         priority = "a"
 
     if priority is not None:
@@ -97,11 +100,23 @@ async def get_code_id(code: str, priority: Optional[str] = None) -> Optional[Tup
         is_bond = True
 
     if "." in code:
-        code_prefix = code.split(".")[0]
+        code_prefix, main_code = code.split(".", 1)
         if code_prefix in PREFIX_DATA:
             _sec_type = PREFIX_DATA[code_prefix]
         else:
             _sec_type = "未知"
+        # 按代码细化 A 股版块标签（创业板/科创板/京A），供标题展示
+        if code_prefix in ("0", "1"):
+            if main_code.startswith("300"):
+                _sec_type = "创业板"
+            elif main_code.startswith("688"):
+                _sec_type = "科创板"
+            elif main_code.startswith(("4", "8", "92")):
+                _sec_type = "京A"
+            elif code_prefix == "0":
+                _sec_type = "深A"
+            elif code_prefix == "1":
+                _sec_type = "沪A"
 
         return code, "", _sec_type
 
@@ -149,11 +164,21 @@ async def get_code_id(code: str, priority: Optional[str] = None) -> Optional[Tup
                                         i["Name"],
                                         i["SecurityTypeName"],
                                     )
+                            elif priority == "kr":
+                                if i["SecurityTypeName"] in ["韩股"]:
+                                    return (
+                                        i["QuoteID"],
+                                        i["Name"],
+                                        i["SecurityTypeName"],
+                                    )
                             elif priority == "a":
                                 if i["SecurityTypeName"] in [
                                     "沪深A",
                                     "沪A",
                                     "深A",
+                                    "创业板",
+                                    "科创板",
+                                    "京A",
                                 ]:
                                     return (
                                         i["QuoteID"],

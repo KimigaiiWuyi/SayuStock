@@ -33,8 +33,10 @@ def _exchange(provider_symbol: str, sec_type: str) -> str:
         return "SZSE"
     if provider_symbol.startswith("116.") or "港" in sec_type:
         return "HKEX"
-    if provider_symbol.startswith("105.") or "美" in sec_type:
+    if provider_symbol.startswith(("105.", "106.", "107.", "153.")) or "美" in sec_type:
         return "US"
+    if provider_symbol.startswith("177.") or "韩" in sec_type:
+        return "KRX"
     return "EM"
 
 
@@ -109,6 +111,7 @@ def parse_quote_payload(
         asset_class=_asset_class(sec_type or name_raw),
         exchange=_exchange(provider_symbol, sec_type),
         provider_symbol=provider_symbol,
+        sec_type=(sec_type or "").strip(),
     )
     return Quote(
         symbol=symbol,

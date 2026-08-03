@@ -24,6 +24,8 @@ def test_quote_maps_f45_to_low_not_change_pct() -> None:
     assert q.change_pct == 1.82  # f170
     assert q.symbol.code == "600519"
     assert q.symbol.name == "贵州茅台"
+    assert q.symbol.sec_type == "沪深A"
+    assert q.symbol.display_name == "贵州茅台 (沪深A)"
     assert q.prev_close == 1650.0
     assert q.industry == "白酒"
 

@@ -44,7 +44,7 @@ SayuStock 插件里的"模拟盘"长期能力：
 |------|-----------|
 | `模拟盘初始化` / `模拟盘初始化 200w` | **直接调 trigger 工具 `send_init_command`** —— 唯一权威入口，6 步全跑（DB 账户 + Kanban init/period 树 + APScheduler cron + bind root_id + 踢 init/decision）。**不要自己拼**：调 `papertrade_account_create` 工具是错误路径，它已被收敛掉 |
 | `模拟盘查看` | 完整账户视图（含最近交易）；也可调 `papertrade_account_query` + `papertrade_position_list` |
-| `模拟盘自选` | **简化版持仓图**（仿「我的自选」：今日涨跌 + 持仓浮盈；无流水）。命令直出图，也可调 `papertrade_holdings_image` / trigger `send_holdings` |
+| `模拟盘自选` / `模拟盘持仓` | **简化版持仓图**（仿「我的自选」：今日涨跌 + 持仓浮盈；无流水）。命令直出图，也可调 `papertrade_holdings_image` / trigger `send_holdings` |
 | `模拟盘收益 日/月/年/总` | 调 `papertrade_trade_list` + `aggregate_pnl` |
 | `模拟盘记录` | 调 `papertrade_trade_list(limit=20)` |
 | `模拟盘排行` | 跨群查所有账户（注意权限：限 SUPERUSERS / 群主/管理员） |
@@ -67,8 +67,8 @@ SayuStock 插件里的"模拟盘"长期能力：
 3. 调 `papertrade_trade_list(stock_code=X)` 拿该股票所有买入记录
 4. **用你（早柚）的口吻**回答：当时 MACD 金叉、PE 多少、行业如何……
 
-### 用户问"现在还持有啥？" / "模拟盘自选"
-1. **优先**：出图 —— 命令「模拟盘自选」或工具 `papertrade_holdings_image` / trigger `send_holdings`
+### 用户问"现在还持有啥？" / "模拟盘自选" / "模拟盘持仓"
+1. **优先**：出图 —— 命令「模拟盘自选」/「模拟盘持仓」或工具 `papertrade_holdings_image` / trigger `send_holdings`
    （简化版：今日涨跌 + 持仓浮盈，无流水）
 2. 要数字明细：`papertrade_position_list` + `papertrade_account_query`
 3. 用你的口吻点评一两句即可，勿复述整表

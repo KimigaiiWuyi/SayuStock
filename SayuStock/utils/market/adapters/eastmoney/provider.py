@@ -69,6 +69,10 @@ def _exchange_of(secid: str, sec_type: str) -> str:
         return "SZSE"
     if "港" in sec_type or secid.startswith("116."):
         return "HKEX"
+    if "美" in sec_type or secid.startswith(("105.", "106.", "107.", "153.")):
+        return "US"
+    if "韩" in sec_type or secid.startswith("177."):
+        return "KRX"
     return "EM"
 
 
@@ -117,6 +121,7 @@ class EastMoneyMarketData:
             asset_class=_sec_type_to_asset(item["sec_type"]),
             exchange=_exchange_of(item["secid"], item["sec_type"]),
             provider_symbol=item["secid"],
+            sec_type=item["sec_type"] or "",
         )
 
     async def quote(self, query: str) -> Quote | MarketError:
@@ -149,6 +154,7 @@ class EastMoneyMarketData:
             asset_class=_sec_type_to_asset(sec_type),
             exchange=_exchange_of(secid, sec_type),
             provider_symbol=secid,
+            sec_type=sec_type or "",
         )
         raw = await EASTMONEY_REQUESTER.get_single_stock(secid, sec_type)
         quote: Quote | None = None
@@ -183,6 +189,7 @@ class EastMoneyMarketData:
             asset_class=_sec_type_to_asset(sec_type),
             exchange=_exchange_of(secid, sec_type),
             provider_symbol=secid,
+            sec_type=sec_type or "",
         )
         klt: str | int = period.value
         if period in (KlinePeriod.D1_RECENT, KlinePeriod.D1_YEAR):

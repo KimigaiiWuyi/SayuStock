@@ -24,6 +24,7 @@ def _sym() -> SymbolRef:
         asset_class=AssetClass.EQUITY,
         exchange="SSE",
         provider_symbol="1.600519",
+        sec_type="沪A",
     )
 
 
@@ -34,6 +35,8 @@ def test_kline_parse_and_roundtrip() -> None:
     assert len(series.bars) == 3
     assert series.bars[-1].close == 1650.0
     assert series.symbol.name == "贵州茅台"
+    assert series.symbol.sec_type == "沪A"
+    assert series.symbol.display_name == "贵州茅台 (沪A)"
     df = kline_to_df(series)
     assert list(df["close"])[-1] == 1650.0
     em = kline_to_em_dict(series)

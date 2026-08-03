@@ -84,7 +84,7 @@ def kline_text(series: KlineSeries, sector: str) -> str:
     """
     if not isinstance(series, KlineSeries) or not series.bars:
         return ""
-    name = series.symbol.name or "N/A"
+    name = series.symbol.display_name or "N/A"
     df = kline_to_df(series)
     if df.empty:
         return ""
@@ -213,7 +213,7 @@ def compare_text(series_list: list[KlineSeries]) -> str:
     for series in series_list:
         if not isinstance(series, KlineSeries) or not series.bars:
             continue
-        name = series.symbol.name or "N/A"
+        name = series.symbol.display_name or "N/A"
         df = kline_to_df(series)
         if df.empty:
             continue
@@ -251,13 +251,15 @@ def single_stock_text(
             if not isinstance(item, IntradaySeries):
                 continue
             q = item.quote
-            name = item.symbol.name
+            name = item.symbol.display_name
             if q is None:
                 last = item.points[-1].price if item.points else None
                 parts.append(f"{name}: 最新 {last}")
                 continue
             parts.append(
-                f"{q.symbol.name}: 最新 {q.price}  涨跌幅 {q.change_pct}%  换手率 {q.turnover_rate}%  成交额 {q.amount}"
+                f"{q.symbol.display_name}: 最新 {q.price}  "
+                f"涨跌幅 {q.change_pct}%  换手率 {q.turnover_rate}%  "
+                f"成交额 {q.amount}"
             )
         if not parts:
             return ""
@@ -268,9 +270,9 @@ def single_stock_text(
     q = series.quote
     if q is None:
         last = series.points[-1].price if series.points else None
-        return f"【{series.symbol.name} 分时行情】\n最新价: {last}"
+        return f"【{series.symbol.display_name} 分时行情】\n最新价: {last}"
     return (
-        f"【{q.symbol.name} 分时行情】\n"
+        f"【{q.symbol.display_name} 分时行情】\n"
         f"最新价: {q.price}  涨跌幅: {q.change_pct}%\n"
         f"开盘价: {q.prev_close}  "
         f"最高价: {q.high}  最低价: {q.low}\n"

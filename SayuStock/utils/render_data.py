@@ -355,7 +355,7 @@ def build_kline_render_data(series: KlineSeries) -> KlineRenderData | DataResult
     df = kline_to_cn_df(series)
     if df.empty:
         return ErroText["notData"]
-    title = series.symbol.name or "K线"
+    title = series.symbol.display_name or "K线"
     return _kline_render_from_cn_df(df, title)
 
 
@@ -490,9 +490,7 @@ def build_single_stock_render_data(series: IntradaySeries) -> SingleStockRenderD
     # 保留会话补齐后的全部行（含未来空分钟），X 轴才能画到收盘；
     # 有价点画线，无价点占位。与 multi-stock 一致，禁止再滤掉 future NaN。
     if rows:
-        full_data = [
-            {"datetime": r["datetime"], "price": r.get("price"), "money": r.get("money")} for r in rows
-        ]
+        full_data = [{"datetime": r["datetime"], "price": r.get("price"), "money": r.get("money")} for r in rows]
     else:
         full_data = [{"datetime": p.ts, "price": p.price, "money": p.amount} for p in series.points]
 
@@ -568,7 +566,7 @@ def build_single_stock_render_data(series: IntradaySeries) -> SingleStockRenderD
     custom_info = int_to_percentage(gained)
     amount_v = quote.amount if quote is not None else None
     total_amount = number_to_chinese(amount_v) if isinstance(amount_v, float) else 0
-    stock_name = series.symbol.name or "N/A"
+    stock_name = series.symbol.display_name or "N/A"
     stock_code = series.symbol.code
     new_price = quote.price if quote is not None else series.points[-1].price
     turnover_rate = quote.turnover_rate if quote is not None else 0
@@ -648,7 +646,7 @@ def build_multi_stock_render_data(
             max_fluctuation = max(max_fluctuation, abs(current_min))
         processed_stocks.append(
             MultiStockItem(
-                name=series.symbol.name or "Unknown",
+                name=series.symbol.display_name or "Unknown",
                 df=price_history_pd,
                 total_volume=float(_frame_column(price_history_pd, "money").sum()),
             )
@@ -692,7 +690,7 @@ def build_compare_render_data(series_list: List[KlineSeries]) -> CompareRenderDa
         df = df.copy()
         df["日期"] = pd.to_datetime(df["日期"], errors="coerce")
         df = df.dropna(subset=["日期"])
-        trace_name = series.symbol.name or f"Trace {index}"
+        trace_name = series.symbol.display_name or f"Trace {index}"
         items.append(CompareStockItem(name=trace_name, df=df))
     if not items:
         return ErroText["notData"]
