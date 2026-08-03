@@ -20,7 +20,7 @@ from gsuid_core.logger import logger
 
 from .utils import int_to_percentage, number_to_chinese
 from .constant import ErroText
-from .time_range import is_market_active_now, get_trading_datetimes_bjt
+from .time_range import get_trading_datetimes_bjt, is_within_trading_day_window
 from .market.models import KlineSeries, BoardSnapshot, IntradaySeries
 from .market.convert.dataframe import kline_to_cn_df
 
@@ -424,7 +424,8 @@ def _rows_from_resolved_trends(
             if minute_ts not in have:
                 extra.append(_empty_trend_row(minute_ts.to_pydatetime()))
 
-    if fill_session_future and is_market_active_now(code_id, now_bjt=now_bjt):
+    # 盘中（含午休）把轴补到当日收盘；收盘后 / 未开盘日不外推空轴
+    if fill_session_future and is_within_trading_day_window(code_id, now_bjt=now_bjt):
         for minute_ts in session_times:
             if minute_ts <= data_max:
                 continue
@@ -486,10 +487,12 @@ def build_single_stock_render_data(series: IntradaySeries) -> SingleStockRenderD
         fill_session_future=True,
         fill_session_gaps=True,
     )
-    # 仅保留有价格的点用于主序列（未来空位不进入 points 语义）
-    priced = [r for r in rows if r.get("price") is not None] if rows else []
-    if priced:
-        full_data = [{"datetime": r["datetime"], "price": r["price"], "money": r.get("money")} for r in priced]
+    # 保留会话补齐后的全部行（含未来空分钟），X 轴才能画到收盘；
+    # 有价点画线，无价点占位。与 multi-stock 一致，禁止再滤掉 future NaN。
+    if rows:
+        full_data = [
+            {"datetime": r["datetime"], "price": r.get("price"), "money": r.get("money")} for r in rows
+        ]
     else:
         full_data = [{"datetime": p.ts, "price": p.price, "money": p.amount} for p in series.points]
 
@@ -500,7 +503,11 @@ def build_single_stock_render_data(series: IntradaySeries) -> SingleStockRenderD
             "money": [item["money"] for item in full_data],
         }
     )
-    if price_history_pd.empty or price_history_pd["price"].iloc[0] is None:
+    price_history_pd["dt"] = pd.to_datetime(price_history_pd["datetime"], errors="coerce")
+    price_history_pd["price"] = _numeric_series(price_history_pd["price"])
+    price_history_pd["money"] = _numeric_series(price_history_pd["money"], fill_value=0)
+    priced_only = _frame_column(price_history_pd, "price").dropna()
+    if price_history_pd.empty or priced_only.empty:
         return ErroText["notOpen"]
 
     quote = series.quote
@@ -511,14 +518,11 @@ def build_single_stock_render_data(series: IntradaySeries) -> SingleStockRenderD
     else:
         open_price = float(series.points[0].open or series.points[0].price)
 
-    price_history_pd["dt"] = pd.to_datetime(price_history_pd["datetime"], errors="coerce")
-    price_history_pd["price"] = _numeric_series(price_history_pd["price"])
-    price_history_pd["money"] = _numeric_series(price_history_pd["money"], fill_value=0)
     price_history_pd["percentage_change"] = ((price_history_pd["price"] / open_price) - 1) * 100
 
     price_column = _frame_column(price_history_pd, "price")
-    max_price = float(price_column.max())
-    min_price = float(price_column.min())
+    max_price = float(priced_only.max())
+    min_price = float(priced_only.min())
     max_fluctuation = max((max_price - open_price) / open_price, (open_price - min_price) / open_price)
     if pd.isna(max_fluctuation) or max_fluctuation <= 0:
         max_fluctuation = 0.01
@@ -543,20 +547,22 @@ def build_single_stock_render_data(series: IntradaySeries) -> SingleStockRenderD
 
     prices = price_column
     bar_colors: list[str] = []
+    last_valid: float | None = None
     for index in range(len(prices)):
-        if index == 0:
-            bar_colors.append("red" if prices.iloc[index] > open_price else "green")
+        curr = prices.iloc[index]
+        if pd.isna(curr):
+            bar_colors.append("grey")
+            continue
+        curr_f = float(curr)
+        if last_valid is None:
+            bar_colors.append("red" if curr_f > open_price else "green")
+        elif curr_f > last_valid:
+            bar_colors.append("red")
+        elif curr_f < last_valid:
+            bar_colors.append("green")
         else:
-            prev = prices.iloc[index - 1]
-            curr = prices.iloc[index]
-            if pd.isna(curr) or pd.isna(prev):
-                bar_colors.append("grey")
-            elif curr > prev:
-                bar_colors.append("red")
-            elif curr < prev:
-                bar_colors.append("green")
-            else:
-                bar_colors.append("grey")
+            bar_colors.append("grey")
+        last_valid = curr_f
 
     gained = float(quote.change_pct) if quote is not None and quote.change_pct is not None else 0.0
     custom_info = int_to_percentage(gained)

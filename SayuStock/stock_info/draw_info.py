@@ -161,7 +161,8 @@ async def draw_info_img(is_save: bool = False) -> str | bytes:
     )
 
     zs_r, hy_z_r, hy_f_r, gn_z_r, gn_f_r, au_q, tlm_q, bars_raw = results
-    for result in (zs_r, hy_z_r, hy_f_r, gn_z_r, gn_f_r, au_q, tlm_q):
+    # 黄金/国债报价失败不拖垮整页；仅主指数与板块为硬依赖
+    for result in (zs_r, hy_z_r, hy_f_r, gn_z_r, gn_f_r):
         if is_market_error(result):
             return result.message
     if isinstance(bars_raw, str):
@@ -174,16 +175,20 @@ async def draw_info_img(is_save: bool = False) -> str | bytes:
         return "行业板块数据异常"
     if not isinstance(gn_z_r, BoardSnapshot) or not isinstance(gn_f_r, BoardSnapshot):
         return "概念板块数据异常"
-    if not isinstance(au_q, Quote) or not isinstance(tlm_q, Quote):
-        return "贵金属/债券报价异常"
 
     data_zs_items = board_rows_to_items(zs_r.rows)
     data_hy_z = board_rows_to_items(hy_z_r.rows)
     data_hy_f = board_rows_to_items(hy_f_r.rows)
     data_gn_z = board_rows_to_items(gn_z_r.rows)
     data_gn_f = board_rows_to_items(gn_f_r.rows)
-    data_zs_items.append(from_quote(au_q))
-    data_zs_items.append(from_quote(tlm_q))
+    if isinstance(au_q, Quote):
+        data_zs_items.append(from_quote(au_q))
+    elif is_market_error(au_q):
+        logger.warning(f"[SayuStock] 大盘概览黄金报价跳过: {au_q.message}")
+    if isinstance(tlm_q, Quote):
+        data_zs_items.append(from_quote(tlm_q))
+    elif is_market_error(tlm_q):
+        logger.warning(f"[SayuStock] 大盘概览三十债报价跳过: {tlm_q.message}")
 
     bars = bars_raw if isinstance(bars_raw, dict) else {}
 

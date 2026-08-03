@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Mapping
+
 from ...enums import AssetClass
 from ...errors import MarketError, empty_error, parse_error
 from ...models import Quote, SymbolRef
@@ -36,6 +38,30 @@ def _exchange(provider_symbol: str, sec_type: str) -> str:
     return "EM"
 
 
+def _last_trend_price(root: Mapping[str, object]) -> float | None:
+    """从 payload.trends 取最后一个有效价（get_single_stock 会附带分时）。"""
+    trends = root.get("trends")
+    if not isinstance(trends, list) or not trends:
+        return None
+    for item in reversed(trends):
+        if isinstance(item, dict):
+            raw = item.get("price")
+        elif isinstance(item, str):
+            parts = item.split(",")
+            raw = parts[1] if len(parts) > 1 else None
+        else:
+            continue
+        if raw is None or raw == "" or raw == "-":
+            continue
+        try:
+            value = float(raw)  # type: ignore[arg-type]
+        except (TypeError, ValueError):
+            continue
+        if value == value:  # not NaN
+            return value
+    return None
+
+
 def parse_quote_payload(
     payload: object,
     *,
@@ -49,7 +75,16 @@ def parse_quote_payload(
     if data is None:
         return empty_error("quote data 为空", provider=PROVIDER)
 
+    # 休市/连续合约未刷新时东财常把 f43 置为 "-"；回退昨收/开盘，避免整页失败。
+    prev_close = opt_float(data, QUOTE_FIELD["prev_close"])
+    open_px = opt_float(data, QUOTE_FIELD["open"])
     price = opt_float(data, QUOTE_FIELD["price"])
+    if price is None:
+        price = prev_close
+    if price is None:
+        price = open_px
+    if price is None:
+        price = _last_trend_price(root)
     if price is None:
         return parse_error("缺少现价 f43", provider=PROVIDER)
 
@@ -78,10 +113,10 @@ def parse_quote_payload(
     return Quote(
         symbol=symbol,
         price=price,
-        open=opt_float(data, QUOTE_FIELD["open"]),
+        open=open_px,
         high=opt_float(data, QUOTE_FIELD["high"]),
         low=opt_float(data, QUOTE_FIELD["low"]),
-        prev_close=opt_float(data, QUOTE_FIELD["prev_close"]),
+        prev_close=prev_close,
         change_pct=opt_float(data, QUOTE_FIELD["change_pct"]),
         change_amount=opt_float(data, QUOTE_FIELD["change_amount"]),
         volume=opt_float(data, QUOTE_FIELD["volume"]),

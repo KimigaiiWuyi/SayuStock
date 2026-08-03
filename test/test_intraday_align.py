@@ -14,10 +14,12 @@ from SayuStock.utils.time_range import (
     is_market_active_now,
     get_session_anchor_date,
     get_trading_datetimes_bjt,
+    is_within_trading_day_window,
 )
 from SayuStock.utils.render_data import (
     _rows_from_resolved_trends,
     build_multi_stock_render_data,
+    build_single_stock_render_data,
     _resolve_trend_absolute_datetimes,
 )
 from SayuStock.utils.market.enums import AssetClass
@@ -116,6 +118,73 @@ def test_session_anchor_after_midnight() -> None:
 
     midday = dt.datetime(2026, 7, 24, 12, 0)
     assert get_session_anchor_date("103.NQ00Y", midday) == dt.date(2026, 7, 24)
+
+
+def test_a_share_trading_day_window_includes_lunch() -> None:
+    """A 股午休仍属交易日窗口，分时轴应能补到下午收盘。"""
+    morning = dt.datetime(2026, 8, 3, 9, 34)
+    lunch = dt.datetime(2026, 8, 3, 12, 0)
+    after = dt.datetime(2026, 8, 3, 16, 0)
+    assert is_within_trading_day_window("1.600000", morning) is True
+    assert is_market_active_now("1.600000", morning) is True
+    assert is_within_trading_day_window("1.600000", lunch) is True
+    assert is_market_active_now("1.600000", lunch) is False
+    assert is_within_trading_day_window("1.600000", after) is False
+
+
+def test_a_share_session_fill_extends_to_close() -> None:
+    """盘中 9:34 只有前几分钟数据时，会话补齐必须延伸到 15:00。"""
+    now = dt.datetime(2026, 8, 3, 9, 34)
+    trends = [
+        {"datetime": f"2026-08-03 09:{m:02d}", "price": 10.0 + m * 0.01, "money": 100.0}
+        for m in range(31, 35)
+    ]
+    resolved = _resolve_trend_absolute_datetimes(trends, now_bjt=now)
+    rows = _rows_from_resolved_trends(
+        resolved,
+        code_id="1.600000",
+        now_bjt=now,
+        fill_session_future=True,
+        fill_session_gaps=True,
+    )
+    assert any(r.get("price") is None for r in rows)
+    last_ts = max(__import__("pandas").Timestamp(r["datetime"]) for r in rows)
+    assert last_ts.hour == 15 and last_ts.minute == 0
+    priced = [r for r in rows if r.get("price") is not None]
+    assert len(priced) == 4
+
+
+def test_single_stock_render_keeps_future_nan_axis(monkeypatch: pytest.MonkeyPatch) -> None:
+    """个股分时不得把 future 空点滤掉，否则 X 轴只画到当前时刻。"""
+    fixed_now = dt.datetime(2026, 8, 3, 9, 34)
+
+    class _FixedDateTime(dt.datetime):
+        @classmethod
+        def now(cls, tz=None):  # noqa: ANN001
+            if tz is not None:
+                return fixed_now.replace(tzinfo=tz)
+            return fixed_now
+
+    monkeypatch.setattr(dt, "datetime", _FixedDateTime)
+
+    trends = [
+        {"datetime": f"2026-08-03 09:{m:02d}", "price": 10.0 + m * 0.01, "money": 100.0}
+        for m in range(31, 35)
+    ]
+    series = _series_from_trends(
+        "测试股",
+        "600000",
+        "1.600000",
+        trends,
+        prev_close=10.0,
+        change_pct=0.5,
+    )
+    result = build_single_stock_render_data(series)
+    assert not isinstance(result, str), result
+    assert result.df["price"].isna().any()
+    max_dt = result.df["dt"].max()
+    assert max_dt.hour == 15 and max_dt.minute == 0
+    assert result.df["price"].notna().sum() == 4
 
 
 def test_resolve_hhmm_overnight_anchor() -> None:

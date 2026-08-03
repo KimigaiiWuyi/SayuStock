@@ -431,6 +431,26 @@ def is_market_active_now(
     return False
 
 
+def is_within_trading_day_window(
+    code: Optional[str] = None,
+    now_bjt: Optional[datetime.datetime] = None,
+) -> bool:
+    """是否处于「当前会话日」的交易日窗口内（含午休等盘中休市）。
+
+    与 ``is_market_active_now`` 的差别：
+    - 午休（如 A 股 11:30–13:00）返回 True；
+    - 用于分时图把 X 轴补齐到当日收盘，而不是只画到「此刻」。
+
+    判断依据是 ``get_trading_datetimes_bjt`` 的首尾绝对时间，跨天会话同样适用。
+    """
+    if now_bjt is None:
+        now_bjt = datetime.datetime.now()
+    times = get_trading_datetimes_bjt(code, now_bjt=now_bjt)
+    if not times:
+        return False
+    return times[0] <= now_bjt <= times[-1]
+
+
 def parse_time_range(text: str) -> Tuple[Optional[datetime.datetime], Optional[datetime.datetime], str]:
     """从输入文本中解析时间范围。
 
