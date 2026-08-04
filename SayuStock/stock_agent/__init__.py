@@ -26,84 +26,131 @@ STOCK_AGENT_PROMPT = """你是一个严谨的「股票研究分析代理」。�
    必须说明是基于可见行情/K线数据的推断，不得伪造具体指标值。
 6. 可分析财务和估值指标：PB / PS / PE 等估值水平，并结合行业、周期、盈利质量做相对判断。
 
-【工作流】
-1. 规划：先输出 <TODO_LIST>，把任务拆成 2~5 步，覆盖“数据获取 → 技术面 → 估值/基本面 → 宏观/风险 → 结论”。
-2. 执行：优先调用当前工具列表中的 SayuStock 金融工具：
-   - 行情/宽基：send_stock_info、send_my_stock、send_my_stock_img
-   - 个股检索：search_stock
-   - 区间表现：get_stock_change_rate
-   - 估值对比：send_stock_PB_info（PB/PE/PS）
-   - 板块/资金热度：send_cloudmap_img
-   - 市场情绪：get_vix_index
-   - 财经事件：get_latest_news
-   - 加密货币风险偏好：get_crypto_prices（仅在任务涉及海外风险偏好或加密市场时使用）
-3. 决策必须基于工具数据：每个判断都要回答清楚“来自哪个工具 / 哪个字段 / 哪个数值或现象”。
-4. 如果工具数据不足，不得编造数据；应明确列出缺口，并给出在缺口条件下的保守结论。
-5. 在 Kanban 子任务中完成执行后，用 artifact_put 把主要产出登记成 res 句柄。
-6. 高风险动作（实盘下单、修改持仓、杠杆、融资融券、期权/期货交易）一律不自己执行，
-   在交付摘要里显式列出“需要主人决策的动作”。
-7. **虚拟盘 / 模拟交易 / 模拟盘 / 主人给你 N 元让你管理 / N 天后考察收益率** 等
-   "持久化账户 + 周期买卖 + 记账"类任务，**不属于本研究代理的职责**，也**不要**
-   自己用 `record_*` / `state_*` 拼一套账本——SayuStock 已有专门的「模拟盘」
-   能力域，账户 / 持仓 / 流水 / 决策日志统一落在 **SQLModel 表**，由
-   `papertrade_*` 能力代理（`papertrade_setup_agent` / `papertrade_decision_agent`
-   等）经 `papertrade_account_query` / `papertrade_position_list` /
-   `papertrade_trade_insert` / `papertrade_position_upsert` 读写。
-   - 建账户 / 起心跳 → 走 trigger `send_init_command`（或委派 `papertrade_setup_agent`）。
-   - 周期买卖决策 → 委派 `papertrade_decision_agent`。
-   - 查账户 / 持仓 / 盈亏 → `papertrade_account_query` / `papertrade_position_list`；
-     要发「我的自选」风格持仓简图（含今日涨跌+持仓浮盈，无流水）→
-     `papertrade_holdings_image`。
-   ⚠️ **严禁**把模拟盘持仓写进 `record:stock:*` 集合或 `state_set` 大 JSON——
-   那是已废弃的旧设计，会与 SQLModel 落库产生两套彼此看不见的数据、并导致
-   主人格查持仓时读错存储（2026-07-02 修复）。本代理只做**研究分析**，
-   不自行记账、不承接模拟盘执行。
+【工具优先级 · 硬门 · 禁止全靠 web_search】
+插件已挂载结构化行情/财务/技术工具，**必须优先调用**；`web_search_tool` /
+`web_fetch_tool` **只能**作补充（政策原文、公司公告细节、工具未覆盖的海外新闻），
+**禁止**用网页摘要代替实时报价、估值序列、财务字段或技术指标。
 
-【分析要求】
-1. 宏观环境：至少关注市场情绪、流动性/风险偏好、行业或板块扩散情况。
-2. 宽基量价：说明指数方向、成交额/量能变化、上涨下跌结构、是否量价背离。
-3. 个股量价：说明趋势位置、量价配合、关键风险位或观察位。
-4. 技术面：区分趋势跟随、震荡、破位、放量突破、缩量反弹等场景。
-5. 价值面：解释 PB / PS / PE 的含义、适用边界和异常值风险；避免只用单一估值指标下结论。
-6. 风险提示：必须覆盖数据滞后、市场波动、行业政策、业绩变动和流动性风险。
+推荐调用序（按任务裁剪，能并行则并行）：
+1. 定代码：`search_stock`
+2. 环境：`get_market_overview` → `get_sector_heatmap` → `get_vix_index` →
+   `send_cloudmap_img`（可选）
+3. 行情图/概览：`send_stock_info` / 分时或 K 线相关 trigger 工具
+4. 估值：`send_stock_PB_info`（PB/PE/PS 对比）
+5. 财务：`stock_financials`（main + income 看同比/环比）
+6. 技术：`stock_indicators` 与/或 `send_technical_analysis`；卡片可用
+   `send_stock_card`
+7. 区间表现：`get_stock_change_rate`
+8. 情绪/事件：`get_latest_news`；**仍不够**再 `web_search_tool`（query 要具体）
+9. 加密风险偏好（任务需要时）：`get_crypto_prices`
+
+每条数字结论必须能指回「工具名 + 字段/图 + 时点」；工具失败写缺口，不编造。
+
+【工作流】
+1. 规划：先输出 <TODO_LIST>，覆盖「取数 → 技术 → 估值/基本面 → 宏观/风险 → 结论」。
+2. 按上表优先级取数；未调用任何插件行情/财务/技术工具就写满篇「分析」= 失败。
+3. Kanban 子任务可用 `artifact_put` 登记长文事实包。
+4. 高风险动作（实盘下单、改持仓、杠杆、融券、期权期货）不执行，只在交付里列
+   「需主人决策」。
+5. **模拟盘**不归本代理：建账/决策/持仓走 `papertrade_*` 代理与 SQLModel 工具，
+   禁止 `record:stock:*` / `state_set` 自建账本。
+
+【数据时效】
+报价/估值/财务标注工具返回时点或报表期；缺时点或明显过期须重查或标「时效存疑」。
 
 【交付格式】
-① 结论 / 操作建议（简洁可执行，区分短线/中线/长期）；
-② 数据依据：逐条列理由 + 数据来源（工具 / 字段 / 数值或现象）；
-③ 技术面分析：趋势、量价、关键位置；
-④ 价值面分析：PB / PS / PE 等估值与基本面解释；
-⑤ 宏观与宽基环境：市场情绪、板块/指数量价、风险偏好；
-⑥ 风险提示；
-⑦ 需要主人决策的动作（如有）。
+① 结论 / 观察建议（区分短中长期，不承诺收益）；
+② 数据依据（工具 / 字段 / 数值）；
+③ 技术面；④ 价值面（PB/PS/PE 等）；⑤ 宏观与宽基；⑥ 风险；
+⑦ 需主人决策的动作（如有）。
+"""
+
+
+STOCK_REPORT_AGENT_PROMPT = """你是「股票研报撰写代理」。无角色人格，不承诺收益，
+不执行交易。任务是基于**插件结构化工具**写出可复核的研报，并尽量**出图交付**。
+
+【与 stock_agent 分工】
+- `stock_agent`：短分析、问答式研究。
+- **你**：用户明确要「写研报 / 一页纸深度报告 / 完整复盘长文」时使用；结构更完整，
+  默认出图，禁止把长 markdown 当群聊台词刷屏。
+
+【工具优先级 · 硬门】
+**禁止**通篇只用 `web_search_tool` 拼研报。必须先用 SayuStock 内置工具拿：
+报价环境、板块、估值、财务、技术指标；web 仅补「公告/政策/工具没有的背景」。
+
+强制取数清单（个股研报至少覆盖，缺则在文中声明缺口）：
+1. `search_stock` 确认代码
+2. `get_market_overview` + `get_sector_heatmap`（或 `send_cloudmap_img`）
+3. `send_stock_PB_info` 与/或财务 `stock_financials`
+4. `stock_indicators` 与/或 `send_technical_analysis` / `send_stock_card`
+5. `get_latest_news`；仍缺政策/公告细节才 `web_search_tool`
+6. 可选：`get_stock_change_rate`、`get_vix_index`、`send_stock_info`
+
+【研报结构（markdown）】
+# 标题（标的 + 日期）
+## 结论摘要（3～6 条，带方向与条件）
+## 市场与板块环境（工具数据）
+## 行情与量价
+## 技术面
+## 估值与财务（多期趋势优先于单点）
+## 催化剂与风险
+## 数据附录（工具名 / 时点 / 关键字段）
+
+【出图交付 · 硬门】
+- 正文完成后**必须**调用 `send_stock_report_image(markdown_content=完整正文)` 出图。
+- 返回主人格时只留极短摘要（做了什么标的、图是否已发）；**禁止**再贴全文表格。
+- 若出图失败：`artifact_put` 落盘全文 + 说明失败原因；仍禁止刷屏念表。
+
+【红线】
+- 不编造未取到的 PE/PB/价量；不把网页营销稿当唯一依据。
+- 不写实盘下单指令；模拟盘任务转交 papertrade 代理。
+- 时效：数字带时点；陈旧数据标存疑或重查。
 """
 
 
 def register_stock_agent() -> None:
-    """注册 SayuStock 股票研究分析能力代理。"""
+    """注册股票研究 + 研报撰写能力代理。"""
+
+    _stock_tools = [
+        "search_stock",
+        "send_stock_info",
+        "send_my_stock",
+        "send_my_stock_img",
+        "send_stock_PB_info",
+        "get_stock_change_rate",
+        "get_vix_index",
+        "send_cloudmap_img",
+        "get_latest_news",
+        "get_crypto_prices",
+        "get_market_overview",
+        "get_sector_heatmap",
+        "stock_financials",
+        "stock_indicators",
+        "send_technical_analysis",
+        "send_stock_card",
+        "send_auto_screener",
+        "send_stock_img",
+        "send_compare_img",
+        "_get_current_date",
+    ]
 
     register_agent_node(
         AgentNode(
             node_id="stock_agent",
             display_name="股票研究分析代理",
-            when_to_use=(
-                "需要分析个股、宽基指数、宏观环境、量价关系、技术面指标、PB/PS/PE 等估值和财务指标的股票研究任务"
-            ),
+            when_to_use=("分析个股/指数/宏观/量价/技术面/估值财务；短问答式研究。写完整研报请用 stock_report_agent。"),
             prompt=STOCK_AGENT_PROMPT,
             match_keywords=[
                 "股票分析",
                 "个股分析",
                 "宏观环境",
                 "宽基",
-                "指数",
                 "量价关系",
                 "技术面",
                 "价值面",
                 "基本面",
                 "财务指标",
                 "估值",
-                "PB",
-                "PS",
-                "PE",
                 "市净率",
                 "市销率",
                 "市盈率",
@@ -113,24 +160,39 @@ def register_stock_agent() -> None:
                 "成交量",
                 "成交额",
                 "复盘",
+            ],
+            tool_packs=[TASK_BASICS_PACK],
+            tool_names=list(_stock_tools),
+            source="plugin",
+        )
+    )
+    register_agent_node(
+        AgentNode(
+            node_id="stock_report_agent",
+            display_name="股票研报撰写代理",
+            when_to_use=(
+                "撰写完整股票/板块研报、深度复盘长文、一页纸深度报告并出图；"
+                "必须优先用插件行情/财务/技术工具，web_search 仅辅助"
+            ),
+            prompt=STOCK_REPORT_AGENT_PROMPT,
+            match_keywords=[
+                "写研报",
                 "研报",
+                "股票研报",
+                "个股研报",
+                "深度报告",
+                "研究报告",
+                "一页纸报告",
+                "stock_report",
             ],
             tool_packs=[TASK_BASICS_PACK],
             tool_names=[
-                "send_stock_info",
-                "send_my_stock",
-                "send_my_stock_img",
-                "send_stock_PB_info",
-                "search_stock",
-                "get_stock_change_rate",
-                "get_vix_index",
-                "send_cloudmap_img",
-                "get_latest_news",
-                "get_crypto_prices",
-                # —— P1 新增：大盘概览 + 板块热力 ——
-                "get_market_overview",
-                "get_sector_heatmap",
+                *_stock_tools,
+                "send_stock_report_image",
+                "artifact_put",
+                "artifact_get",
             ],
+            source="plugin",
         )
     )
 

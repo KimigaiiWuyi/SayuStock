@@ -38,12 +38,32 @@ def _ensure_pkg() -> None:
         mod.__path__ = [str(PKG_ROOT / sub)]
         sys.modules[f"{PKG_NAME}.{sub}"] = mod
 
-    fonts_mod = ModuleType("gsuid_core.utils.fonts.fonts")
-    fonts_mod.FONT_ORIGIN_PATH = Path("/nonexistent")
-    sys.modules.setdefault("gsuid_core", ModuleType("gsuid_core"))
-    sys.modules.setdefault("gsuid_core.utils", ModuleType("gsuid_core.utils"))
-    sys.modules.setdefault("gsuid_core.utils.fonts", ModuleType("gsuid_core.utils.fonts"))
-    sys.modules["gsuid_core.utils.fonts.fonts"] = fonts_mod
+    # chart_base 需要 FONT_ORIGIN_PATH。优先真实 gsuid_core（全量 CI 嵌套布局
+    # 下可用）；失败时再注入占位。切勿用无 __path__ 的 ModuleType 覆盖父包，
+    # 也切勿覆盖已加载的 fonts（会丢掉 core_font，拖垮同进程其它用例收集）。
+    if "gsuid_core.utils.fonts.fonts" not in sys.modules:
+        try:
+            import gsuid_core.utils.fonts.fonts  # noqa: F401
+        except Exception:
+            fonts_mod = ModuleType("gsuid_core.utils.fonts.fonts")
+            fonts_mod.FONT_ORIGIN_PATH = Path("/nonexistent")
+            fonts_mod.core_font = lambda size: __import__(
+                "PIL.ImageFont", fromlist=["ImageFont"]
+            ).ImageFont.load_default()
+
+            def _ensure_ns_pkg(name: str) -> None:
+                m = sys.modules.get(name)
+                if m is not None and getattr(m, "__path__", None) is not None:
+                    return
+                pkg = ModuleType(name)
+                pkg.__path__ = []  # type: ignore[attr-defined]
+                pkg.__package__ = name
+                sys.modules[name] = pkg
+
+            _ensure_ns_pkg("gsuid_core")
+            _ensure_ns_pkg("gsuid_core.utils")
+            _ensure_ns_pkg("gsuid_core.utils.fonts")
+            sys.modules["gsuid_core.utils.fonts.fonts"] = fonts_mod
 
     compat = ModuleType(f"{PKG_NAME}.utils.mplchart_compat")
     for name in (
