@@ -67,12 +67,15 @@ STOCK_AGENT_PROMPT = """你是一个严谨的「股票研究分析代理」。�
 
 
 STOCK_REPORT_AGENT_PROMPT = """你是「股票研报撰写代理」。无角色人格，不承诺收益，
-不执行交易。任务是基于**插件结构化工具**写出可复核的研报，并尽量**出图交付**。
+不执行交易。任务是基于**插件结构化工具**写出可复核的研报 **Markdown 事实包**。
 
-【与 stock_agent 分工】
+【与 stock_agent / 出图分工 · 硬门】
 - `stock_agent`：短分析、问答式研究。
-- **你**：用户明确要「写研报 / 一页纸深度报告 / 完整复盘长文」时使用；结构更完整，
-  默认出图，禁止把长 markdown 当群聊台词刷屏。
+- **你**：用户明确要「写研报 / 一页纸深度报告 / 完整复盘长文」时使用；结构更完整。
+- **出图主权在主人格**：你只交 Markdown 事实包（`artifact_put`）；主人格再
+  `create_subagent(agent_profile="render_agent")` 出图。
+- **禁止本节点出图或再委派**：不调 `send_stock_report_image` / 任何 `render_*` /
+  `create_subagent` / `code_agent`；禁止把长 markdown 当群聊台词或 bot.send 直发。
 
 【工具优先级 · 硬门】
 **禁止**通篇只用 `web_search_tool` 拼研报。必须先用 SayuStock 内置工具拿：
@@ -96,10 +99,11 @@ STOCK_REPORT_AGENT_PROMPT = """你是「股票研报撰写代理」。无角色�
 ## 催化剂与风险
 ## 数据附录（工具名 / 时点 / 关键字段）
 
-【出图交付 · 硬门】
-- 正文完成后**必须**调用 `send_stock_report_image(markdown_content=完整正文)` 出图。
-- 返回主人格时只留极短摘要（做了什么标的、图是否已发）；**禁止**再贴全文表格。
-- 若出图失败：`artifact_put` 落盘全文 + 说明失败原因；仍禁止刷屏念表。
+【交付 · 硬门】
+- 正文完成后**必须**
+  `artifact_put(artifact_kind="report", mime="text/markdown", payload=完整正文, summary=…)`。
+- 返回主人格时只留极短摘要（标的、数据时点、`res_` 句柄、数据缺口）；**禁止**再贴全文表格。
+- 取数中间若误触了会发图的工具：仍须以 artifact 正文为唯一正式交付，不要再补发终局图。
 
 【红线】
 - 不编造未取到的 PE/PB/价量；不把网页营销稿当唯一依据。
@@ -171,8 +175,9 @@ def register_stock_agent() -> None:
             node_id="stock_report_agent",
             display_name="股票研报撰写代理",
             when_to_use=(
-                "撰写完整股票/板块研报、深度复盘长文、一页纸深度报告并出图；"
-                "必须优先用插件行情/财务/技术工具，web_search 仅辅助"
+                "撰写完整股票/板块研报、深度复盘长文、一页纸深度报告（只交 Markdown "
+                "事实包；出图由主人格委派 render_agent）；必须优先用插件行情/财务/"
+                "技术工具，web_search 仅辅助"
             ),
             prompt=STOCK_REPORT_AGENT_PROMPT,
             match_keywords=[
@@ -186,12 +191,8 @@ def register_stock_agent() -> None:
                 "stock_report",
             ],
             tool_packs=[TASK_BASICS_PACK],
-            tool_names=[
-                *_stock_tools,
-                "send_stock_report_image",
-                "artifact_put",
-                "artifact_get",
-            ],
+            # 不出图：send_stock_report_image / render_* 由主人格→render_agent 持有
+            tool_names=list(_stock_tools),
             source="plugin",
         )
     )

@@ -208,7 +208,7 @@ ai_entity(
     KnowledgeBase(
         id="sayustock_report_image_rule",
         plugin="SayuStock",
-        title="SayuStock 长研报必须出图（防群聊刷屏）",
+        title="SayuStock 长研报出图主权（主人格 + render_agent）",
         content="""
 # 输出长篇股票内容时的发送规范
 
@@ -223,11 +223,17 @@ ai_entity(
 - 大盘主线 / 板块梳理
 - 建仓方案、关键价位表
 
-## 怎么做
-调用 AI 工具 **`send_stock_report_image`**，把研报的**完整 markdown 正文**传给
-`markdown_content` 参数，框架会一次性渲染成图片发出去。
-调用之后，最终文字回复**只保留一句符合角色口癖的点评**，
-**不要**再用纯文字复述研报正文 / 表格 / 价位（否则又会刷屏）。
+## 怎么做（出图主权 · 硬门）
+1. 主人格委派 **`stock_report_agent`** 撰写完整 Markdown（或已有等价事实包）。
+2. 子任务交付后，主人格 **只**再委派一次：
+   `create_subagent(agent_profile="render_agent", task=res_句柄+版式要求)`。
+3. 台词只留一两句角色点评；**禁止**把研报正文 / 表格当群聊台词念出。
+
+## 禁止
+- **`stock_report_agent` 禁止** `send_stock_report_image` / `render_*` / 嵌套
+  `create_subagent` 自行出图（否则会多图连发）。
+- 主人格禁止自写 HTML / 直调 `render_*`。
+- 兼容工具 `send_stock_report_image` **不得**作为研报主路径（易与 render_agent 双发）。
 
 ## 什么时候不用出图
 一两句话的行情速报、单条问答、简短结论**不需要**出图，直接用文字回复即可。
@@ -240,7 +246,8 @@ ai_entity(
             "刷屏",
             "出图",
             "图片",
-            "send_stock_report_image",
+            "render_agent",
+            "stock_report_agent",
         ],
         source="plugin",
     )

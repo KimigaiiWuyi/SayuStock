@@ -457,15 +457,13 @@ async def send_stock_report_image(
     title: str = "",
     max_width: int = 760,
 ) -> str:
-    """把一整篇股票研报 / 复盘 / 看盘分析渲染成**一张图片**发出去（防群聊刷屏）。
+    """兼容入口：把 markdown 研报渲成一张图并 ``bot.send``（非研报主路径）。
 
-    ⚠️ 正文数字应来自本插件工具（行情/财务/技术/估值等）；勿只用 web 摘要编全文。
-    能力代理 ``stock_report_agent`` 写完研报后**必须**调本工具出图。
+    **主路径（硬门）**：``stock_report_agent`` 只 ``artifact_put`` Markdown → 主人格
+    ``create_subagent(agent_profile="render_agent")`` 出图。本工具**不得**挂在
+    ``stock_report_agent`` 上，也**不得**与 render_agent 同轮双发。
 
-    长篇 + 多段落 + 表格 / 多小标题（个股研报、复盘、看盘、价位表等）**必须出图**：
-    把完整 markdown 放进 ``markdown_content``。**不要**纯文字发正文——群聊按空行
-    拆成多条刷屏。
-
+    仅在极少数「主会话已直接持有本工具、且未走能力代理」的兼容场景使用。
     调用后最终文字只留极短点评，**禁止**再复述正文 / 表格 / 价位。
 
     Args:
@@ -480,6 +478,16 @@ async def send_stock_report_image(
     md = (markdown_content or "").strip()
     if not md:
         return "❌ 研报内容为空，无法出图；请把完整 markdown 正文放进 markdown_content 再调用。"
+
+    # 方案 B：非 render 能力代理禁止终局直发，避免与主人格 render_agent 双发
+    parent_sid = ctx.deps.parent_session_id or ""
+    if parent_sid.startswith("capagent_") and not parent_sid.startswith(
+        "capagent_render_agent"
+    ):
+        return (
+            "❌ 能力代理禁止 send_stock_report_image 直发。"
+            "请 artifact_put(markdown) 交主人格，再 create_subagent(render_agent) 出图。"
+        )
 
     bot = ctx.deps.bot
     if bot is None:
