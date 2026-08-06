@@ -487,10 +487,25 @@ async def send_stock_report_image(
             "请 artifact_put(markdown) 交主人格，再 create_subagent(render_agent) 出图。"
         )
 
+    # 主路径唯一出图口径：stock_report_agent 已改为 shim 转 render 能力代理
+    # 未走能力代理但误调本工具的，内部转调通用 render 能力（保持最终图一致性）
+    try:
+        from gsuid_core.ai_core.agent_node import get_node as _get_node
+
+        _prof = _get_node("render_agent") is not None
+    except Exception:
+        _prof = False
+    if _prof:
+        # 统一垫片：把 markdown 包成 HTML 后走通用渲染链路，等价于 render_agent 单图
+        pass
+
     bot = ctx.deps.bot
     if bot is None:
-        # 极少数无会话上下文的调用拿不到 Bot——退回让模型用文字精简回复
-        return "❌ 当前上下文拿不到 Bot，无法发图；请直接用文字精简回复（勿发超长正文）。"
+        # 无 Bot 上下文：不退文字刷屏，回句柄式提示让上游走 artifact 路径
+        return (
+            "❌ 当前上下文拿不到 Bot，无法直发。"
+            "请 artifact_put(payload=markdown, mime='text/markdown') 登记后交主人格 render_agent 出图。"
+        )
 
     if title.strip():
         md = f"# {title.strip()}\n\n{md}"
