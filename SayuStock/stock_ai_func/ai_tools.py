@@ -481,9 +481,7 @@ async def send_stock_report_image(
 
     # 方案 B：非 render 能力代理禁止终局直发，避免与主人格 render_agent 双发
     parent_sid = ctx.deps.parent_session_id or ""
-    if parent_sid.startswith("capagent_") and not parent_sid.startswith(
-        "capagent_render_agent"
-    ):
+    if parent_sid.startswith("capagent_") and not parent_sid.startswith("capagent_render_agent"):
         return (
             "❌ 能力代理禁止 send_stock_report_image 直发。"
             "请 artifact_put(markdown) 交主人格，再 create_subagent(render_agent) 出图。"

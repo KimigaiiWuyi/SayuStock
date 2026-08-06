@@ -224,16 +224,18 @@ ai_entity(
 - 建仓方案、关键价位表
 
 ## 怎么做（出图主权 · 硬门）
-1. 主人格委派 **`stock_report_agent`** 撰写完整 Markdown（或已有等价事实包）。
+1. 主人格用花名册 / `find_tools` 发现 **`stock_report_agent`**，委派撰写完整 Markdown。
 2. 子任务交付后，主人格 **只**再委派一次：
    `create_subagent(agent_profile="render_agent", task=res_句柄+版式要求)`。
-3. 台词只留一两句角色点评；**禁止**把研报正文 / 表格当群聊台词念出。
+3. render **只登记图片 artifact**，不直发；主人格 `send_message_by_ai(image_id=…)` +
+   一两句角色点评（并 @ 发起人）。
+4. 模拟盘「详细总结 / 流水 / 决策」优先 **`papertrade_summary_agent`**（Markdown 事实包），
+   再 render；不要主人格自己拼长表。
 
 ## 禁止
-- **`stock_report_agent` 禁止** `send_stock_report_image` / `render_*` / 嵌套
-  `create_subagent` 自行出图（否则会多图连发）。
+- **能力代理禁止** 任何 bot 直发 / `send_message_by_ai` / 嵌套 `create_subagent` 自行出图。
 - 主人格禁止自写 HTML / 直调 `render_*`。
-- 兼容工具 `send_stock_report_image` **不得**作为研报主路径（易与 render_agent 双发）。
+- 兼容工具 `send_stock_report_image` **不得**作为研报主路径。
 
 ## 什么时候不用出图
 一两句话的行情速报、单条问答、简短结论**不需要**出图，直接用文字回复即可。
@@ -248,6 +250,7 @@ ai_entity(
             "图片",
             "render_agent",
             "stock_report_agent",
+            "papertrade_summary_agent",
         ],
         source="plugin",
     )

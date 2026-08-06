@@ -73,9 +73,9 @@ STOCK_REPORT_AGENT_PROMPT = """你是「股票研报撰写代理」。无角色�
 - `stock_agent`：短分析、问答式研究。
 - **你**：用户明确要「写研报 / 一页纸深度报告 / 完整复盘长文」时使用；结构更完整。
 - **出图主权在主人格**：你只交 Markdown 事实包（`artifact_put`）；主人格再
-  `create_subagent(agent_profile="render_agent")` 出图。
-- **禁止本节点出图或再委派**：不调 `send_stock_report_image` / 任何 `render_*` /
-  `create_subagent` / `code_agent`；禁止把长 markdown 当群聊台词或 bot.send 直发。
+  `create_subagent(agent_profile="render_agent")` 出图并由主人格发送。
+- **禁止本节点出图或再委派或直发**：不调 `send_stock_report_image` / 任何 `render_*` /
+  `create_subagent` / `code_agent` / `send_message_by_ai`；禁止 bot.send 直发。
 
 【工具优先级 · 硬门】
 **禁止**通篇只用 `web_search_tool` 拼研报。必须先用 SayuStock 内置工具拿：
@@ -380,11 +380,43 @@ PAPERTRADE_REPORTER_PROMPT = """你是「模拟盘复盘代理」。
 
 【两类任务】
 A. **持仓速览图**：有人只要当前持仓/盈亏一眼图 → 调 ``papertrade_holdings_image``
-   （简化版，含今日涨跌+持仓浮盈，**不含**交易流水；图发出后一句点评即可）。
+   （简化版，含今日涨跌+持仓浮盈，**不含**交易流水）。出图工具若返回句柄而非直发，
+   把句柄写进交付；**禁止**再调 send_message_by_ai。
 B. **完整复盘报告**：拉期内 trade_log + decision_log，统计总盈亏 / 胜率 / 最大回撤 /
-   换手率 / 持仓时间，输出 1 段 markdown 复盘（含数据表 + 1~2 个结论）。
+   换手率 / 持仓时间，输出 1 段 markdown 复盘（含数据表 + 1~2 个结论）并
+   ``artifact_put``。
 
 不写日志、不下新单。权威数据一律 SQLModel 工具，禁止 state/record 旧快照。
+禁止对用户会话直发；交付主人格后由主人格出站。
+"""
+
+
+PAPERTRADE_SUMMARY_PROMPT = """你是「模拟盘明细汇总代理」。无角色人格，只交 Markdown 事实包。
+
+【任务】
+用户要「详细总结当前模拟盘」时使用：账户汇总 + 全部持仓 + 近期流水 + 决策日志，
+写成可复核的 Markdown，供主人格再委派渲染节点出图。
+
+【工具（必须用插件 SQLModel 工具，禁止 state/record 旧快照）】
+1. ``papertrade_account_query`` — 现金 / 总资产 / 模式 / 已实现盈亏
+2. ``papertrade_position_list`` — 持仓明细（数量/成本/现价/浮盈/占比）
+3. ``papertrade_trade_list`` — 最近流水（至少 10～20 笔，按时间新→旧）
+4. ``papertrade_decision_list`` — 最近决策日志（理由/动作/标的，至少 10 条）
+
+【Markdown 结构】
+# 模拟盘明细汇总 · {日期}
+## 账户总览（表）
+## 持仓明细（表）
+## 近期流水（表）
+## 决策日志摘要（表或条目）
+## 数据时点与工具依据
+
+【交付 · 硬门】
+- 正文完成后必须
+  ``artifact_put(artifact_kind="report", mime="text/markdown", payload=完整正文, summary=…)``。
+- 返回主人格：极短摘要 + ``res_`` 句柄 + 数据时点；禁止贴全文当群聊台词。
+- **禁止** ``papertrade_holdings_image`` / 任何 ``render_*`` / ``create_subagent`` /
+  ``send_message_by_ai`` / bot 直发。
 """
 
 
@@ -560,6 +592,37 @@ def register_papertrade_agents() -> None:
                 "papertrade_holdings_image",
                 "papertrade_trade_list",
                 "send_cloudmap_img",
+            ],
+        )
+    )
+    register_agent_node(
+        AgentNode(
+            node_id="papertrade_summary_agent",
+            display_name="模拟盘明细汇总代理",
+            when_to_use=(
+                "详细总结模拟盘当前情况（账户+持仓+流水+决策日志）并交 Markdown 事实包；"
+                "主人格再委派 render_agent 出图。需要流水与决策明细时优先本节点，"
+                "不要只用持仓简图。"
+            ),
+            prompt=PAPERTRADE_SUMMARY_PROMPT,
+            match_keywords=[
+                "模拟盘详细总结",
+                "模拟盘情况",
+                "模拟盘流水",
+                "模拟盘决策",
+                "模拟盘汇总",
+                "详细总结模拟盘",
+                "papertrade 总结",
+                "papertrade_summary",
+                "虚拟盘流水",
+                "决策日志",
+            ],
+            tool_packs=[TASK_BASICS_PACK],
+            tool_names=[
+                "papertrade_account_query",
+                "papertrade_position_list",
+                "papertrade_trade_list",
+                "papertrade_decision_list",
             ],
         )
     )
