@@ -71,11 +71,55 @@ async def get_fund_pos_list(fcode: Union[str, int]) -> Optional[Dict[str, object
     return None
 
 
+def _code_query_candidates(raw: str) -> List[str]:
+    """拆分「600519 贵州茅台」等复合查询，优先纯代码再名称。"""
+    import re
+
+    text = (raw or "").strip()
+    if not text:
+        return []
+    out: List[str] = []
+    seen: set[str] = set()
+
+    def _add(s: str) -> None:
+        t = s.strip()
+        if t and t not in seen:
+            seen.add(t)
+            out.append(t)
+
+    # 代码优先：复合串先抽 6 位 / secid，再试原文与名称
+    for m in re.finditer(r"\b([0-3]\.\d{6})\b", text):
+        _add(m.group(1))
+    for m in re.finditer(r"\b(\d{6})\b", text):
+        _add(m.group(1))
+    for part in re.split(r"[\s,，/|+\-—]+", text):
+        _add(part)
+    name_only = re.sub(r"[\d.\s,，/|+\-—]+", "", text)
+    _add(name_only)
+    _add(text)
+    return out
+
+
 async def get_code_id(code: str, priority: Optional[str] = None) -> Optional[Tuple[str, str, str]]:
     """
     生成东方财富股票专用的行情ID
     code:可以是代码或简称或英文
     """
+    candidates = _code_query_candidates(code)
+    if not candidates:
+        return None
+    # 复合 query 依次尝试；首个成功即返回
+    last: Optional[Tuple[str, str, str]] = None
+    for cand in candidates:
+        hit = await _get_code_id_one(cand, priority)
+        if hit is not None:
+            return hit
+        last = hit
+    return last
+
+
+async def _get_code_id_one(code: str, priority: Optional[str] = None) -> Optional[Tuple[str, str, str]]:
+    """单次解析行情 ID（不做复合 query 拆分）。"""
     if code.endswith(".h"):
         code = code[: -len(".h")]
         priority = "h"

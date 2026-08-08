@@ -53,8 +53,12 @@ async def get_market_overview(
         3. 震荡市 → 选股重于择时
     """
     import json as _json
+    from datetime import datetime as _dt
+
+    from ..utils.stock.request import get_bar
 
     market = get_market()
+    as_of = _dt.now().strftime("%Y-%m-%d %H:%M:%S")
     INDEX_NAMES = ["上证指数", "深证成指", "创业板指", "沪深300", "中证500", "科创50"]
     indices: list[dict[str, object]] = []
     truncated: list[str] = []
@@ -73,23 +77,60 @@ async def get_market_overview(
             }
         )
 
+    # 涨跌家数：专用分布接口（勿用 clist 前 N 只冒充全市场）
     breadth = {"rise": 0, "fall": 0, "flat": 0, "limit_up": 0, "limit_down": 0}
-    snap = await market.board("沪深A", limit=5000, sort_asc=False)
-    if is_market_error(snap):
+    bars_raw = await get_bar()
+    if isinstance(bars_raw, str):
         truncated.append("breadth")
     else:
-        for row in snap.rows:
-            chg = row.change_pct if row.change_pct is not None else 0.0
-            if chg > 0:
-                breadth["rise"] += 1
-            elif chg < 0:
-                breadth["fall"] += 1
-            else:
-                breadth["flat"] += 1
-            if chg >= 19.0 or chg >= 9.95:
-                breadth["limit_up"] += 1
-            if chg <= -19.0 or chg <= -9.95:
-                breadth["limit_down"] += 1
+
+        def _int_list(key: str, size: int) -> list[int]:
+            raw = bars_raw[key] if key in bars_raw else []
+            if not isinstance(raw, list):
+                return [0] * size
+            vals: list[int] = []
+            for x in raw:
+                if isinstance(x, bool):
+                    vals.append(int(x))
+                elif isinstance(x, (int, float)):
+                    vals.append(int(x))
+                elif isinstance(x, str):
+                    try:
+                        vals.append(int(float(x)))
+                    except ValueError:
+                        vals.append(0)
+                else:
+                    vals.append(0)
+            if len(vals) < size:
+                vals.extend([0] * (size - len(vals)))
+            return vals[:size]
+
+        def _int_val(key: str) -> int:
+            raw = bars_raw[key] if key in bars_raw else 0
+            if isinstance(raw, bool):
+                return int(raw)
+            if isinstance(raw, (int, float)):
+                return int(raw)
+            if isinstance(raw, str):
+                try:
+                    return int(float(raw))
+                except ValueError:
+                    return 0
+            return 0
+
+        zf = _int_list("2", 10)
+        df = _int_list("3", 10)
+        limit_up = _int_val("5")
+        limit_down = _int_val("6")
+        rise = zf[0] + zf[1] + zf[2] + zf[3] + zf[4] + zf[5] + zf[6] + zf[7] + zf[8] + zf[9] + limit_up
+        fall = df[0] + df[1] + df[2] + df[3] + df[4] + df[5] + df[6] + df[7] + df[8] + df[9] + limit_down
+        breadth = {
+            "rise": rise,
+            "fall": fall,
+            "flat": 0,
+            "limit_up": limit_up,
+            "limit_down": limit_down,
+        }
 
     north_bound: float | None = None
     nb = await market.northbound()
@@ -98,17 +139,19 @@ async def get_market_overview(
     else:
         north_bound = nb.sh_net_yi + nb.sz_net_yi
 
-    # 涨停占比
     total = breadth["rise"] + breadth["fall"] + breadth["flat"]
     limit_up_pct: float = breadth["limit_up"] / total * 100 if total > 0 else 0.0
 
     return _json.dumps(
         {
+            "ok": True,
+            "as_of": as_of,
             "indices": indices,
             "breadth": breadth,
             "total_count": total,
             "north_bound_yi": north_bound,
             "limit_up_pct": limit_up_pct,
+            "gaps": truncated,
             "_truncated": truncated,
         },
         ensure_ascii=False,
@@ -187,14 +230,33 @@ async def get_sector_heatmap(
         return [r.code for r in snap.rows[:3] if r.code]
 
     try:
-        rise_snap = await market.board(board_kind, limit=max(top_n * 2, 10), sort_asc=False)
-        fall_snap = await market.board(board_kind, limit=max(top_n * 2, 10), sort_asc=True)
+        # 各拉一页后客户端再排：避免只靠 API po 在部分 fs 下语义漂移
+        fetch_n = max(top_n * 3, 30)
+        rise_snap = await market.board(board_kind, limit=fetch_n, sort_asc=False)
+        fall_snap = await market.board(board_kind, limit=fetch_n, sort_asc=True)
         rise_rows: list[dict[str, object]] = []
         fall_rows: list[dict[str, object]] = []
         if not is_market_error(rise_snap):
             rise_rows = _board_rows(rise_snap.rows, reverse=True)
         if not is_market_error(fall_snap):
             fall_rows = _board_rows(fall_snap.rows, reverse=False)
+        # 若涨榜首条仍为负且跌榜更负，仍合法（普跌市）；交叉校验只防「涨跌榜写反」
+        if rise_rows and fall_rows:
+            r0 = rise_rows[0]["change_pct"]
+            f0 = fall_rows[0]["change_pct"]
+            if isinstance(r0, (int, float)) and isinstance(f0, (int, float)) and r0 < f0:
+                # API 方向疑似反了：交换并重排
+                rise_rows, fall_rows = fall_rows, rise_rows
+                rise_rows = sorted(
+                    rise_rows,
+                    key=lambda x: float(x["change_pct"]) if isinstance(x["change_pct"], (int, float)) else 0.0,
+                    reverse=True,
+                )[: max(top_n, 1)]
+                fall_rows = sorted(
+                    fall_rows,
+                    key=lambda x: float(x["change_pct"]) if isinstance(x["change_pct"], (int, float)) else 0.0,
+                    reverse=False,
+                )[: max(top_n, 1)]
         picked_codes = list({str(r["code"]) for r in (rise_rows + fall_rows) if r.get("code")})
         code_lists = await asyncio.gather(*[_top_codes(c) for c in picked_codes])
         code_to_top: dict[str, list[str]] = dict(zip(picked_codes, code_lists))
@@ -257,9 +319,15 @@ async def get_latest_news(
     result = "【财经新闻】\n"
     for item in items[:limit]:
         ts = item.get("created_at", 0)
-        dt = datetime.fromtimestamp(ts / 1000).strftime("%m-%d %H:%M")
+        if not isinstance(ts, (int, float)):
+            ts = 0
+        dt = datetime.fromtimestamp(ts / 1000).strftime("%m-%d %H:%M") if ts else "??-??"
         text = item.get("text", "")
-        result += f"[{dt}] {text[:50]}...\n"
+        if not isinstance(text, str):
+            text = str(text)
+        # 完整摘要（上限 280 字），避免 50 字截断导致代理无法研判
+        body = text if len(text) <= 280 else text[:277] + "..."
+        result += f"[{dt}] {body}\n"
 
     return result
 
