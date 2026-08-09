@@ -7,7 +7,7 @@ from datetime import date
 from collections.abc import Sequence
 
 from ..port import MarketDataPort
-from ..enums import BoardKind, ValueKind, KlinePeriod
+from ..enums import RankBy, BoardKind, ValueKind, KlinePeriod
 from ..errors import MarketError
 from ..models import (
     Quote,
@@ -15,6 +15,7 @@ from ..models import (
     BreadthBar,
     KlineSeries,
     ValueSeries,
+    RankSnapshot,
     BoardSnapshot,
     IntradaySeries,
     MarketTurnover,
@@ -69,6 +70,15 @@ class CompositeMarketData:
         sort_asc: bool = False,
     ) -> BoardSnapshot | MarketError:
         return await self._equity.board(kind, sector=sector, limit=limit, sort_asc=sort_asc)
+
+    async def rank_list(
+        self,
+        rank_by: RankBy | str,
+        *,
+        limit: int = 20,
+        high_first: bool | None = None,
+    ) -> RankSnapshot | MarketError:
+        return await self._equity.rank_list(rank_by, limit=limit, high_first=high_first)
 
     async def hotmap(self) -> BoardSnapshot | MarketError:
         return await self._equity.hotmap()

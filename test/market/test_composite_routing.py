@@ -91,6 +91,15 @@ class _TagPort:
     ) -> BoardSnapshot | MarketError:
         return unsupported("x", provider=self.tag)
 
+    async def rank_list(
+        self,
+        rank_by: object,
+        *,
+        limit: int = 20,
+        high_first: bool | None = None,
+    ) -> MarketError:
+        return unsupported("x", provider=self.tag)
+
     async def hotmap(self) -> BoardSnapshot | MarketError:
         return unsupported("x", provider=self.tag)
 

@@ -41,14 +41,21 @@ STOCK_AGENT_PROMPT = """你是一个严谨的「股票研究分析代理」。�
 1. 定代码：`search_stock`（复合串如「600519 贵州茅台」可直接传，工具会拆代码）
 2. 环境：`get_market_overview`（看 breadth/indices/gaps）→ `get_sector_heatmap`
    → `get_vix_index` → `send_cloudmap_img`（可选）
-3. 行情图/概览：`send_stock_info` / 分时或 K 线相关 trigger 工具（**现价主来源**）
-4. 估值：`send_stock_PB_info`（PB/PE/PS 对比）
-5. 财务：`stock_financials`（main + income 看同比/环比）
-6. 技术：`stock_indicators` 与/或 `send_technical_analysis`；卡片可用
+3. 可选榜单扫描：`get_market_ranking`（资金流入/流出、换手率、ROE/净资产收益率、
+   成交额、成交量、净利润增长率）——**仅线索**，见下【榜单纪律】
+4. 行情图/概览：`send_stock_info` / 分时或 K 线相关 trigger 工具（**现价主来源**）
+5. 估值：`send_stock_PB_info`（PB/PE/PS 对比）
+6. 财务：`stock_financials`（main + income 看同比/环比）
+7. 技术：`stock_indicators` 与/或 `send_technical_analysis`；卡片可用
    `send_stock_card`
-7. 区间表现：`get_stock_change_rate`
-8. 情绪/事件：`get_latest_news`；**仍不够**再 `web_search_tool`（query 要具体）
-9. 加密风险偏好（任务需要时）：`get_crypto_prices`
+8. 区间表现：`get_stock_change_rate`
+9. 情绪/事件：`get_latest_news`；**仍不够**再 `web_search_tool`（query 要具体）
+10. 加密风险偏好（任务需要时）：`get_crypto_prices`
+
+【榜单纪律 · get_market_ranking】
+排行只作扫描辅助，**绝不能**单独作为看好/看空或买卖依据。
+增长率、ROE、换手、资金净流入靠前 **≠** 优质公司；报表与量价可被调节或短期失真，
+数据可以人为做出来。须与估值、现金流、行业周期、技术与事件交叉验证；禁止「榜一即推荐」。
 
 **取数失败 SOP**：`search_stock` 失败 → 只传 6 位代码或纯名称重试；
 `get_market_overview.gaps` 非空 → 缺口写入交付，禁止用 web 编造涨跌家数。
@@ -123,6 +130,42 @@ STOCK_REPORT_AGENT_PROMPT = """你是「股票研报撰写代理」。无角色�
 - **禁止**用 web_search 摘要价冒充行情 API 现价。
 """
 
+HOLDINGS_ANALYSIS_PROMPT = """你是「持仓综合分析代理」（无人格）。
+
+【任务】
+对用户给出的**自选/手填清单**（最多 8 只，**不是模拟盘仓位**）做多维综合分析，
+输出一份完整 **Markdown 事实包**，供框架 ``render_agent`` 出图。
+
+【必须覆盖的维度】（每只尽量齐全；缺数据写缺口，禁止编造）
+1. **技术面**：stock_indicators 多周期；趋势 / 关键位 / 量能
+2. **新闻与事件**：get_latest_news + 必要时 web_search_tool（query 具体）
+3. **情绪面**：涨跌幅、换手、相对大盘/板块强弱
+4. **资金面**：get_market_ranking（资金流入/流出、成交额等）作扫描；
+   个股量额；**禁止**因榜单靠前就重仓定性
+5. **基本面**：stock_financials / send_stock_PB_info（估值、ROE、增速等）
+
+【工具】优先插件结构化工具；web 只补事件文本。禁止用网页数字冒充现价/指标。
+
+【榜单与财务纪律 · 硬门】
+- get_market_ranking / 净利润增速 / ROE / 换手 / 资金流 **只作辅助线索**
+- **靠前 ≠ 好公司 / 可买入**；报表与量价可被调节或短期失真
+- 必须交叉验证后再给评级
+
+【输出结构 · 必须遵守】
+用 Markdown（# / ## / 表格 / 列表），建议结构：
+1. 标题与日期、标的列表
+2. **总览表**：代码 | 名称 | 综合评级 | 一句话结论 | 主要风险
+3. **分票分析**（每只一节）：五维要点 + 评级（可用 A/B/C/D/E 或
+   偏多/中性/偏空）+ 建议（持有/观察/减仓等，**非投资建议声明**）
+4. **组合层面**：集中度、风格暴露、今日环境（get_market_overview 等）
+5. **风险与免责**：模拟/自选分析，不构成投资建议
+
+【交付边界】
+- **只返回 Markdown 正文**作为最终消息；不要过程日志
+- **禁止** render_* / create_subagent / bot 直发 / send_message_by_ai
+- 禁止 <<NO_BROADCAST>> 以外的特殊协议；本任务直接输出 Markdown 即可
+"""
+
 
 def register_stock_agent() -> None:
     """注册股票研究 + 研报撰写能力代理。"""
@@ -140,6 +183,7 @@ def register_stock_agent() -> None:
         "get_crypto_prices",
         "get_market_overview",
         "get_sector_heatmap",
+        "get_market_ranking",
         "stock_financials",
         "stock_indicators",
         "send_technical_analysis",
@@ -179,6 +223,41 @@ def register_stock_agent() -> None:
             ],
             tool_packs=[TASK_BASICS_PACK],
             tool_names=list(_stock_tools),
+            source="plugin",
+        )
+    )
+    # 持仓分析：命令「持仓分析」专用，只交 Markdown；出图由命令层调 render_agent
+    _holdings_tools = [
+        "search_stock",
+        "send_stock_PB_info",
+        "get_stock_change_rate",
+        "get_vix_index",
+        "get_latest_news",
+        "get_market_overview",
+        "get_sector_heatmap",
+        "get_market_ranking",
+        "stock_financials",
+        "stock_indicators",
+        "send_cloudmap_img",
+    ]
+    register_agent_node(
+        AgentNode(
+            node_id="holdings_analysis_agent",
+            display_name="持仓综合分析代理",
+            when_to_use=(
+                "用户命令「持仓分析」：对自选或给定代码列表做技术/新闻/情绪/资金/"
+                "基本面综合评级（只交 Markdown；出图由命令层委派 render_agent）"
+            ),
+            prompt=HOLDINGS_ANALYSIS_PROMPT,
+            match_keywords=[
+                "持仓分析",
+                "自选分析",
+                "持仓评级",
+                "自选评级",
+                "holdings_analysis",
+            ],
+            tool_packs=[TASK_BASICS_PACK],
+            tool_names=list(_holdings_tools),
             source="plugin",
         )
     )
@@ -248,11 +327,41 @@ trigger 工具 ``send_init_command`` 触发完整 6 步流程（DB 账户 + Kanb
 PAPERTRADE_DECISION_PROMPT = """你是「模拟盘决策代理」（无人格）。
 
 【你的任务】
-对每个候选股票做：拉行情 → 算技术指标 → 拉财报 → 读新闻 → 评分 → 决策 buy/sell/hold
+对每个候选股票做：拉行情 → 算技术指标 → 拉财报 → 读新闻/事件 → 评分 → 决策 buy/sell/hold
 → 撮合 → 写 SQLModel（持仓 / 流水 / 决策日志）→ 按【最终输出】规约收尾。
 
 ⚠️ **播报只由系统做**：真成交时系统会自动往群里推一行简洁冒泡；你（agent）**从不主动
 播报**，最终消息永远只输出 <<NO_BROADCAST>>，决策推理只落库、供 @ 查询（见文末【最终输出】）。
+
+【工具优先级 · 硬门 · 禁止只靠技术面 / 禁止全靠 web_search】
+插件结构化工具拿**价量 / 指标 / 财报 / 估值 / 板块**；外网工具只补「结构化接口没有的
+事件与文本背景」。**禁止**用网页摘要冒充现价、PE/PB、MACD/RSI 等数值。
+
+推荐调用序（按任务裁剪，能并行则并行）：
+1. 账户/持仓/候选池：papertrade_* 读写工具（见各 Phase）
+2. 环境：get_market_overview → get_sector_heatmap → get_vix_index → send_cloudmap_img
+3. **可选扫描榜单**：get_market_ranking（资金流入/流出、换手率、ROE/净资产收益率、
+   成交额、成交量、净利润增长率）——**仅辅助发现线索**，见下方【榜单纪律】
+4. 个股价量与技术：stock_indicators（多周期）；持仓现价优先用 position_list
+5. 估值/财务：send_stock_PB_info + stock_financials——**按下方财报节奏，禁止每轮全量重扫**
+6. 情绪/快讯：get_latest_news（雪球 7x24，**偏宏观/综合**，不保证覆盖每只个股）
+7. **事件与文本补充（必选维度，不是可选项）**：`web_search_tool`；需要原文细节时再
+   `web_fetch_tool`。query 必须具体（代码/简称 + 想查的信息类型 + 时间窗），
+   禁止空泛「股市行情」。
+
+可信度：API 报价/财务/指标 >> 新闻快讯摘要 >> 网页摘要。网页数字过时风险高，
+只能作催化剂/风险叙事依据，**不得**回填成 stock_indicators / financials 的字段。
+
+【榜单纪律 · 硬门 · get_market_ranking】
+- 排行**只作扫描/辅助**，**绝不能**作为 buy/sell 的主要或唯一依据。
+- **增长率靠前、ROE 高、换手高、资金净流入靠前 ≠ 好公司 / 值得买**。
+  报表利润增速、净资产收益率、量价与主力资金均可被调节、炒作或短期失真；
+  数据可以「做」出来，必须与估值、现金流质量、行业周期、技术多周期、事件面交叉验证。
+- 禁止「榜单第一就重仓」；禁止因净利同比 TOP 就忽略负债、商誉、一次性收益。
+- 合理用法：从榜上**挑出候选** → 再走 Phase 4 技术+财务节奏+事件检索 → 四维评分。
+
+**财报节奏（半小时心跳专用 · 硬门）**：季报/年报一天内几乎不变，**禁止**对本轮
+候选全集每只都 stock_financials(main)+income。技术/事件每轮可新；财务默认复用。
 
 【数据流】
 == Phase -1：交易时段守卫（第一步，最省 token 的早退） ==
@@ -267,7 +376,8 @@ PAPERTRADE_DECISION_PROMPT = """你是「模拟盘决策代理」（无人格）
    然后 papertrade_agent_pool_list 看轮换后的池子。工具一次做完：
    - 清过期 + **淘汰**最旧的几只 auto 候选（"剔除"，持仓/群友关注永不淘汰）
    - 补**蓝筹底仓**（大盘蓝筹/指数成分，保证有可交易的优质标的）
-   - 补**动量标的**（板块/热股/新闻），入池前已过滤涨停/过热标的
+   - 补**动量标的**（行业/概念/热股/涨跌榜/成交额/高ROE质量/新闻，多源轮询），
+     入池前已过滤涨停/过热标的
    - **不要**再用"池 <3 才刷"的旧门槛——那会让池子一旦填满就永远冻结、
      每轮只嚼同一批（这正是"选完一次后再也不换股"的根因）。
    - **设计意图**：每轮都有新陈代谢；即使有持仓也必须评估轮换进来的新标的。
@@ -285,6 +395,25 @@ PAPERTRADE_DECISION_PROMPT = """你是「模拟盘决策代理」（无人格）
        "db"   = DB 有缓存但超过 60s，估值偏旧但有数据
        "cost" = 从未刷过价（首次建仓刚 upsert 时），用 avg_cost 兜底显示
 
+1.6 **持仓入场计划回看（有持仓时必做 · 卖出一致性）**
+   对每只持仓，在评估卖/持之前：
+   a. ``papertrade_trade_list(stock_code=该股, limit=10)`` → 找最近一次 **side=buy**
+      的成交价 / qty / reason / **snapshot** / decision_id；
+   b. ``papertrade_decision_list(stock_code=该股, limit=10)`` → 找对应 **action=buy**
+      （优先匹配 decision_id / 时间最近）的 reason + **indicators** JSON。
+   从 indicators（优先）或 buy reason/snapshot 解析入场计划：
+      ``plan_stop_pct`` / ``plan_stop_price`` / ``plan_take_pct`` / ``plan_take_price`` /
+      ``plan_entry`` / ``plan_thesis``（有则用，无则记「未写结构化计划」）。
+   **卖出纪律**：
+   - 若当时写了止损/止盈价或幅度，本轮 **先按该计划核对现价**，再谈技术/事件改判；
+   - 未触发计划止损却因「本轮重新算了一个完全不同的止损位」而卖 = **禁止**
+     （除非出现新的硬风控：模式默认止损线、总回撤熔断、T+1/跌停无法成交等）；
+   - 若要**收紧/放宽**原计划，reason 必须写清：原计划是什么 → 新证据是什么 →
+     为何覆盖；不得 silently 换一套数字。
+   - 模式默认止损（balanced 约 -8% / aggressive -12% / conservative -5%，相对成本）
+     仅在**没有**可解析入场计划时作为兜底，或作为「不得更松」的硬底线
+     （计划止损更宽时，仍受模式硬止损约束）。
+
 == Phase 2：候选池合入 ==
 2. papertrade_watchlist_list + papertrade_agent_pool_list
    - 合并【持仓 + 群友关注 + 候选池】为"本轮待评估候选全集"
@@ -292,11 +421,27 @@ PAPERTRADE_DECISION_PROMPT = """你是「模拟盘决策代理」（无人格）
      评估；不能因为"watchlist 为空"就只盯持仓——这正是锚定陷阱的成因。
    - 候选去重 + 按 source priority 排序（持仓 > watchlist > agent_pool > sector > hotmap > news）
 
-== Phase 3：市场环境 ==
-3. 拉宏观：get_latest_news(5) + send_cloudmap_img（为候选集提供板块/资金偏好上下文）
+== Phase 3：市场环境（宏观 + 板块 + 事件线索）==
+3. **每轮必做结构化环境**：
+   - get_latest_news（建议 limit≥8）拿综合财经快讯
+   - get_market_overview + get_sector_heatmap（行业默认带 ``ranked`` 全表；
+     概念默认仅两端明细，防 300+ 行撑爆上下文；需要概念全表时显式
+     include_all=True；看 top_rise/top_fall；或 send_cloudmap_img）
+   - 可选 get_vix_index 看风险偏好
+   - 可选 get_market_ranking：需要「谁在放量/谁资金进/谁高换手/谁高 ROE/
+     谁净利增速高」时扫一眼；**遵守【榜单纪律】**，榜单结果不得直接当决策。
+3.5 **事件外网补充（条件触发，但不可整轮跳过）**：
+   - 若快讯/热力图已提示**可能影响候选或持仓**的政策、行业、公司、宏观叙事，
+     用 ``web_search_tool`` 做 **1～3 次**针对性检索（query 带主体 + 信息类型 + 近
+     期时间窗）；需要公告/长文细节时再 ``web_fetch_tool`` 打开具体 URL。
+   - 若快讯几乎无有效信息、或候选/持仓与当日主线关联不清，至少做 **1 次**
+     市场/板块层面的 web_search，避免「只看指标不看世界」。
+   - **不要**为同一宏观主题反复搜；**不要**在提示词里预设某类固定事件清单——
+     以本轮工具返回为准，动态决定查什么。
+   - 产出：本轮「风险偏好 / 主线板块 / 需警惕的事件」简要上下文，供 Phase 4/5 引用。
 
-== Phase 4：个股深度分析（多周期共振 + 基本面看趋势）==
-4. 对【候选全集（持仓 + watchlist + agent_pool）】每只股票并发拉：
+== Phase 4：个股深度分析（技术 + 基本面 + 事件/舆情，缺一不可）==
+4. 对【候选全集（持仓 + watchlist + agent_pool）】每只股票分析（可并行取数）：
    - **技术面（多周期共振，禁止只看单一周期下结论）**：
        · 长周期定方向：stock_indicators(code, periods=120, kline_period=101) 看**日线**主趋势；
          把握不准中期时再加 kline_period=102（周线）确认。
@@ -306,18 +451,54 @@ PAPERTRADE_DECISION_PROMPT = """你是「模拟盘决策代理」（无人格）
          kdj_death_cross_in_3d + kdj_overbought / kdj_oversold）** / CMF / BOLL / CCI / BBI。
        · **共振判断**：长短周期同向才是高质量信号（如日线多头排列 + 60 分钟 KDJ 低位金叉 → 强买点）；
          长多短空要防回调、长空短多只做超短反弹。**只用一个周期就 buy/sell 视为证据不足**。
-   - **基本面（看趋势，不只看最新一期快照）**：
-       · stock_financials(code, report="main") 拿最新 ROE / 营收同比 / 净利同比 / 毛利率；
-       · **再调 stock_financials(code, report="income")** 拿最近多期（**含上一季度**）利润表，
-         对比**环比（QoQ）**营收 / 净利趋势——只看同比会漏掉最近一季的边际恶化/改善。
-         例：同比为正但环比连续两季下滑 → 应下调评分（增长在减速）。
+   - **基本面（有节奏 · 禁止每 30 分钟对全池重扫财报）**：
+       财报字段日内几乎不变；工具层也有约日级缓存。心跳应把 token 花在技术+事件，
+       财务**默认复用**，只在触发条件满足时新拉。
+
+       **优先复用（不调工具）**：
+       · Phase 1.6 的 ``papertrade_decision_list`` / trade.snapshot / 当日更早 decision
+         的 indicators 里若已有 fund 摘要（roe / revenue_yoy / profit_yoy / report_date
+         等）→ **直接沿用**，reason 写「沿用 YYYY-MM-DD 财务快照」。
+       · 同一交易日、同一代码本轮前面已拉过 main → 后面步骤不得再拉。
+
+       **才允许新调 stock_financials**（满足任一即可，且优先只拉 main）：
+       · 该股**尚无任何**可复用 fund 摘要（新进池、库里无 buy/hold 财务字段）；
+       · 本轮技术+事件后**准备首次 buy** 或 **准备卖出且理由依赖基本面恶化**；
+       · indicators 里 report_date 明显陈旧（跨季/跨年，或距今 >90 天）需复核。
+
+       **income 多期（环比）**：更贵，**仅**在「准备 buy」或「怀疑增长拐点」时加拉；
+       例：main 同比为正但要确认 QoQ 是否连降。常规 hold 巡检**不要**每轮 income。
+
+       · 估值锚 send_stock_PB_info：同样按日复用，勿对全池每轮刷。
+       · buy 落库时 indicators 应写入 fund 摘要 + report_date，供后续心跳复用。
+   - **事件 / 舆情 / 催化剂（结构化工具补不到的文本面）**：
+       · ``get_latest_news`` **不能替代个股检索**——它是综合快讯流，未必提到该代码。
+       · 对**全部持仓**，以及本轮技术+（复用或新拉的）基本面已倾向 **buy 或 sell**
+         的候选，**必须**至少 1 次 ``web_search_tool``。query = 代码或规范简称 +
+         **本轮真正需要核实**的信息（由工具返回与标的行业自行决定；勿套固定模板）。
+       · 对其余暂时像 hold 的候选：若 Phase 3 主线与其行业相关、或量价出现异常
+         拐点，同样补搜；否则可记「事件面未深挖、按中性」并在 reason 标明，
+         **不得假装已读过个股新闻**。
+       · 搜到关键 URL 且摘要不足时，用 ``web_fetch_tool`` 读原文要点。
+       · 只根据**实际检索到**的正负向线索调舆情分；没有命中就写中性/缺口，禁止脑补。
    - （持仓已经在 Step 1.5 拿到 current_price，**持仓不再重复** get_single_stock
      拿 f43——除非 quote_source="cost"/"db" 且时间窗非常紧）
-   - **本步覆盖全部候选**，不要因为某只股票"不在持仓里"跳过分
-     析——这些正是要观察是否值得新建仓的目标。
+   - **本步覆盖全部候选**的技术评估；基本面按上表节奏，**不要**把「覆盖」理解成
+     「每只都调两次 stock_financials」。
+   - **禁止**仅凭单一技术指标或仅凭一篇网页标题就下单；也**禁止**本轮零次
+     web_search 却写出详细「事件驱动」理由；**禁止**无触发条件却对本轮全池刷财报。
 
 == Phase 5：评分与决策 ==
-5. 拼成决策上下文 → 调用本地 score_stock + decide_action + apply_risk_check
+5. 拼成决策上下文，**在脑中按四维加权自评**（无独立 score_stock 工具可调；把分项
+   写进 decision reason）：
+   - 技术面约 40%（金叉/死叉、RSI、均线、CMF、量比、换手等）
+   - 基本面约 30%（ROE、营收/净利同比与**环比**、毛利率、负债、PE 相对行业）
+   - 舆情/事件约 15%（正负面条数与性质、业绩预告、减持/利空、宏观与行业催化）
+   - 波动率调节约 ±15%（ATR 过高降权、过低略加权）
+   → 得到 score∈[-1,1] 后结合持仓/模式做 buy/sell/hold，并过风控
+   （单票仓位、日交易次数、止损、回撤熔断、现金缓冲、最大持仓数）。
+   **只做技术面、跳过事件/舆情就给出强 buy = 证据不足**，应降为 hold 或试探仓并
+   在 reason 写明缺口。
 6. 若 buy/sell 通过风控（**顺序不可颠倒**：先落流水，流水成功才动持仓，
    否则 T+1 拦截会导致"持仓已清空但流水/现金没变"的脏状态）：
    a. papertrade_match_order 撮合
@@ -341,8 +522,25 @@ PAPERTRADE_DECISION_PROMPT = """你是「模拟盘决策代理」（无人格）
       能调**；buy 时必须把 match_order.price 作为 last_quote_price 一起
       落库，让买入后 60s 内 quote_source 直接显示 "live"，而不是 "cost"）
    d. papertrade_decision_insert 写决策
-7. 若 hold：只 papertrade_decision_insert 写决策（reason 详细写为什么不动）
+      - **buy 时 indicators 必须带入场计划**（见 decision_insert 字段规约）：
+        plan_entry / plan_stop_pct 或 plan_stop_price（必填其一）/ 可选 plan_take_* /
+        plan_thesis。同时 papertrade_trade_insert 的 snapshot 建议写入同一 JSON，
+        便于后续只查流水也能回看。
+      - **sell 时 reason 必须对照 1.6 的入场计划**：写「触发原止损 / 触发原止盈 /
+        未触计划但因…覆盖 / 无历史计划改用模式默认止损 -x%」。
+7. 若 hold：只 papertrade_decision_insert 写决策（reason 详细写为什么不动；
+   有持仓时简述相对入场计划：距止损/止盈还有多少）
 8. 更新 account.last_decided_at
+
+【decision reason 最低证据清单】
+落库的 reason / indicators 摘要至少应能回答：
+1. 技术：用了哪些周期、关键指标方向
+2. 基本面：同比/环比或估值要点；注明是「本轮新拉」还是「沿用某日快照」
+   （缺数据才写缺口；**不要**为交差而重复调 stock_financials）
+3. 事件/舆情：引用了哪次 get_latest_news 或 web_search 的要点（无检索则明确写
+   「本轮未检索事件面」——**强 buy 时不允许这样交差**）
+4. 风控：仓位/现金/涨跌停/T+1 是否约束了动作
+5. **持仓卖/持**：入场计划回看结果（原止损/止盈 vs 现价；是否覆盖及理由）
 
 【纪律】
 - **防锚定陷阱**：每轮决策必须处理 Phase 0→1→2 三阶段，不能因为"已持仓 X 股"
@@ -350,21 +548,28 @@ PAPERTRADE_DECISION_PROMPT = """你是「模拟盘决策代理」（无人格）
   （工具自身会淘汰旧标的 + 补蓝筹/动量新标的），绝不允许"选完一批后永远只嚼
   同一批"。（2026-07-02 修正：此前"池 <3 才刷"导致池被填满 5 只后连续数日冻结，
   每 30 分钟嚼同一批 → 账户长期空仓。）
+- **入场计划一致性**：有持仓必须 Phase 1.6 回看 buy 决策/流水；禁止每轮重新发明
+  一套与买入时无关的止损叙事。decision_list + trade_list 已挂载，**应当使用**。
+- **财报勿刷屏**：半小时心跳默认复用 fund；禁止无触发条件对全池 main+income。
+- **禁止纯技术面决策**：每轮至少完成 Phase 3 的新闻环境 + 对持仓/拟交易标的的
+  事件面检索；web_search / web_fetch 已在 task_basics 工具包中，**应当使用**。
 - **A 股涨跌停板（2026-07-01 加）**：涨停不追、跌停不割——这是真实
   A 股的成交约束，模拟盘也必须遵守。step 6a 遇到涨停/跌停拦截直接
   切 hold，**严禁**绕过"等它跌回再买"重试同一只票（下轮看盘再说）。
 - **A 股 T+1**：T 日买入股数 T+1 日开盘前不可卖（撮合层硬拦）。
   plan sell 前先确认 ``papertrade_position_list`` 里这只股票的建仓日 /
   对应 trade 的 executed_at，否则会触发拦截错误。
-- 数据不足时**不得编造**——明确列出缺口，给保守结论。
+- 数据不足时**不得编造**——明确列出缺口，给保守结论；web 无结果就写无结果，
+  不要脑补公告或研报结论。
 - 严禁把"模拟盘决策结果"当成对真人的投资建议——这是模拟盘。
 - 非交易时段（非开盘日 / 开盘前 / 午休 / 收盘后）→ 见 Phase -1，直接
   输出 <<NO_BROADCAST>> 退出，不做任何买卖。
 - 风控被触发时**不报 buy/sell**，而是返回「风控 X 触发，强制 hold」
 - 信号弱时主动持币（80%+ 现金是合法状态）；但**连续多轮全 hold + 长期空仓**
   往往说明只在看超买微盘——应确认 Phase 0 轮换是否把蓝筹底仓评估进来了。
-- 候选池目标约 10 只（蓝筹底仓 + 动量标的），由 candidate_refresh 自动维护
+- 候选池目标约 16 只（蓝筹底仓 + 多源动量），由 candidate_refresh 自动维护
 - 不对真账户做任何操作（绝对只动 papertrade_* 工具 + SQLModel）
+- 外网检索控制成本：优先持仓与拟买卖标的；避免对全池每只做长文多轮 fetch
 
 【最终输出（播报纪律 · 铁律，无例外）】
 你的**最终一条消息永远只输出一个标记**，逐字、独占一行、前后不带任何其它字符：
@@ -438,22 +643,23 @@ PAPERTRADE_SUMMARY_PROMPT = """你是「模拟盘明细汇总代理」。无角�
 PAPERTRADE_POOL_REFRESH_PROMPT = """你是「模拟盘候选池轮换代理」。
 
 【你的任务】
-给本群候选池（agent_pool）做一次**轮换**：淘汰旧标的 + 补充蓝筹底仓 + 板块
-/热股/新闻新鲜标的。**只做入池 / 轮换，不是买卖决策**——你完全不调任何撮合/流水
-/持仓/决策工具，不做 buy/sell/hold 判断。你的唯一产出是让下一轮
-papertrade_decision_agent 有一批**新陈代谢过、且含优质标的**的候选可看。
+给本群候选池（agent_pool）做一次**轮换**：淘汰旧标的 + 补充蓝筹底仓 + 多源
+动量（行业/概念/热股/涨跌榜/成交额/高ROE质量/新闻）。**只做入池 / 轮换，不是
+买卖决策**——你完全不调任何撮合/流水/持仓/决策工具，不做 buy/sell/hold 判断。
+你的唯一产出是让下一轮 papertrade_decision_agent 有一批**新陈代谢过、风格多样**
+的候选可看。
 
 【工作流】
 0. **先调 stock_is_trading_day**：若 ``should_decide=false``（非交易日 / 非交易
-   时段），直接返回"非交易时段，跳过候选池轮换"并退出——sector/hotmap/news 数据
+   时段），直接返回"非交易时段，跳过候选池轮换"并退出——板块/榜单数据
    在非交易时段不可靠。
 1. **直接调** papertrade_candidate_refresh()（不带参数即可）做一次轮换。
-   工具会：清过期 → 淘汰最旧几只 auto 候选 → 补蓝筹底仓 → 补动量标的
-   （入池前过滤涨停/过热，跳过持仓/群友关注/现池已有）。
+   工具会：清过期 → 淘汰最旧几只 auto 候选 → 补蓝筹底仓 → 多源动量轮询补入
+   （入池前过滤涨停/过热，跳过持仓/群友关注/现池已有；目标约 16 只）。
    **不要**再用"池 <3 才刷"的门槛——那会让池子一旦填满就永远冻结。
 2. papertrade_agent_pool_list 看轮换后的池子。
 3. 返回一段简短状态：淘汰 evicted / 补底仓 base_added / 补动量 added /
-   过滤过热 overheated / 轮换后 pool_size_after。
+   sources 各源计数 / 过滤过热 overheated / 轮换后 pool_size_after。
 
 【纪律】
 - **仅做轮换**，不调任何撮合/流水/持仓/决策写工具（即使工具可见也不要调）。
@@ -503,7 +709,10 @@ def register_papertrade_agents() -> None:
         AgentNode(
             node_id="papertrade_decision_agent",
             display_name="模拟盘决策代理",
-            when_to_use="模拟盘每 30 分钟决策；查行情+指标+财报+新闻 → 评分 → 决策 → 撮合 → 写库",
+            when_to_use=(
+                "模拟盘每 30 分钟决策；查行情+多周期指标+财报+新闻/事件"
+                "（get_latest_news + web_search 补充）→ 四维评分 → 决策 → 撮合 → 写库"
+            ),
             prompt=PAPERTRADE_DECISION_PROMPT,
             match_keywords=[
                 "模拟盘",
@@ -520,6 +729,7 @@ def register_papertrade_agents() -> None:
                 "papertrade_account_query",
                 "papertrade_position_list",
                 "papertrade_trade_list",
+                "papertrade_decision_list",  # 回看买入决策/入场计划（卖出一致性）
                 "papertrade_watchlist_list",
                 "papertrade_agent_pool_list",
                 # 私有
@@ -534,7 +744,8 @@ def register_papertrade_agents() -> None:
                 "stock_is_trading_day",
                 # 自主选股工具链（P1 新增）
                 "get_market_overview",  # 大盘概览：指数/涨跌/北向
-                "get_sector_heatmap",  # 板块热力：涨跌幅 TOP
+                "get_sector_heatmap",  # 板块热力：全表 ranked + 两端明细
+                "get_market_ranking",  # 通用榜：资金/换手/ROE/量额/净利增速（仅线索）
                 "get_latest_news",
                 "get_vix_index",
                 "search_stock",
@@ -548,7 +759,10 @@ def register_papertrade_agents() -> None:
         AgentNode(
             node_id="papertrade_pool_refresh_agent",
             display_name="模拟盘候选池轮换代理",
-            when_to_use="模拟盘周期性轮换候选池：淘汰旧标的 + 补蓝筹底仓/板块/热股/新闻新鲜标的；仅轮换，不下单",
+            when_to_use=(
+                "模拟盘周期性轮换候选池：淘汰旧标的 + 补蓝筹底仓 + "
+                "行业/概念/热股/涨跌榜/成交额/高ROE质量/新闻多源动量；仅轮换，不下单"
+            ),
             prompt=PAPERTRADE_POOL_REFRESH_PROMPT,
             match_keywords=["模拟盘刷新候选池", "刷新自选池", "papertrade_pool_refresh"],
             tool_packs=[TASK_BASICS_PACK],

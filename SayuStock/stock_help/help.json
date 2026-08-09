@@ -189,6 +189,14 @@
         "need_ck": false,
         "need_sk": false,
         "need_admin": false
+      },
+      {
+        "name": "持仓分析",
+        "desc": "自选或指定股票综合分析出图（技术/新闻/情绪/资金/基本面，每日1次）",
+        "eg": "持仓分析",
+        "need_ck": false,
+        "need_sk": false,
+        "need_admin": false
       }
     ]
   },

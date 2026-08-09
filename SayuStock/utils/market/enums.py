@@ -51,3 +51,15 @@ class ValueKind(str, Enum):
     PE = "pe"
     PB = "pb"
     DY = "dy"
+
+
+class RankBy(str, Enum):
+    """沪深 A 通用排行键（与业务/AI 工具别名层对齐）。"""
+
+    MAIN_INFLOW = "main_inflow"
+    MAIN_OUTFLOW = "main_outflow"
+    TURNOVER = "turnover"
+    ROE = "roe"
+    AMOUNT = "amount"
+    VOLUME = "volume"
+    PROFIT_YOY = "profit_yoy"

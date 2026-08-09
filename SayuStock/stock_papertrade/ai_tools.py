@@ -129,6 +129,9 @@ class _TradeItem(TypedDict):
     fee: float
     realized_pnl: float
     reason: str
+    snapshot: str
+    decision_id: int | None
+    mode: str
     decided_at: str | None
     executed_at: str | None
 
@@ -626,6 +629,9 @@ async def papertrade_trade_list(
 
     问「你都买卖过什么 / 最近成交 / 交易记录 / 某只股什么时候买的」走这个。
     数据在 SQLModel 流水表，**不在** ``record:`` 集合 / ``state_*``。
+
+    返回字段含 ``reason`` / ``snapshot``（买入时写入的指标与入场计划 JSON）/
+    ``decision_id`` / ``mode``，供决策代理在卖出前回看入场止损止盈。
     """
     gid, bid = await _resolve_scope(ctx, group_id, bot_id)
     if not gid or not bid:
@@ -652,6 +658,10 @@ async def papertrade_trade_list(
                 "fee": t.fee,
                 "realized_pnl": t.realized_pnl,
                 "reason": t.reason,
+                # 入场计划 / 指标快照：卖出复核时用（buy 时写入的 snapshot / decision_id）
+                "snapshot": t.snapshot or "",
+                "decision_id": t.decision_id,
+                "mode": t.mode,
                 "decided_at": decided_at.isoformat() if decided_at else None,
                 "executed_at": executed_at.isoformat() if executed_at else None,
             }
@@ -809,35 +819,59 @@ async def papertrade_decision_insert(
                        ✅ 示例：'MA5<MA20 多头排列，但 ROE 同比下滑 3.2 pct 且估值偏高，主动持币'
                        ❌ 反例：'账户现金 ¥1,000,000\\n📈 当前持仓：无\\n理由：技术面...'
 
-      - ``indicators`` —— JSON 字典字符串。由 ``stock_indicators`` /
-                       ``stock_financials`` / ``stock_is_trading_day`` 三工具的原返回
-                       拼装；若全部不可达，**传 '{}'**，不要塞中文。
+      - ``indicators`` —— JSON 字典字符串。技术/财务快照 + **入场计划**（buy 必写）：
+                       建议键：
+                         ``plan_entry`` 入场价、``plan_stop_pct`` 止损幅度（负小数，
+                         如 -0.08）、``plan_stop_price`` 止损价、``plan_take_pct`` /
+                         ``plan_take_price`` 止盈（若有）、``plan_thesis`` 一句话逻辑。
+                       其余可拼 stock_indicators / stock_financials 摘要。
+                       非法 JSON 会降级为空；**不要**把大段中文塞进 reason 冒充计划。
+                       **buy 硬门**：必须含可解析 ``plan_stop_pct``(<0) 或
+                       ``plan_stop_price``(>0)，否则拒绝落库。
 
       - ``score``    —— -1.0 ~ +1.0；buy → +，sell → -，hold → 0。
 
       - ``blocked_by`` —— 风控拦截原因；hold 不带风控时传 ''。
     """
+    from .strategy import indicators_have_entry_stop
+
     gid, bid = await _resolve_scope(ctx)
     denied: str = await _deny_write(ctx, gid, bid)
     if denied:
         return denied
 
-    # 防御：reason 含异常控制字符（\r / \t / 全角空格连用）时归一化，
-    #     且长度上限 200 字（超长截断+省略号），避免下游播报挤糊
+    action_lc: str = (action or "").lower().strip()
+
+    # reason 归一化 + 长度上限，避免下游播报挤糊
     norm_reason: str = "".join(ch if ch.isprintable() else " " for ch in (reason or "")).strip()
     if len(norm_reason) > 200:
         norm_reason = norm_reason[:197] + "..."
 
-    # 防御：indicators 必须是合法 JSON；非法时降级 '{}'
+    # indicators：合法 JSON 对象；buy 时强制止损计划字段
     import json as _json
 
+    ind_obj: dict[str, object] = {}
     if indicators and indicators.strip() and indicators.strip() != "{}":
         try:
-            _json.loads(indicators)
-        except Exception:
+            parsed: object = _json.loads(indicators)
+        except (_json.JSONDecodeError, TypeError, ValueError):
+            parsed = None
+        if isinstance(parsed, dict):
+            ind_obj = {str(k): v for k, v in parsed.items()}
+            indicators = _json.dumps(ind_obj, ensure_ascii=False)
+        else:
             indicators = "{}"
+            ind_obj = {}
     else:
         indicators = ""
+        ind_obj = {}
+
+    if action_lc == "buy" and (stock_code or "").strip():
+        if not indicators_have_entry_stop(ind_obj):
+            return (
+                "⚠️ buy 须在 indicators JSON 写入 plan_stop_pct(<0) 或 plan_stop_price(>0)"
+                "（可解析数值止损）；已拒绝落库，请补全后重试"
+            )
 
     d = await db.PaperDecisionRepo.append(
         gid,
@@ -852,10 +886,7 @@ async def papertrade_decision_insert(
         blocked_by=blocked_by,
     )
 
-    # 决策 → 候选池 反馈闭环：sell 从池移除、buy 促成保留（hold 不动，见
-    # candidate_pool.post_decision_pool_update）。让"卖掉的股不再每轮重复分析、
-    # 买入的股进跟踪池"，配合 candidate_refresh 的轮换一起破锚定。
-    action_lc: str = (action or "").lower().strip()
+    # 决策 → 候选池 反馈闭环：sell 从池移除、buy 促成保留（hold 不动）
     if stock_code and action_lc in ("buy", "sell"):
         try:
             from .candidate_pool import post_decision_pool_update
@@ -929,6 +960,9 @@ async def papertrade_trade_insert(
     ``papertrade_match_order`` 返回的实时成交价。本工具会再拉一次实时行情
     对照：偏差 > 3% 时拒绝落库（说明传入的是入池旧价/隔夜价），返回错误
     让 LLM 重新走 match_order。行情不可达时放行（match_order 已把过关）。
+
+    **buy 入场止损硬门**：``side='buy'`` 时 ``snapshot`` JSON 必须含可解析
+    ``plan_stop_pct``(<0) 或 ``plan_stop_price``(>0)，否则拒绝写流水。
     """
     # 交易执行统一走 TradeExecutor 抽象层（实时价偏差校验 / A 股 T+1 / 写流水
     # + 现金维护都在 executor 里，模拟盘/实盘可切换）；本工具只透传 + 回传说明。
@@ -938,6 +972,29 @@ async def papertrade_trade_insert(
     denied: str = await _deny_write(ctx, gid, bid)
     if denied:
         return denied
+
+    # buy 硬门：snapshot 须含可解析数值止损，避免「先成交再 decision 失败」无计划仓
+    side_lc: str = (side or "").lower().strip()
+    if side_lc == "buy":
+        import json as _json
+
+        from .strategy import indicators_have_entry_stop
+
+        snap_obj: dict[str, object] = {}
+        raw_snap = (snapshot or "").strip()
+        if raw_snap and raw_snap != "{}":
+            try:
+                parsed_snap: object = _json.loads(raw_snap)
+            except (_json.JSONDecodeError, TypeError, ValueError):
+                parsed_snap = None
+            if isinstance(parsed_snap, dict):
+                snap_obj = {str(k): v for k, v in parsed_snap.items()}
+        if not indicators_have_entry_stop(snap_obj):
+            return (
+                "⚠️ buy 的 snapshot JSON 须含 plan_stop_pct(<0) 或 plan_stop_price(>0)；"
+                "已拒绝落库，请补全入场止损后再 trade_insert"
+            )
+
     result = await get_executor().record_trade(
         group_id=gid,
         bot_id=bid,
@@ -1044,23 +1101,25 @@ async def papertrade_candidate_refresh(
       3. **补蓝筹底仓**：把池中蓝筹底仓补到 ``BASE_KEEP`` 只（跨行业大盘蓝筹，
          保证池里始终有可交易的优质标的，而非全是超买微盘 → 决策代理只能一直
          hold → 账户永远空仓）。
-      4. **补动量标的**：从 板块龙头 / 大盘热股 / 雪球新闻 扫新鲜标的补到
-         ``target_size``；入池前用一次批量报价**过滤涨停 / 过热标的**
-         （当日涨幅 ≥ 本板涨停 × 0.8）。
+      4. **补动量标的**（多源 + 轮询交织）：行业龙头 / 概念龙头 / 热股 /
+         涨幅榜 / 跌幅榜（超跌） / 成交额龙头 / **高 ROE 质量池** / 雪球新闻，
+         补到 ``target_size``；入池前批量报价**过滤涨停 / 过热**
+         （当日涨幅 ≥ 本板涨停 × 0.8）。各源**轮询**写入，避免旧逻辑
+         「sector 先塞满 → hotmap/news 永远 0」。
 
     去重：跳过已在 持仓 / 群友关注 / 现池 中的标的。auto 候选 ``AUTO_EXPIRE_HOURS``
     后过期、每轮再淘汰最旧几只 → 日内自然轮换；蓝筹底仓每轮随机补入不同名，
     既保质量又不长期锚定同一批。真正 buy/sell 仍由决策代理深度分析后产出。
 
     Args:
-        target_size: 轮换后候选池目标只数（0=用默认 ``POOL_TARGET_SIZE``）。
+        target_size: 轮换后候选池目标只数（0=用默认 ``POOL_TARGET_SIZE``，约 16）。
         rotate_out: 本轮强制淘汰几只最旧 auto 候选（0=用默认 ``ROTATE_OUT_PER_REFRESH``）。
         batch_size: 兼容旧调用；>0 时额外限制本轮动量补入上限。
 
     Returns:
         JSON：{"expired": E, "evicted": [...], "base_added": [...], "added": [...],
-        "sources": {"sector","hotmap","news","deduped","overheated"},
-        "pool_size_before": N, "pool_size_after": M}
+        "sources": {"sector","concept","hotmap","gainer","laggard","amount","quality",
+        "news","deduped","overheated"}, "pool_size_before": N, "pool_size_after": M}
     """
     from datetime import timedelta
 
@@ -1075,9 +1134,15 @@ async def papertrade_candidate_refresh(
         _from_position,
         _from_watchlist,
         pick_base_slice,
+        _from_quality_roe,
         filter_overheated,
         _from_hotmap_top_n,
+        _from_amount_leaders,
+        _from_market_gainers,
+        _from_market_laggards,
         _from_sector_top_picks,
+        _from_concept_top_picks,
+        interleave_source_pairs,
         _from_news_extract_tickers,
     )
 
@@ -1105,12 +1170,12 @@ async def papertrade_candidate_refresh(
     protected: Set[str] = set()
     try:
         protected.update(await _from_position(gid, bid))
-    except Exception:
-        pass
+    except Exception as e:
+        _gslogger.debug(f"[SayuStock][PaperTrade] candidate_refresh position 保护集失败: {e}")
     try:
         protected.update(await _from_watchlist(gid, bid))
-    except Exception:
-        pass
+    except Exception as e:
+        _gslogger.debug(f"[SayuStock][PaperTrade] candidate_refresh watchlist 保护集失败: {e}")
 
     entries = await db.PaperAgentPoolRepo.list_by_account(gid, bid)
     pool_size_before: int = len(entries)
@@ -1160,30 +1225,50 @@ async def papertrade_candidate_refresh(
             seen.add(code)
             base_added.append(code)
 
-    # ── 3) 补动量标的（板块/热股/新闻）到 target，入池前过滤涨停/过热 ──
-    sources: dict[str, int] = {"sector": 0, "hotmap": 0, "news": 0, "deduped": 0, "overheated": 0}
+    # ── 3) 补动量标的（多源 + 轮询交织）到 target，入池前过滤涨停/过热 ──
+    sources: dict[str, int] = {
+        "sector": 0,
+        "concept": 0,
+        "hotmap": 0,
+        "gainer": 0,
+        "laggard": 0,
+        "amount": 0,
+        "quality": 0,
+        "news": 0,
+        "deduped": 0,
+        "overheated": 0,
+    }
     added: list[dict[str, str]] = []
     momentum_cap: int = max(0, tgt - len(seen))
     if batch_size > 0:
         momentum_cap = min(momentum_cap, batch_size)
 
     if momentum_cap > 0:
+        import asyncio
+        from collections.abc import Awaitable
+
+        async def _safe_source(label: str, coro: Awaitable[list[str]]) -> list[tuple[str, str]]:
+            try:
+                codes = await coro
+                return [(c, label) for c in codes]
+            except Exception as ex:
+                _gslogger.debug(f"[SayuStock][PaperTrade] candidate_refresh {label} 失败: {ex}")
+                return []
+
+        # 多源并行拉取，降低 8 路串行时延
+        batches = await asyncio.gather(
+            _safe_source("sector", _from_sector_top_picks(top_sectors=4, per_sector=3)),
+            _safe_source("concept", _from_concept_top_picks(top_concepts=3, per_concept=3)),
+            _safe_source("hotmap", _from_hotmap_top_n(n=12)),
+            _safe_source("gainer", _from_market_gainers(n=10)),
+            _safe_source("laggard", _from_market_laggards(n=8)),
+            _safe_source("amount", _from_amount_leaders(n=10)),
+            _safe_source("quality", _from_quality_roe(n=10)),
+            _safe_source("news", _from_news_extract_tickers()),
+        )
         raw_pairs: list[tuple[str, str]] = []
-        try:
-            for c in await _from_sector_top_picks(top_sectors=3, per_sector=3):
-                raw_pairs.append((c, "sector"))
-        except Exception as ex:
-            _gslogger.debug(f"[SayuStock][PaperTrade] candidate_refresh sector 失败: {ex}")
-        try:
-            for c in await _from_hotmap_top_n(n=10):
-                raw_pairs.append((c, "hotmap"))
-        except Exception as ex:
-            _gslogger.debug(f"[SayuStock][PaperTrade] candidate_refresh hotmap 失败: {ex}")
-        try:
-            for c in await _from_news_extract_tickers():
-                raw_pairs.append((c, "news"))
-        except Exception as ex:
-            _gslogger.debug(f"[SayuStock][PaperTrade] candidate_refresh news 失败: {ex}")
+        for batch in batches:
+            raw_pairs.extend(batch)
 
         # 去重（保留首次出现的 source），过滤非法 + 已 seen
         uniq: list[tuple[str, str]] = []
@@ -1199,16 +1284,30 @@ async def papertrade_candidate_refresh(
             useen.add(c)
             uniq.append((c, s))
 
-        # 一次批量报价过滤涨停/过热
+        # 轮询交织：各源交替占位，避免 sector 一路写满
+        uniq = interleave_source_pairs(uniq)
+
+        # 一次批量报价过滤涨停/过热（跌幅榜几乎不会被误杀）
         kept: Set[str] = set(await filter_overheated([c for c, _ in uniq]))
         sources["overheated"] = len(uniq) - len(kept)
 
+        _src_reason: dict[str, str] = {
+            "sector": "行业板块龙头",
+            "concept": "概念板块龙头",
+            "hotmap": "大盘热股",
+            "gainer": "沪深A涨幅榜",
+            "laggard": "沪深A跌幅榜(超跌)",
+            "amount": "成交额龙头",
+            "quality": "高ROE财务质量",
+            "news": "新闻提及",
+        }
         for c, s in uniq:
             if len(added) >= momentum_cap:
                 break
             if c not in kept:
                 continue
             secid = derive_secid(c)
+            src_label = _src_reason[s] if s in _src_reason else s
             try:
                 await db.PaperAgentPoolRepo.upsert(
                     gid,
@@ -1216,7 +1315,7 @@ async def papertrade_candidate_refresh(
                     stock_code=c,
                     stock_name="",
                     secid=secid,
-                    reason="板块/热度/新闻扫描（已过滤涨停/过热，priority=1）",
+                    reason=f"{src_label}扫描（已过滤涨停/过热，priority=1）",
                     added_by="auto_refresh",
                     priority=1,
                     expires_at=now + timedelta(hours=AUTO_EXPIRE_HOURS),
@@ -1226,12 +1325,16 @@ async def papertrade_candidate_refresh(
                 continue
             seen.add(c)
             added.append({"stock_code": c, "secid": secid, "source": s})
-            sources[s] += 1
+            if s in sources:
+                sources[s] += 1
+            else:
+                sources[s] = 1
 
     pool_after: list[str] = []
     try:
         pool_after = await db.PaperAgentPoolRepo.list_codes(gid, bid)
-    except Exception:
+    except Exception as e:
+        _gslogger.debug(f"[SayuStock][PaperTrade] candidate_refresh 读池失败: {e}")
         pool_after = list(seen)
 
     return json.dumps(
@@ -1415,6 +1518,11 @@ async def stock_financials(
     report: str = "main",
 ) -> str:
     """获取股票财报数据（F10 / 利润表 / 资产负债表 / 现金流 / 主要指标）。
+
+    ⚠️ **模拟盘心跳用法**：财报日内几乎不变，底层已有约 1440 分钟文件缓存。
+    **不要**在每 30 分钟决策里对候选全集每只都调 main+income。优先复用
+    ``papertrade_decision_list`` / 入场 indicators 里的 fund 摘要；仅新票、
+    拟首次买入、或 report_date 跨季过期时再调。income 多期环比仅买前或疑拐点时用。
 
     Args:
         stock_code: 6 位股票代码

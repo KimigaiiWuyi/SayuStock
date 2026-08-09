@@ -6,7 +6,7 @@ from typing import Literal
 from datetime import date
 from collections.abc import Sequence
 
-from ..enums import BoardKind, ValueKind, KlinePeriod
+from ..enums import RankBy, BoardKind, ValueKind, KlinePeriod
 from ..errors import MarketError, unsupported
 from ..models import (
     Quote,
@@ -14,6 +14,7 @@ from ..models import (
     BreadthBar,
     KlineSeries,
     ValueSeries,
+    RankSnapshot,
     BoardSnapshot,
     IntradaySeries,
     MarketTurnover,
@@ -58,6 +59,15 @@ class PartialMarketData:
         sort_asc: bool = False,
     ) -> BoardSnapshot | MarketError:
         return unsupported("board 未实现", provider=self.provider_name)
+
+    async def rank_list(
+        self,
+        rank_by: RankBy | str,
+        *,
+        limit: int = 20,
+        high_first: bool | None = None,
+    ) -> RankSnapshot | MarketError:
+        return unsupported("rank_list 未实现", provider=self.provider_name)
 
     async def hotmap(self) -> BoardSnapshot | MarketError:
         return unsupported("hotmap 未实现", provider=self.provider_name)

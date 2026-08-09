@@ -60,6 +60,7 @@ s = _load("strategy", "strategy.py")
 score_stock = s.score_stock
 decide_action = s.decide_action
 apply_risk_check = s.apply_risk_check
+indicators_have_entry_stop = s.indicators_have_entry_stop
 tech_from_indicators = s.tech_from_indicators
 MODE_RULES = s.MODE_RULES
 MODE_THRESHOLDS = s.MODE_THRESHOLDS
@@ -494,6 +495,25 @@ def test_tech_from_indicators():
     print("[OK] tech_from_indicators 转换正确")
 
 
+def test_indicators_have_entry_stop():
+    """buy 入场止损计划：可解析数值硬门"""
+    assert indicators_have_entry_stop({"plan_stop_pct": -0.08}) is True
+    assert indicators_have_entry_stop({"plan_stop_pct": "-0.05"}) is True
+    assert indicators_have_entry_stop({"plan_stop_price": 10.5}) is True
+    assert indicators_have_entry_stop({"plan_stop_price": "12"}) is True
+    assert indicators_have_entry_stop({"plan_entry": 12.0}) is False
+    assert indicators_have_entry_stop({}) is False
+    assert indicators_have_entry_stop({"plan_stop_pct": None}) is False
+    assert indicators_have_entry_stop({"plan_stop_pct": ""}) is False
+    assert indicators_have_entry_stop({"plan_stop_pct": "n/a"}) is False
+    assert indicators_have_entry_stop({"plan_stop_pct": 0}) is False
+    assert indicators_have_entry_stop({"plan_stop_pct": 0.05}) is False
+    assert indicators_have_entry_stop({"plan_stop_price": 0}) is False
+    assert indicators_have_entry_stop({"plan_stop_price": -1}) is False
+    assert indicators_have_entry_stop({"plan_stop_pct": True}) is False
+    print("[OK] indicators_have_entry_stop")
+
+
 if __name__ == "__main__":
     # score tests
     test_score_strong_buy_high()
@@ -521,4 +541,5 @@ if __name__ == "__main__":
     test_mode_thresholds_different()
     # tech_from_indicators
     test_tech_from_indicators()
-    print("\n[SUCCESS] strategy 全部 24 个测试通过！")
+    test_indicators_have_entry_stop()
+    print("\n[SUCCESS] strategy 全部测试通过！")

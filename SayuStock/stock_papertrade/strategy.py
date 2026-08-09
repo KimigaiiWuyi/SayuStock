@@ -4,12 +4,50 @@
 - :func:`score_stock`       单只股票评分（-1.0 ~ +1.0）
 - :func:`decide_action`     决策树：基于 score + 持仓 + 模式 → 买/卖/持
 - :func:`apply_risk_check`  风控检查（单日交易次数 / 回撤熔断等）
+- :func:`indicators_have_entry_stop`  buy 决策 indicators 是否含止损计划
 - :data:`MODE_RULES`         三种风控模式的规则矩阵
 - :data:`MODE_THRESHOLDS`    各模式对应的 score 门槛
 """
 
 from typing import Any, Dict, List, Optional
 from dataclasses import field, dataclass
+
+
+def _as_finite_float(value: object) -> float | None:
+    """把 indicators 值收窄为有限 float；bool / 非数字 / NaN / Inf → None。"""
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        f = float(value)
+        if f != f or f in (float("inf"), float("-inf")):
+            return None
+        return f
+    if isinstance(value, str):
+        s = value.strip()
+        if not s:
+            return None
+        try:
+            f = float(s)
+        except ValueError:
+            return None
+        if f != f or f in (float("inf"), float("-inf")):
+            return None
+        return f
+    return None
+
+
+def indicators_have_entry_stop(indicators: dict[str, object]) -> bool:
+    """buy 落库前：须有可解析数值止损（pct<0 或 price>0）。"""
+    if "plan_stop_pct" in indicators:
+        pct = _as_finite_float(indicators["plan_stop_pct"])
+        if pct is not None and pct < 0:
+            return True
+    if "plan_stop_price" in indicators:
+        price = _as_finite_float(indicators["plan_stop_price"])
+        if price is not None and price > 0:
+            return True
+    return False
+
 
 # ============================================================
 # 风控矩阵

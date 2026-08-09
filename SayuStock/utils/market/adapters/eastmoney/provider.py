@@ -7,7 +7,7 @@ from typing import Literal
 from datetime import date, timedelta
 from collections.abc import Sequence
 
-from ...enums import BoardKind, ValueKind, AssetClass, KlinePeriod
+from ...enums import RankBy, BoardKind, ValueKind, AssetClass, KlinePeriod
 from ...errors import MarketError, not_found, empty_error, unsupported, network_error
 from ...models import (
     Quote,
@@ -15,6 +15,7 @@ from ...models import (
     BreadthBar,
     KlineSeries,
     ValueSeries,
+    RankSnapshot,
     BoardSnapshot,
     IntradaySeries,
     MarketTurnover,
@@ -23,6 +24,12 @@ from ...models import (
 )
 from .json_util import opt_float, as_mapping, require_mapping
 from .map_fields import PROVIDER
+from .parse_rank import (
+    RANK_SPECS_INTERNAL,
+    rank_fields_csv,
+    resolve_rank_by,
+    parse_rank_payload,
+)
 from ....constant import ErroText, market_dict
 from .parse_board import parse_board_payload
 from .parse_kline import parse_kline_payload
@@ -229,6 +236,40 @@ class EastMoneyMarketData:
         if limit is not None and len(snap.rows) > limit:
             return BoardSnapshot(kind=snap.kind, title=snap.title, rows=snap.rows[:limit])
         return snap
+
+    async def rank_list(
+        self,
+        rank_by: RankBy | str,
+        *,
+        limit: int = 20,
+        high_first: bool | None = None,
+    ) -> RankSnapshot | MarketError:
+        """沪深 A 通用 clist 排行；f* 只在 parse_rank 内解析。"""
+        key = resolve_rank_by(rank_by)
+        if key is None or key not in RANK_SPECS_INTERNAL:
+            return unsupported(f"未知 rank_by={rank_by!r}", provider=PROVIDER)
+        spec = RANK_SPECS_INTERNAL[key]
+        # 单页上限与 clist pz 一致（最多 100）；质量池 QUALITY_RANK_LIMIT=80 依赖此上限
+        lim = max(1, min(int(limit), 100))
+        use_high_first = spec.default_high_first if high_first is None else bool(high_first)
+        po = 0 if use_high_first else 1
+        fs = market_dict["沪深A"] if "沪深A" in market_dict else "m:0 t:6,m:0 t:80,m:1 t:2,m:1 t:23"
+        url = "https://push2.eastmoney.com/api/qt/clist/get"
+        params = [
+            ("pz", str(min(100, max(lim, 40)))),
+            ("po", str(po)),
+            ("np", "1"),
+            ("fltt", "2"),
+            ("invt", "2"),
+            ("fid", spec.sort_fid),
+            ("pn", "1"),
+            ("fs", fs),
+            ("fields", rank_fields_csv(spec)),
+        ]
+        raw = await EASTMONEY_REQUESTER.stock_request(url, "GET", params=params)
+        if isinstance(raw, int):
+            return network_error(f"rank clist 失败: {raw}", provider=PROVIDER)
+        return parse_rank_payload(raw, spec=spec, high_first=use_high_first, limit=lim)
 
     async def hotmap(self) -> BoardSnapshot | MarketError:
         raw = await EASTMONEY_REQUESTER.get_hotmap()

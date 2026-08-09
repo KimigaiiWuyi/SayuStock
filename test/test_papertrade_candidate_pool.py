@@ -58,6 +58,8 @@ build_candidate_pool = pool.build_candidate_pool
 post_decision_pool_update = pool.post_decision_pool_update
 SOURCE_CAPS = pool.SOURCE_CAPS
 TOTAL_CAP = pool.TOTAL_CAP
+# 其它用例会 mock 掉源函数；质量缓存单测直接调真实实现，避免污染模块属性类型
+_REAL_FROM_QUALITY_ROE = getattr(pool, "_from_quality_roe")
 
 
 # ============================================================
@@ -69,10 +71,15 @@ def _make_fake_sources(
     watchlist: List[str] | None = None,
     agent_pool: List[str] | None = None,
     sector: List[str] | None = None,
+    concept: List[str] | None = None,
     hotmap: List[str] | None = None,
+    gainer: List[str] | None = None,
+    laggard: List[str] | None = None,
+    amount: List[str] | None = None,
+    quality: List[str] | None = None,
     news: List[str] | None = None,
 ):
-    """生成 6 个假数据源闭包（async，与真实接口一致）"""
+    """生成假数据源闭包（async，与真实接口一致；默认全空，避免单测打真网）"""
 
     async def _pos(gid, bid):
         return list(position or [])
@@ -86,8 +93,23 @@ def _make_fake_sources(
     async def _sec(*a, **kw):
         return list(sector or [])
 
+    async def _con(*a, **kw):
+        return list(concept or [])
+
     async def _hot(*a, **kw):
         return list(hotmap or [])
+
+    async def _gain(*a, **kw):
+        return list(gainer or [])
+
+    async def _lag(*a, **kw):
+        return list(laggard or [])
+
+    async def _amt(*a, **kw):
+        return list(amount or [])
+
+    async def _qual(*a, **kw):
+        return list(quality or [])
 
     async def _news(*a, **kw):
         return list(news or [])
@@ -97,13 +119,18 @@ def _make_fake_sources(
         "_from_watchlist": _wl,
         "_from_agent_pool": _ap,
         "_from_sector_top_picks": _sec,
+        "_from_concept_top_picks": _con,
         "_from_hotmap_top_n": _hot,
+        "_from_market_gainers": _gain,
+        "_from_market_laggards": _lag,
+        "_from_amount_leaders": _amt,
+        "_from_quality_roe": _qual,
         "_from_news_extract_tickers": _news,
     }
 
 
 def test_pool_empty():
-    """6 路都空 → 候选池空"""
+    """多源都空 → 候选池空"""
     fake = _make_fake_sources()
     for name, fn in fake.items():
         setattr(pool, name, fn)
@@ -112,7 +139,7 @@ def test_pool_empty():
 
     out = asyncio.run(build_candidate_pool("g1", "b1"))
     assert out == []
-    print("[OK] 6 路空 → 候选池空")
+    print("[OK] 多源空 → 候选池空")
 
 
 def test_pool_single_source():
@@ -162,7 +189,66 @@ def test_pool_priority_order():
     # 期望顺序：position 先，watchlist 后，依次类推
     expected = ["600001", "600002", "600003", "600004", "600005", "600006", "600007", "600008", "600009"]
     assert out == expected, f"got {out}, expected {expected}"
-    print(f"[OK] 6 路优先级顺序 → {out}")
+    print(f"[OK] 多源优先级顺序 → {out}")
+
+
+def test_amount_leaders_uses_rank_list():
+    """成交额源走 Port.rank_list(AMOUNT)，保持 API 返回顺序（非涨跌幅 board）。"""
+    import asyncio
+    from unittest.mock import AsyncMock, patch
+
+    import SayuStock.stock_papertrade.candidate_pool as real_pool
+    from SayuStock.utils.market.enums import RankBy
+    from SayuStock.utils.market.models import RANKING_CAVEAT, RankRow, RankSnapshot
+
+    rows = (
+        RankRow(
+            rank=1,
+            code="601318",
+            name="中国平安",
+            price=50.0,
+            change_pct=0.1,
+            metric=3e10,
+            metric_label="成交额",
+            turnover_pct=1.0,
+            amount=3e10,
+            volume=1e7,
+            sector="保险",
+        ),
+        RankRow(
+            rank=2,
+            code="600519",
+            name="茅台",
+            price=1600.0,
+            change_pct=-0.5,
+            metric=2e10,
+            metric_label="成交额",
+            turnover_pct=0.5,
+            amount=2e10,
+            volume=1e6,
+            sector="白酒",
+        ),
+    )
+    snap = RankSnapshot(
+        rank_by="amount",
+        rank_by_label="成交额",
+        unit_hint="元",
+        high_first=True,
+        caveat=RANKING_CAVEAT,
+        rows=rows,
+    )
+
+    class _FakeMarket:
+        rank_list = AsyncMock(return_value=snap)
+
+    fake = _FakeMarket()
+    with patch("SayuStock.utils.market.get_market", return_value=fake):
+        out = asyncio.run(real_pool._from_amount_leaders(n=2))
+
+    assert out == ["601318", "600519"]
+    fake.rank_list.assert_awaited()
+    assert fake.rank_list.await_args.args[0] == RankBy.AMOUNT
+    print(f"[OK] amount leaders via rank_list → {out}")
 
 
 def test_pool_total_cap_50():
@@ -218,7 +304,7 @@ def test_pool_invalid_codes_filtered():
 
 
 def test_pool_exclude_sources():
-    """include_sector/include_hotmap/include_news=False 时禁用"""
+    """include_sector/include_hotmap/include_news/extra=False 时禁用"""
     fake = _make_fake_sources(
         position=["600001"],
         sector=["600002"],
@@ -229,9 +315,53 @@ def test_pool_exclude_sources():
         setattr(pool, name, fn)
     import asyncio
 
-    out = asyncio.run(build_candidate_pool("g1", "b1", include_sector=False, include_hotmap=False, include_news=False))
+    out = asyncio.run(
+        build_candidate_pool(
+            "g1",
+            "b1",
+            include_sector=False,
+            include_hotmap=False,
+            include_news=False,
+            include_extra_momentum=False,
+        )
+    )
     assert out == ["600001"]
     print("[OK] exclude_sources 正确禁用")
+
+
+def test_interleave_source_pairs():
+    """多源轮询交织，避免某一路占满"""
+    pairs = [
+        ("600001", "sector"),
+        ("600002", "sector"),
+        ("600003", "sector"),
+        ("600101", "hotmap"),
+        ("600102", "hotmap"),
+        ("600201", "news"),
+    ]
+    out = pool.interleave_source_pairs(pairs)
+    # 轮询：sector, concept(空跳过), hotmap, ... quality(空), news, ...
+    codes = [c for c, _ in out]
+    assert codes[0] == "600001"
+    assert "600101" in codes[:4]  # hotmap 应较早出现，而非等 sector 全写完
+    # sector 不应连占前三（中间会插入其他源）
+    assert not (codes[0].startswith("60000") and codes[1].startswith("60000") and codes[2].startswith("60000"))
+    print(f"[OK] interleave → {out}")
+
+
+def test_quality_roe_cache_hit():
+    """质量池进程缓存命中时不再重筛（直接调真实实现，不依赖模块当前 mock）"""
+    import time
+    import asyncio
+
+    cache = getattr(pool, "_QUALITY_ROE_CACHE")
+    cache["expire_ts"] = time.time() + 3600
+    cache["codes"] = ["600519", "000858", "300760"]
+    out = asyncio.run(_REAL_FROM_QUALITY_ROE(n=2))
+    assert out == ["600519", "000858"]
+    cache["expire_ts"] = 0.0
+    cache["codes"] = []
+    print(f"[OK] quality cache hit → {out}")
 
 
 def test_post_decision_pool_update_buy():

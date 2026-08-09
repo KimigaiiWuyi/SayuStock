@@ -162,66 +162,75 @@ async def get_market_overview(
 @ai_tools()
 async def get_sector_heatmap(
     ctx: RunContext[ToolContext],
-    top_n: int = 10,
+    top_n: int = 15,
     sector_type: str = "industry",
+    include_all: bool | None = None,
 ) -> str:
-    """获取行业/概念板块涨跌幅排行（板块热力图）。
+    """获取行业/概念板块涨跌幅排行（板块热力）。
 
     Args:
-        top_n: 返回前 N 个板块（默认 10）
+        top_n: 两端「明细」条数：``top_rise`` / ``top_fall`` 各取 N 条，并为这些
+            板块补 ``top_stocks``（成分股涨幅 TOP3）。默认 15。
         sector_type: ``industry``（行业板块）/ ``concept``（概念板块）
+        include_all: 是否附带全市场 ``ranked``。``None``（默认）时：
+            **行业**自动 True（板块数有限，便于看持仓位次）；
+            **概念**自动 False（常 300+ 行，防 token 膨胀，仍保留两端明细）。
+            显式传 True/False 可覆盖。
 
-    用于 AI 决策前确定"今天哪个板块最强 / 最弱"，
-    便于从强势板块中选股，或避开弱势板块。
+    用于 AI 决策前看清「今天哪些板块强/弱、持仓所属板块排在哪」，
+    避免只看 TOP10 漏掉中游轮动。
 
     ⚠️ ``change_pct`` 是**板块自身的聚合涨跌幅**（东财板块指数 f3），正常量级在
-    ±10% 以内（A 股个股涨跌停 ±10%/±20%，但整板块聚合极少超过 ±10%）；它**不是**
-    板块内领涨个股的涨幅。领涨个股单独放在 ``lead_stock`` / ``lead_stock_pct``
-    字段——那才可能出现 +20%（创业板/科创板个股涨停）这类数字，不要把它当成板块涨幅。
+    ±10% 以内；**不是**板块内领涨个股的涨幅。领涨个股在 ``lead_stock`` /
+    ``lead_stock_pct``；仅两端明细行带 ``top_stocks``。
 
     返回字段：
-        - top_rise: 涨幅 TOP N 板块，每项含 name / code / change_pct（板块聚合涨跌幅）
-          / up_count / down_count（成分股涨跌家数）/ lead_stock / lead_stock_code /
-          lead_stock_pct（领涨股）/ top_stocks（成分股涨幅 TOP3 代码）
-        - top_fall: 跌幅 TOP N 板块（结构同上）
+        - count: 板块总数
+        - ranked: 全列表（涨→跌），每项精简：name / code / change_pct /
+          up_count / down_count / lead_stock / lead_stock_code / lead_stock_pct
+          （未 include_all 时为 []）
+        - top_rise / top_fall: 两端明细（含 top_stocks）
         - hot_stocks: 热门个股 TOP 5（按成交额）
 
     使用建议：
-        1. 找出 top_rise 第一的板块 → 看 top_stocks / lead_stock → 选股
-        2. 找与持仓股所属板块 → 判断板块整体趋势，辅助 hold/sell 决策
+        1. 行业先扫 ``ranked`` 看全貌与持仓位次；概念默认看两端 + 必要时
+           ``include_all=True``；
+        2. 对关心的强/弱板块看 top_stocks 再选股。
     """
     import json as _json
     import asyncio
 
     market = get_market()
     board_kind = "行业板块" if sector_type == "industry" else "概念板块"
-    out: dict[str, object] = {"sector_type": sector_type, "top_rise": [], "top_fall": [], "hot_stocks": []}
+    detail_n = max(int(top_n), 1)
+    # 行业默认全表；概念默认两端明细（概念 300+ 防 token 爆炸）
+    use_all: bool = (sector_type == "industry") if include_all is None else bool(include_all)
+    out: dict[str, object] = {
+        "sector_type": sector_type,
+        "count": 0,
+        "ranked": [],
+        "top_rise": [],
+        "top_fall": [],
+        "hot_stocks": [],
+        "detail_n": detail_n,
+        "include_all": use_all,
+    }
 
-    def _board_rows(snap_rows: object, reverse: bool) -> list[dict[str, object]]:
+    def _row_compact(r: object) -> dict[str, object]:
         from ..utils.market.models import BoardRow
 
-        rows_list: list[BoardRow] = list(snap_rows) if isinstance(snap_rows, (list, tuple)) else []
-        rows_list = sorted(
-            rows_list,
-            key=lambda r: r.change_pct if r.change_pct is not None else 0.0,
-            reverse=reverse,
-        )[: max(top_n, 1)]
-        result: list[dict[str, object]] = []
-        for r in rows_list:
-            extras = r.extras
-            result.append(
-                {
-                    "name": r.name,
-                    "code": r.code,
-                    "change_pct": r.change_pct if r.change_pct is not None else 0,
-                    "up_count": extras.up_count if extras is not None else None,
-                    "down_count": extras.down_count if extras is not None else None,
-                    "lead_stock": r.lead_name or "",
-                    "lead_stock_code": extras.lead_code if extras is not None else "",
-                    "lead_stock_pct": r.lead_change_pct,
-                }
-            )
-        return result
+        assert isinstance(r, BoardRow)
+        extras = r.extras
+        return {
+            "name": r.name,
+            "code": r.code,
+            "change_pct": r.change_pct if r.change_pct is not None else 0,
+            "up_count": extras.up_count if extras is not None else None,
+            "down_count": extras.down_count if extras is not None else None,
+            "lead_stock": r.lead_name or "",
+            "lead_stock_code": extras.lead_code if extras is not None else "",
+            "lead_stock_pct": r.lead_change_pct,
+        }
 
     async def _top_codes(board_code: str) -> list[str]:
         snap = await market.board(board_code, limit=3, sort_asc=False)
@@ -230,52 +239,53 @@ async def get_sector_heatmap(
         return [r.code for r in snap.rows[:3] if r.code]
 
     try:
-        # 各拉一页后客户端再排：避免只靠 API po 在部分 fs 下语义漂移
-        fetch_n = max(top_n * 3, 30)
-        rise_snap = await market.board(board_kind, limit=fetch_n, sort_asc=False)
-        fall_snap = await market.board(board_kind, limit=fetch_n, sort_asc=True)
-        rise_rows: list[dict[str, object]] = []
-        fall_rows: list[dict[str, object]] = []
-        if not is_market_error(rise_snap):
-            rise_rows = _board_rows(rise_snap.rows, reverse=True)
-        if not is_market_error(fall_snap):
-            fall_rows = _board_rows(fall_snap.rows, reverse=False)
-        # 若涨榜首条仍为负且跌榜更负，仍合法（普跌市）；交叉校验只防「涨跌榜写反」
-        if rise_rows and fall_rows:
-            r0 = rise_rows[0]["change_pct"]
-            f0 = fall_rows[0]["change_pct"]
-            if isinstance(r0, (int, float)) and isinstance(f0, (int, float)) and r0 < f0:
-                # API 方向疑似反了：交换并重排
-                rise_rows, fall_rows = fall_rows, rise_rows
-                rise_rows = sorted(
-                    rise_rows,
-                    key=lambda x: float(x["change_pct"]) if isinstance(x["change_pct"], (int, float)) else 0.0,
-                    reverse=True,
-                )[: max(top_n, 1)]
-                fall_rows = sorted(
-                    fall_rows,
-                    key=lambda x: float(x["change_pct"]) if isinstance(x["change_pct"], (int, float)) else 0.0,
-                    reverse=False,
-                )[: max(top_n, 1)]
-        picked_codes = list({str(r["code"]) for r in (rise_rows + fall_rows) if r.get("code")})
-        code_lists = await asyncio.gather(*[_top_codes(c) for c in picked_codes])
-        code_to_top: dict[str, list[str]] = dict(zip(picked_codes, code_lists))
-        for r in rise_rows + fall_rows:
-            r["top_stocks"] = code_to_top.get(str(r.get("code", "")), [])
-        out["top_rise"] = rise_rows
-        out["top_fall"] = fall_rows
-    except (OSError, TimeoutError, RuntimeError, ValueError, TypeError) as e:
+        from ..utils.market.models import BoardRow
+
+        # 一次拉全量（limit=None → provider 分页 is_loop），客户端按涨跌幅排序，
+        # 避免旧逻辑只拉 top_n*3 再截两端、中游板块对 agent 不可见。
+        full_snap = await market.board(board_kind, limit=None, sort_asc=False)
+        if is_market_error(full_snap):
+            out["_error"] = str(full_snap)
+        else:
+            rows_list: list[BoardRow] = [r for r in list(full_snap.rows) if isinstance(r, BoardRow)]
+            rows_list.sort(
+                key=lambda r: r.change_pct if r.change_pct is not None else 0.0,
+                reverse=True,
+            )
+            compact_all = [_row_compact(r) for r in rows_list]
+            out["count"] = len(compact_all)
+            if use_all:
+                out["ranked"] = compact_all
+
+            rise_rows = [dict(x) for x in compact_all[:detail_n]]
+            fall_rows = [dict(x) for x in compact_all[-detail_n:]] if compact_all else []
+            fall_rows.reverse()  # 跌幅从深到浅，与旧 top_fall 语义一致
+
+            # 仅两端补成分股 TOP3，避免对全市场每个板块再打 N 次 board
+            picked_codes: list[str] = []
+            for r in rise_rows + fall_rows:
+                if "code" not in r:
+                    continue
+                code_s = str(r["code"] or "")
+                if code_s and code_s not in picked_codes:
+                    picked_codes.append(code_s)
+            if picked_codes:
+                code_lists = await asyncio.gather(*[_top_codes(c) for c in picked_codes])
+                code_to_top: dict[str, list[str]] = dict(zip(picked_codes, code_lists))
+                for r in rise_rows + fall_rows:
+                    code_key = str(r["code"] if "code" in r else "")
+                    r["top_stocks"] = code_to_top[code_key] if code_key in code_to_top else []
+            out["top_rise"] = rise_rows
+            out["top_fall"] = fall_rows
+    except (OSError, TimeoutError, RuntimeError, ValueError, TypeError, AssertionError) as e:
         out["_error"] = str(e)
 
     try:
-        hot = await market.board("沪深A", limit=5, sort_asc=False)
+        from ..utils.market import RankBy
+
+        # 真成交额榜（勿对涨跌幅 board 子集再按 amount 排序）
+        hot = await market.rank_list(RankBy.AMOUNT, limit=5)
         if not is_market_error(hot):
-            # 按成交额重排
-            hot_sorted = sorted(
-                hot.rows,
-                key=lambda r: r.amount if r.amount is not None else 0.0,
-                reverse=True,
-            )[:5]
             out["hot_stocks"] = [
                 {
                     "code": r.code,
@@ -284,12 +294,50 @@ async def get_sector_heatmap(
                     "change_pct": r.change_pct if r.change_pct is not None else 0,
                     "amount_yi": (r.amount or 0) / 1e8,
                 }
-                for r in hot_sorted
+                for r in hot.rows
             ]
-    except (OSError, TimeoutError, RuntimeError, ValueError, TypeError):
-        pass
+    except (OSError, TimeoutError, RuntimeError, ValueError, TypeError) as e:
+        out["_hot_error"] = str(e)
 
     return _json.dumps(out, ensure_ascii=False, default=str)
+
+
+@ai_tools()
+async def get_market_ranking(
+    ctx: RunContext[ToolContext],
+    rank_by: str = "amount",
+    n: int = 20,
+    high_first: bool | None = None,
+) -> str:
+    """沪深 A **通用排行榜**（东财 clist）：资金流 / 换手 / ROE / 量额 / 净利增速等。
+
+    Args:
+        rank_by: 排行类型（英文键或中文别名均可），支持：
+            - ``main_inflow`` / 资金流入 / 主力净流入
+            - ``main_outflow`` / 资金流出（净流入升序，流出居前）
+            - ``turnover`` / 换手率
+            - ``roe`` / ROE / 净资产收益率（同一指标）
+            - ``amount`` / 成交额
+            - ``volume`` / 成交量
+            - ``profit_yoy`` / 净利润增长率 / 净利润同比
+        n: 返回条数，1～50，默认 20
+        high_first: 是否高→低。``None`` 用该榜默认（资金流出默认低→高）
+
+    返回 JSON：``rank_by`` / ``items``（code/name/price/change_pct/metric/…）/
+    ``caveat`` / ``unit_hint``。
+
+    ⚠️ **硬纪律（读完再调）**：
+    1. 榜单**只作扫描线索**，绝不能单独作为 buy/sell 依据；
+    2. **增长率 / ROE / 换手 / 资金流靠前 ≠ 好公司**——报表与量价可被调节、
+       炒作或短期失真；须与估值、现金流质量、行业周期、技术与事件交叉验证；
+    3. 禁止「榜一就重仓」；禁止把 clist 财务字段当成已审计年报全文。
+    """
+    import json as _json
+
+    from ..utils.market_ranking import fetch_market_ranking
+
+    payload = await fetch_market_ranking(rank_by, n=n, high_first=high_first)
+    return _json.dumps(payload, ensure_ascii=False, default=str)
 
 
 @ai_tools()

@@ -97,3 +97,34 @@ CLIST_SCREENER_FIELDS = (
     "f21",
     "f100",
 )
+
+# 通用排行 clist 字段（仅 adapter parse_rank 使用）
+# f193=主力净比(%)；f184=总营收同比(%)——勿把净比写成 f184
+RANK_FIELD = {
+    "code": "f12",
+    "name": "f14",
+    "price": "f2",
+    "change_pct": "f3",
+    "amount": "f6",
+    "volume": "f5",
+    "turnover_rate": "f8",
+    "industry": "f100",
+    "main_net_inflow": "f62",
+    "main_net_inflow_pct": "f193",
+    "super_large_net": "f66",
+    "large_net": "f69",
+    "roe": "f173",
+    "debt_ratio": "f188",
+    "profit_yoy": "f185",
+    "revenue_yoy": "f184",
+}
+
+# 排行排序键 → clist fid
+RANK_SORT = {
+    "main_net_inflow": "f62",
+    "turnover_rate": "f8",
+    "roe": "f173",
+    "amount": "f6",
+    "volume": "f5",
+    "profit_yoy": "f185",
+}

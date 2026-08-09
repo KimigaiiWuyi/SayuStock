@@ -6,7 +6,7 @@ from typing import Literal, Protocol
 from datetime import date
 from collections.abc import Sequence
 
-from .enums import BoardKind, ValueKind, KlinePeriod
+from .enums import RankBy, BoardKind, ValueKind, KlinePeriod
 from .errors import MarketError
 from .models import (
     Quote,
@@ -14,6 +14,7 @@ from .models import (
     BreadthBar,
     KlineSeries,
     ValueSeries,
+    RankSnapshot,
     BoardSnapshot,
     IntradaySeries,
     MarketTurnover,
@@ -48,6 +49,14 @@ class MarketDataPort(Protocol):
         limit: int | None = None,
         sort_asc: bool = False,
     ) -> BoardSnapshot | MarketError: ...
+
+    async def rank_list(
+        self,
+        rank_by: RankBy | str,
+        *,
+        limit: int = 20,
+        high_first: bool | None = None,
+    ) -> RankSnapshot | MarketError: ...
 
     async def hotmap(self) -> BoardSnapshot | MarketError: ...
 
