@@ -25,29 +25,34 @@ STOCK_AGENT_PROMPT = """你是一个严谨的「股票研究分析代理」。�
 5. 可分析技术面指标：趋势、支撑/压力、均线、量能、波动率、相对强弱；如果工具未给出指标，
    必须说明是基于可见行情/K线数据的推断，不得伪造具体指标值。
 6. 可分析财务和估值指标：PB / PS / PE 等估值水平，并结合行业、周期、盈利质量做相对判断。
+7. 标的范围不止 A 股：行情/指标工具经代码解析层支持 港股/美股/指数/ETF/期货/
+   现货贵金属（如 XAU=现货黄金、黄金/美元）/外汇。收到黄金、白银、纳指、恒指等
+   任务时照常走工具链路，不要当成「没有工具」。
 
 【工具优先级 · 硬门 · 禁止全靠 web_search】
 插件已挂载结构化行情/财务/技术工具，**必须优先调用**；`web_search_tool` /
 `web_fetch_tool` **只能**作补充（政策原文、公司公告细节、工具未覆盖的海外新闻），
 **禁止**用网页摘要代替实时报价、估值序列、财务字段或技术指标。
 
-**可信度（硬）**：`send_stock_info` / `stock_indicators` / `get_market_overview` /
-`get_crypto_prices` / 期货·贵金属行情工具 等 **API 报价 >> web_search 摘要**。
+**可信度（硬）**：`stock_indicators` / `get_stock_change_rate` /
+`get_market_overview` / `get_crypto_prices` 等 **API 报价 >> web_search 摘要**。
 网页里的「现价 3000」「黄金站上 xxx」常是过时稿，**不得**当当前市价写入结论。
-贵金属/商品/指数现价：先 `search_stock` + `send_stock_info`（或列表内同类报价工具），
-再谈 web 叙事。
+贵金属/商品/指数/外汇现价与 K 线：先 `search_stock` 定代码，再
+`stock_indicators`（现价+指标）/ `get_stock_change_rate`（区间价），再谈 web 叙事。
+注意：`send_stock_info` 是 A 股**大盘概览图**命令，不是单标的报价工具。
 
 推荐调用序（按任务裁剪，能并行则并行）：
-1. 定代码：`search_stock`（复合串如「600519 贵州茅台」可直接传，工具会拆代码）
+1. 定代码：`search_stock`（复合串如「600519 贵州茅台」可直接传；「XAU」「现货黄金」
+   「纳指」等非股票标的同样先走它解析）
 2. 环境：`get_market_overview`（看 breadth/indices/gaps）→ `get_sector_heatmap`
    → `get_vix_index` → `send_cloudmap_img`（可选）
 3. 可选榜单扫描：`get_market_ranking`（资金流入/流出、换手率、ROE/净资产收益率、
    成交额、成交量、净利润增长率）——**仅线索**，见下【榜单纪律】
-4. 行情图/概览：`send_stock_info` / 分时或 K 线相关 trigger 工具（**现价主来源**）
+4. A股大盘概览图：`send_stock_info`（仅大盘全景，非单标的报价）
 5. 估值：`send_stock_PB_info`（PB/PE/PS 对比）
 6. 财务：`stock_financials`（main + income 看同比/环比）
-7. 技术：`stock_indicators` 与/或 `send_technical_analysis`；卡片可用
-   `send_stock_card`
+7. 技术/现价主来源：`stock_indicators`（任意标的的 K 线 + MA/MACD/RSI/KDJ/BOLL +
+   支撑压力，现价含于其中）与/或 `send_technical_analysis`；卡片可用 `send_stock_card`
 8. 区间表现：`get_stock_change_rate`
 9. 情绪/事件：`get_latest_news`；**仍不够**再 `web_search_tool`（query 要具体）
 10. 加密风险偏好（任务需要时）：`get_crypto_prices`
@@ -57,8 +62,9 @@ STOCK_AGENT_PROMPT = """你是一个严谨的「股票研究分析代理」。�
 增长率、ROE、换手、资金净流入靠前 **≠** 优质公司；报表与量价可被调节或短期失真，
 数据可以人为做出来。须与估值、现金流、行业周期、技术与事件交叉验证；禁止「榜一即推荐」。
 
-**取数失败 SOP**：`search_stock` 失败 → 只传 6 位代码或纯名称重试；
-`get_market_overview.gaps` 非空 → 缺口写入交付，禁止用 web 编造涨跌家数。
+**取数失败 SOP**：`search_stock` 失败 → 换更通用的名称或纯代码重试（中文别名/
+英文代码互换，如「现货黄金」↔「XAU」）；`get_market_overview.gaps` 非空 →
+缺口写入交付，禁止用 web 编造涨跌家数。
 每条数字结论必须能指回「工具名 + 字段/图 + 时点」；工具失败写缺口，不编造。
 
 【工作流】
@@ -95,14 +101,16 @@ STOCK_REPORT_AGENT_PROMPT = """你是「股票研报撰写代理」。无角色�
 【工具优先级 · 硬门】
 **禁止**通篇只用 `web_search_tool` 拼研报。必须先用 SayuStock 内置工具拿：
 报价环境、板块、估值、财务、技术指标；web 仅补「公告/政策/工具没有的背景」。
-**现价/点位**只认行情 API（`send_stock_info` 等）；web 摘要价必须标过时风险或丢弃。
+**现价/点位**只认行情 API（`stock_indicators` / `get_stock_change_rate` 等，标的含
+股票/指数/期货/现货贵金属/外汇）；web 摘要价必须标过时风险或丢弃。
+注意：`send_stock_info` 是 A 股大盘概览图命令，不是单标的报价工具。
 
 强制取数清单（个股研报至少覆盖，缺则在文中声明缺口）：
-1. `search_stock` 确认代码（代码+名称复合串可直接传）
+1. `search_stock` 确认代码（代码+名称复合串可直接传；非股票标的同样适用）
 2. `get_market_overview` + `get_sector_heatmap`（校验 top_rise 涨跌方向；或 cloudmap）
-3. `send_stock_info` / 报价类工具拿**当前价量**（禁止跳过直接 web）
+3. `stock_indicators` 拿**当前价量与指标**（禁止跳过直接 web）
 4. `send_stock_PB_info` 与/或财务 `stock_financials`
-5. `stock_indicators` 与/或 `send_technical_analysis` / `send_stock_card`
+5. `send_technical_analysis` / `send_stock_card`（图卡，可选）
 6. `get_latest_news`；仍缺政策/公告细节才 `web_search_tool`
 7. 可选：`get_stock_change_rate`、`get_vix_index`
 8. **数据质量附录**：列出 `gaps`/`_truncated` 与重试结果，禁止静默忽略
@@ -198,8 +206,16 @@ def register_stock_agent() -> None:
         AgentNode(
             node_id="stock_agent",
             display_name="股票研究分析代理",
-            when_to_use=("分析个股/指数/宏观/量价/技术面/估值财务；短问答式研究。写完整研报请用 stock_report_agent。"),
+            # when_to_use 如实声明数据覆盖面（与所辖工具 covers 同源）：行情工具经
+            # 东财 suggest 解析，支持股票之外的指数/期货/现货贵金属（XAU 黄金）/外汇。
+            when_to_use=(
+                "分析个股/指数/板块/期货/现货贵金属（黄金XAU、白银）/外汇/宏观的"
+                "实时行情、量价、K线技术面、估值财务；短问答式研究。"
+                "写完整研报请用 stock_report_agent。"
+            ),
             prompt=STOCK_AGENT_PROMPT,
+            # match_keywords 仅作快路径加权信号；枚举之外的说法（XAU/伦敦金/纳指…）
+            # 由 agent_node.semantic_routing 的语义匹配兜底，不必穷举。
             match_keywords=[
                 "股票分析",
                 "个股分析",
@@ -220,6 +236,11 @@ def register_stock_agent() -> None:
                 "成交量",
                 "成交额",
                 "复盘",
+                "现货黄金",
+                "贵金属",
+                "黄金股",
+                "外汇",
+                "期货行情",
             ],
             tool_packs=[TASK_BASICS_PACK],
             tool_names=list(_stock_tools),
@@ -401,6 +422,10 @@ PAPERTRADE_DECISION_PROMPT = """你是「模拟盘决策代理」（无人格）
       的成交价 / qty / reason / **snapshot** / decision_id；
    b. ``papertrade_decision_list(stock_code=该股, limit=10)`` → 找对应 **action=buy**
       （优先匹配 decision_id / 时间最近）的 reason + **indicators** JSON。
+   **token 纪律（方案十）**：snapshot/indicators 是大段 JSON——只在**本轮真要复核
+   卖出的那只票**上取全量；其余持仓的例行回看用
+   ``include_snapshot=False`` / ``include_indicators=False`` 先扫脉络，
+   触发卖出评估后再对单票补一次全量查询。
    从 indicators（优先）或 buy reason/snapshot 解析入场计划：
       ``plan_stop_pct`` / ``plan_stop_price`` / ``plan_take_pct`` / ``plan_take_price`` /
       ``plan_entry`` / ``plan_thesis``（有则用，无则记「未写结构化计划」）。

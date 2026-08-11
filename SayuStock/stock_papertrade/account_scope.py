@@ -122,8 +122,7 @@ def not_opened_message(group_id: str = "", bot_id: str = "") -> str:
     """统一的「未开户」提示：共用模式不说「本群」，避免 B 群误报。"""
     if is_shared_mode():
         return (
-            "ℹ️ 全服尚未开通模拟盘（当前为共用模式，任意群共享同一账户）。"
-            "请在任一群由群主/管理员发送「模拟盘初始化」。"
+            "ℹ️ 全服尚未开通模拟盘（当前为共用模式，任意群共享同一账户）。请在任一群由群主/管理员发送「模拟盘初始化」。"
         )
     where = f"群 {group_id}" if group_id else "本群"
     platform = f" 在 {bot_id} 上" if bot_id else ""

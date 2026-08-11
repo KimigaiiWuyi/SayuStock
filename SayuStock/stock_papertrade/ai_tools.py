@@ -628,9 +628,7 @@ async def papertrade_holdings_image(
 
     try:
         scope = "全服共用账户" if account_scope.is_shared_mode() else f"群 {gid}"
-        ai_return(
-            f"【模拟盘自选·简化版】{scope}持仓图已发送：含今日涨跌与持仓浮盈，不含交易流水/决策日志。"
-        )
+        ai_return(f"【模拟盘自选·简化版】{scope}持仓图已发送：含今日涨跌与持仓浮盈，不含交易流水/决策日志。")
     except Exception as e:
         _gslogger.debug(f"[SayuStock][PaperTrade] holdings_image ai_return 失败: {e}")
 
@@ -649,6 +647,7 @@ async def papertrade_trade_list(
     bot_id: str = "",
     stock_code: str = "",
     limit: int = 20,
+    include_snapshot: bool = True,
 ) -> str:
     """查询 AI 模拟盘（虚拟盘）历史买卖流水（买入/卖出记录 + 已实现盈亏；默认全服共用账户）。
 
@@ -657,6 +656,10 @@ async def papertrade_trade_list(
 
     返回字段含 ``reason`` / ``snapshot``（买入时写入的指标与入场计划 JSON）/
     ``decision_id`` / ``mode``，供决策代理在卖出前回看入场止损止盈。
+
+    Args:
+        include_snapshot: snapshot 是大段入场指标 JSON；批量扫流水（非复核某笔卖出）
+            时传 False 可大幅省 token。默认 True。
     """
     gid, bid = await _resolve_scope(ctx, group_id, bot_id)
     if not gid or not bid:
@@ -683,8 +686,9 @@ async def papertrade_trade_list(
                 "fee": t.fee,
                 "realized_pnl": t.realized_pnl,
                 "reason": t.reason,
-                # 入场计划 / 指标快照：卖出复核时用（buy 时写入的 snapshot / decision_id）
-                "snapshot": t.snapshot or "",
+                # 入场计划 / 指标快照：卖出复核时用（buy 时写入的 snapshot / decision_id）；
+                # include_snapshot=False 时置空省 token（批量扫流水场景）
+                "snapshot": (t.snapshot or "") if include_snapshot else "",
                 "decision_id": t.decision_id,
                 "mode": t.mode,
                 "decided_at": decided_at.isoformat() if decided_at else None,
@@ -705,6 +709,7 @@ async def papertrade_decision_list(
     bot_id: str = "",
     stock_code: str = "",
     limit: int = 20,
+    include_indicators: bool = True,
 ) -> str:
     """查询 AI 模拟盘的**决策日志**（buy/sell/hold 的理由 + 评分 + 指标 + 风控拦截）。
 
@@ -718,6 +723,8 @@ async def papertrade_decision_list(
         group_id / bot_id: 仅多群模式生效；共用模式忽略。留空即可。
         stock_code: 只看某只票的决策（留空看全部）
         limit: 返回最近多少条（默认 20，按时间倒序）
+        include_indicators: indicators 是大段指标 JSON；只扫决策脉络（不复盘单条指标）
+            时传 False 省 token。默认 True。
 
     返回 [{id, action, stock_code, stock_name, score, reason, blocked_by, trade_id,
     indicators, decided_at}, ...]。
@@ -747,7 +754,8 @@ async def papertrade_decision_list(
                 "reason": d.reason,
                 "blocked_by": d.blocked_by,
                 "trade_id": d.trade_id,
-                "indicators": d.indicators,
+                # include_indicators=False 时置空省 token（只扫决策脉络场景）
+                "indicators": d.indicators if include_indicators else "",
                 "decided_at": created_at.isoformat() if created_at else None,
             }
         )
@@ -1536,7 +1544,13 @@ async def papertrade_snapshot_write(
 # ============================================================
 
 
-@ai_tools(category="common", capability_domain="AI模拟盘")
+@ai_tools(
+    category="common",
+    capability_domain="AI模拟盘",
+    covers=[
+        "股票财报与基本面：F10/利润表/资产负债表/现金流/ROE/毛利率/营收与净利同比",
+    ],
+)
 async def stock_financials(
     ctx: RunContext[ToolContext],
     stock_code: str,
@@ -1612,14 +1626,25 @@ def _stringify_values(d: dict[str, object]) -> dict[str, str]:
     return out
 
 
-@ai_tools(category="common", capability_domain="AI模拟盘")
+@ai_tools(
+    category="common",
+    capability_domain="AI模拟盘",
+    covers=[
+        "任意标的K线技术指标：A股/港股/美股/指数/ETF/期货/现货贵金属（黄金XAU、白银）/外汇",
+        "日K/周K/月K/分钟K 的 MA、MACD、RSI、KDJ、BOLL、支撑压力、波动率",
+        "实时行情数据支撑的技术面分析（现价/K线形态/超买超卖）",
+    ],
+)
 async def stock_indicators(
     ctx: RunContext[ToolContext],
     stock_code: str,
     periods: int = 60,
     kline_period: int = 101,
 ) -> str:
-    """计算股票技术指标（MA / MACD / RSI / KDJ / CMF / BOLL / CCI / BBI / 支撑压力 / 波动率等）。
+    """计算标的K线技术指标（MA / MACD / RSI / KDJ / CMF / BOLL / CCI / BBI / 支撑压力 / 波动率等）。
+
+    标的经 get_code_id 解析，覆盖 A股/港股/美股/指数/ETF/期货/现货贵金属（如
+    XAU=现货黄金）/外汇——**不止 A 股**。问「黄金/XAU 技术面、K 线」也应走本工具。
 
     KDJ（9,3,3，通达信/东财口径）返回字段：``kdj_k`` / ``kdj_d`` / ``kdj_j``
     （K/D 常态 0~100，J 可越界）、``kdj_golden_cross_in_3d`` / ``kdj_death_cross_in_3d``
@@ -1627,7 +1652,8 @@ async def stock_indicators(
     （J<0 或 K<20）。低位金叉 + 超卖偏多，高位死叉 + 超买偏空。
 
     Args:
-        stock_code: 6 位代码或名称（先用 get_code_id 解析）
+        stock_code: 标的代码或名称（A股 6 位代码/名称，或 XAU/现货黄金/纳指等，
+                    经 get_code_id 解析，支持股票/指数/期货/现货/外汇）
         periods: 取最近多少根 K 线（默认 60）
         kline_period: K 线周期（默认 101 = 日 K；可选 5/15/30/60 = 分钟 K；
                        102 = 周 K，103 = 月 K）
@@ -1680,6 +1706,8 @@ async def stock_indicators(
     # 与匿名 dict[str, ...] 的结构赋值兼容问题
     result: dict[str, float | bool | None | str] = {
         **ind_dict,
+        # "as_of" 时效契约字段（框架方案七）：freshness 账本据此识别新鲜读数
+        "as_of": _dt.datetime.now().strftime("%Y-%m-%d %H:%M"),
         "stock_code": code,
         "stock_name": name,
         "kline_period": kline_period,

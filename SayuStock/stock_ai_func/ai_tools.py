@@ -30,7 +30,12 @@ from ..utils.stock.request_utils import get_code_id
 # 大盘概览 / 板块热力 —— 决策前的"扫描"工具
 # 让 LLM 自主选股时先看大盘环境、再选行业、再选个股
 # ============================================================
-@ai_tools()
+@ai_tools(
+    covers=[
+        "A股大盘概览：上证指数/深证成指/创业板指/沪深300等核心宽基指数实时点位",
+        "市场涨跌家数分布、两市成交额、北向资金净流入、涨停占比",
+    ],
+)
 async def get_market_overview(
     ctx: RunContext[ToolContext],
 ) -> str:
@@ -159,7 +164,11 @@ async def get_market_overview(
     )
 
 
-@ai_tools()
+@ai_tools(
+    covers=[
+        "A股行业/概念板块涨跌幅排行、板块热力、领涨领跌板块与龙头股",
+    ],
+)
 async def get_sector_heatmap(
     ctx: RunContext[ToolContext],
     top_n: int = 15,
@@ -302,7 +311,11 @@ async def get_sector_heatmap(
     return _json.dumps(out, ensure_ascii=False, default=str)
 
 
-@ai_tools()
+@ai_tools(
+    covers=[
+        "A股个股排行榜：成交额/换手率/ROE/净利润增速/主力资金流等指标排名",
+    ],
+)
 async def get_market_ranking(
     ctx: RunContext[ToolContext],
     rank_by: str = "amount",
@@ -340,7 +353,11 @@ async def get_market_ranking(
     return _json.dumps(payload, ensure_ascii=False, default=str)
 
 
-@ai_tools()
+@ai_tools(
+    covers=[
+        "实时财经新闻快讯：雪球7x24市场动态、宏观/行业/个股要闻、政策与事件驱动",
+    ],
+)
 async def get_latest_news(
     ctx: RunContext[ToolContext],
     limit: int = 5,
@@ -380,7 +397,11 @@ async def get_latest_news(
     return result
 
 
-@ai_tools()
+@ai_tools(
+    covers=[
+        "加密货币实时行情：BTC/ETH/SOL/DOGE/BNB 等主流币的现价与涨跌幅",
+    ],
+)
 async def get_crypto_prices(
     ctx: RunContext[ToolContext],
 ) -> str:
@@ -396,7 +417,9 @@ async def get_crypto_prices(
     # 语义化：经 MarketDataPort/OKX adapter
     symbols = ["BTC", "ETH", "SOL", "DOGE", "BNB"]
     market = get_market()
-    result = "【加密货币】\n"
+    # [as_of=…] 时效契约标记（框架方案七）：实时币价为新鲜读数
+    as_of = datetime.now().strftime("%Y-%m-%d %H:%M")
+    result = f"[as_of={as_of}|source=okx]\n【加密货币】\n"
     any_ok = False
     for name in symbols:
         q = await market.quote(name)
@@ -418,7 +441,11 @@ async def get_crypto_prices(
     return result
 
 
-@ai_tools()
+@ai_tools(
+    covers=[
+        "VIX波动率指数：沪深300/上证50期权隐含波动率，反映市场恐慌/贪婪情绪",
+    ],
+)
 async def get_vix_index(
     ctx: RunContext[ToolContext],
     vix_type: str = "300",
@@ -462,22 +489,29 @@ async def get_vix_index(
     return f"【{label}】\n当前: {q.price}  涨跌: {chg}"
 
 
-@ai_tools()
+@ai_tools(
+    covers=[
+        "标的代码解析：A股/港股/美股/指数/板块/ETF/基金/债券/期货/现货贵金属（黄金XAU、白银）/外汇",
+        "查任何标的（含 XAU 现货黄金、纳指、恒指）的规范代码与所属市场，再供行情/K线工具使用",
+    ],
+)
 async def search_stock(
     ctx: RunContext[ToolContext],
     query: str,
 ) -> str:
     """
-    搜索股票代码
+    搜索标的代码（股票/指数/期货/现货/外汇通用解析）
 
-    根据股票名称或代码模糊搜索，返回匹配的股票信息。
-    用于确认股票代码后再进行其他查询。
+    根据名称或代码模糊搜索，返回匹配的标的信息（代码 + 名称 + 市场类型）。
+    底层走东财 suggest，覆盖 A股/港股/美股/指数/ETF/基金/债券/期货/
+    现货贵金属（如 XAU=现货黄金、黄金/美元）/外汇，不止 A 股。
+    用于确认标的代码后再进行行情/K线/技术指标查询。
 
     Args:
-        query: 股票名称或代码，如"贵州茅台"、"600000"、"证券ETF"
+        query: 标的名称或代码，如"贵州茅台"、"600000"、"证券ETF"、"XAU"、"现货黄金"、"纳指"
 
     Returns:
-        搜索结果
+        搜索结果（代码: 名称 (市场类型)）
     """
     code_id = await get_code_id(query)
     if code_id is None:
@@ -486,7 +520,12 @@ async def search_stock(
     return f"{code_id[1]}: {code_id[0]} ({code_id[2] if len(code_id) > 2 else '未知'})"
 
 
-@ai_tools()
+@ai_tools(
+    covers=[
+        "任意标的区间涨跌幅：A股/港股/美股/指数/ETF/期货/现货贵金属（黄金XAU、白银）/外汇",
+        "指定日期范围的起止价格与涨跌幅（区间表现复盘）",
+    ],
+)
 async def get_stock_change_rate(
     ctx: RunContext[ToolContext],
     stock_code: str,
@@ -494,18 +533,19 @@ async def get_stock_change_rate(
     end_date: str,
 ) -> str:
     """
-    获取股票任意时间范围内的涨跌幅
+    获取标的任意时间范围内的涨跌幅
 
-    计算个股在指定时间范围内的涨跌情况，可用于分析股票在特定时间段内的表现。
-    比触发器的"对比个股"更灵活，支持精确日期范围。
+    计算标的在指定时间范围内的涨跌情况，可用于分析其在特定时间段内的表现。
+    标的经 get_code_id 解析，覆盖 A股/港股/美股/指数/ETF/期货/现货贵金属
+    （如 XAU=现货黄金）/外汇，不止 A 股。
 
     Args:
-        stock_code: 股票代码或名称，如"600000"、"贵州茅台"
+        stock_code: 标的代码或名称，如"600000"、"贵州茅台"、"XAU"、"现货黄金"
         start_date: 开始日期，如"20240101"或"2024-01-01"（必填，需完整日期）
         end_date: 结束日期，如"20241231"或"2024-12-31"，默认为今天
 
     Returns:
-        时间范围内的涨跌幅信息
+        时间范围内的涨跌幅信息（含起止价格，带数据时点）
     """
     code_id = await get_code_id(stock_code)
     if code_id is None:
@@ -557,7 +597,10 @@ async def get_stock_change_rate(
         return f"在指定时间范围内未找到{stock_name}的K线数据（实际数据范围: {range_hint}）"
 
     change_rate = ((end_val - start_val) / start_val) * 100
+    # [as_of=…] 时效契约标记（框架方案七）：声明数据时点，供 freshness 账本识别
+    as_of = datetime.now().strftime("%Y-%m-%d %H:%M")
     return (
+        f"[as_of={as_of}|source=eastmoney-kline]\n"
         f"【{stock_name} 涨跌幅分析】\n"
         f"时间范围: {start_date_raw} ~ {end_date_raw}\n"
         f"起始日期开盘价: {start_val:.3f}\n"
