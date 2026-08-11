@@ -43,6 +43,11 @@ class SsBind(Bind, table=True):
         uid: str,
         game_name: Optional[str] = None,
     ) -> int:
+        """删除一只自选。
+
+        uid 列为 NOT NULL：删到空时不能 update 成 None，改为删除整行。
+        无自选时再「添加自选」会走 insert_uid 新建行。
+        """
         result = await cls.get_uid_list_by_game(user_id, bot_id, game_name)
         if result is None:
             return -1
@@ -57,8 +62,10 @@ class SsBind(Bind, table=True):
         result = [i for i in result if i] if result else []
         new_uid = "_".join(result)
 
+        # 空列表：整行删除，避免 NOT NULL 约束报错
         if not new_uid:
-            new_uid = None
+            await cls.delete_row(user_id=user_id, bot_id=bot_id)
+            return 0
 
         await cls.update_data(
             user_id,

@@ -145,11 +145,8 @@ async def clear_all_uid(bot: Bot, ev: Event) -> list[str] | None:
 
     if resp is not None:
         if resp.text == "是":
-            uid_list = await SsBind.get_uid_list_by_game(qid, ev.bot_id)
-            if uid_list:
-                uid_list = convert_list(uid_list)
-                for _uid in uid_list:
-                    await SsBind.delete_uid(qid, ev.bot_id, _uid)
+            # 直接删行，避免逐只 delete_uid 最后一次写 NULL 触发 NOT NULL
+            await SsBind.delete_row(user_id=qid, bot_id=ev.bot_id)
         else:
             return await bot.send("已取消!")
 
