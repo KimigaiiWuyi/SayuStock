@@ -8,7 +8,7 @@
 ## 6.1 设计哲学
 
 - **观察型**：用户初始化一次 + 只读查询；**不能**干预 AI 买卖规则  
-- **群账户**：默认一群一盘；可配置全服共用（`papertrade_multi_group`）  
+- **群账户**：默认**全服共用一个盘**（`papertrade_multi_group=False`）；开启多群才一群一盘  
 - **真源 SQLModel**：账户/持仓/流水/决策/快照/候选池表；**禁止** `record_*` 平行账本  
 - **建账唯一入口**：trigger `send_init_command`（幂等）；agent 不直接写半截状态  
 

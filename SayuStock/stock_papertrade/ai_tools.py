@@ -85,6 +85,8 @@ _PAPERTRADE_CTX_TAGS: list[str] = [
 class _AccountView(TypedDict):
     group_id: str
     bot_id: str
+    shared_mode: bool
+    scope_note: str
     cash: float
     initial_cash: float
     principal: float
@@ -191,11 +193,12 @@ async def _resolve_scope(
     """解析本次调用的账户键。共用模式（默认）下恒为那个钉死的账户，与提问来自哪个群无关。
 
     显式传入的 group_id / bot_id 只在多群模式下生效（跨群查询用）；共用模式下
-    忽略它们 —— 全服只有一个盘，让 LLM 传别的群号只会查出空账户。
+    忽略它们 —— 全服只有一个盘，让 LLM 传当前群号也不会改指向。
     """
+    deps = getattr(ctx, "deps", None)
+    ev = getattr(deps, "ev", None) if deps is not None else None
     if account_scope.is_shared_mode():
-        return await account_scope.resolve_account_key(ctx.deps.ev)
-    ev = ctx.deps.ev
+        return await account_scope.resolve_account_key(ev)
     gid: str = str(group_id) if group_id else (str(ev.group_id) if ev and ev.group_id else "")
     bid: str = bot_id if bot_id else (ev.bot_id if ev and ev.bot_id else "")
     return (gid, bid)
@@ -432,13 +435,19 @@ async def papertrade_account_query(
     group_id: str = "",
     bot_id: str = "",
 ) -> str:
-    """查询本群 模拟盘（虚拟盘）账户：现金 / 总资产 / 浮盈 / 已实现盈亏 / 持仓数。
+    """查询 AI 自己的模拟盘（虚拟盘）账户：现金 / 总资产 / 浮盈 / 已实现盈亏 / 持仓数。
 
     ⚠️ **这是"你（早柚/AI）自己经营的模拟盘账户"的权威数据源**，不是用户个人
-    自选股。当有人问「你现在账户怎么样 / 盈利多少 / 总资产多少 / 仓位几成 /
-    今天赚了没」时走这个工具。账户与持仓落在 SQLModel 表里，**不在** framework
-    的 ``record:`` 集合、``state_*`` 或 init 阶段的 artifact 里——**严禁**用
+    自选股。当有人问「你的模拟盘 / 你现在账户怎么样 / 盈利多少 / 总资产多少 /
+    仓位几成 / 今天赚了没」时走这个工具。账户与持仓落在 SQLModel 表里，**不在**
+    framework 的 ``record:`` 集合、``state_*`` 或 init 阶段的 artifact 里——**严禁**用
     ``record_list`` / ``state_get`` / ``artifact_get_recent`` 代答账户状态。
+
+    ⚠️ **作用域（默认全服共用）**：配置「多群模拟盘」关闭时，全服只有一个盘；
+    在 A 群开户后，在 B 群提问也必须调本工具，返回的就是那同一份账户。
+    ``group_id`` 字段是开户原群号，**不等于**「当前群没开盘」。**严禁**因为
+    返回的 group_id 与当前会话群号不同就说「这个群没有创建过模拟盘」。
+    只有工具明确返回「全服尚未开通 / 本群尚未开通」时，才是真的没有账户。
 
     2026-07-01 修复：``total_equity`` 现在是 **真·总资产 = 现金 + Σ持仓市值**，
     不再返回 cash-only；同时给出 ``total_unrealized_pnl`` / ``realized_pnl`` /
@@ -446,15 +455,15 @@ async def papertrade_account_query(
     可以直接做盈亏推算。
 
     Args:
-        group_id: 群号；留空用当前会话群号
-        bot_id: 平台；留空用当前 bot
+        group_id: 仅多群模式生效；共用模式下忽略（全服唯一账户）。留空即可。
+        bot_id: 仅多群模式生效；共用模式下忽略。留空即可。
     """
     gid, bid = await _resolve_scope(ctx, group_id, bot_id)
     if not gid or not bid:
         return "⚠️ 无法确定 group_id/bot_id"
     acc = await db.PaperAccountRepo.get(gid, bid)
     if not acc:
-        return f"ℹ️ 群 {gid} 在 {bid} 上尚未开通模拟盘。发送「模拟盘初始化」开户。"
+        return account_scope.not_opened_message(gid, bid)
 
     # ── enriched 持仓聚合（自动刷报价，含浮盈 / 现价） ──
     enriched: list[tuple[SayuPaperPosition, dict]] = await _get_enriched_positions(gid, bid)
@@ -470,9 +479,12 @@ async def papertrade_account_query(
     )
 
     last_decided: _dt.datetime | None = acc.last_decided_at
+    shared = account_scope.is_shared_mode()
     view: _AccountView = {
         "group_id": gid,
         "bot_id": bid,
+        "shared_mode": shared,
+        "scope_note": account_scope.scope_note_for_llm(gid),
         "cash": acc.cash,
         "initial_cash": acc.initial_cash,
         "principal": acc.principal,
@@ -503,7 +515,7 @@ async def papertrade_position_list(
     group_id: str = "",
     bot_id: str = "",
 ) -> str:
-    """列出本群 模拟盘（虚拟盘）当前持仓：持有哪些股票 / 现价 / 市值 / 浮盈。
+    """列出 AI 自己的模拟盘（虚拟盘）当前持仓：持有哪些股票 / 现价 / 市值 / 浮盈。
 
     ⚠️ **问「你现在持有什么 / 你的持仓 / 买了哪些股 / 现在几只仓」时走这个**——
     这是"你（早柚/AI）自己经营的模拟盘"的权威持仓表（SQLModel），**不是**用户
@@ -512,6 +524,9 @@ async def papertrade_position_list(
     ``ℹ️ ...当前无持仓`` 才代表真的空仓。**严禁**用 ``record_list`` /
     ``artifact_get_recent`` 代答持仓——init artifact 的"0 持仓"是建账时的旧
     快照，成交后永不更新，据它回答会误报空仓。
+
+    ⚠️ **作用域**：默认全服共用一个盘；在任意群提问都查同一份持仓。不要因为
+    当前群不是开户群就说「这个群没有模拟盘」。
 
     2026-07-01 修复：每行新增 ``current_price`` / ``market_value`` /
     ``unrealized_pnl`` / ``unrealized_pnl_pct`` / ``quote_age_seconds`` /
@@ -524,9 +539,15 @@ async def papertrade_position_list(
     if not gid or not bid:
         return "⚠️ 无法确定 group_id/bot_id"
 
+    # 未开户与「空仓」必须区分：共用模式下 resolve 到开户原群；若仍无账户则明确说未开通
+    acc = await db.PaperAccountRepo.get(gid, bid)
+    if not acc:
+        return account_scope.not_opened_message(gid, bid)
+
     enriched: list[tuple[SayuPaperPosition, dict]] = await _get_enriched_positions(gid, bid)
     if not enriched:
-        return f"ℹ️ 群 {gid} 当前无持仓。"
+        note = account_scope.scope_note_for_llm(gid)
+        return f"ℹ️ 当前模拟盘无持仓（账户 group_id={gid}）。{note}"
 
     items: list[_PositionItem] = []
     for p, e in enriched:
@@ -560,9 +581,10 @@ async def papertrade_holdings_image(
     group_id: str = "",
     bot_id: str = "",
 ) -> str:
-    """把本群**模拟盘当前持仓**渲染成「模拟盘自选」风格的**简化版持仓图**并发出。
+    """把 AI **模拟盘当前持仓**渲染成「模拟盘自选」风格的**简化版持仓图**并发出。
 
     与用户命令「**模拟盘自选**」/「**模拟盘持仓**」同一张图（也可不经 agent、直接发该命令）。
+    默认全服共用一个盘：任意群调用都出同一份持仓图。
 
     ⚠️ **这是简化快照，不是完整账户报告**：
     - **有**：账户摘要（现金 / 总资产 / 持仓市值 / 浮盈 / 累计盈亏）、
@@ -580,7 +602,7 @@ async def papertrade_holdings_image(
     时出图；主 persona 可直接调，不必先委派决策代理。
 
     Args:
-        group_id / bot_id: 留空用当前会话（共用模式下固定全服账户）
+        group_id / bot_id: 仅多群模式生效；共用模式忽略。留空即可。
     """
     from gsuid_core.segment import MessageSegment
     from gsuid_core.ai_core.trigger_bridge import ai_return
@@ -605,7 +627,10 @@ async def papertrade_holdings_image(
         return result
 
     try:
-        ai_return(f"【模拟盘自选·简化版】群 {gid} 持仓图已发送：含今日涨跌与持仓浮盈，不含交易流水/决策日志。")
+        scope = "全服共用账户" if account_scope.is_shared_mode() else f"群 {gid}"
+        ai_return(
+            f"【模拟盘自选·简化版】{scope}持仓图已发送：含今日涨跌与持仓浮盈，不含交易流水/决策日志。"
+        )
     except Exception as e:
         _gslogger.debug(f"[SayuStock][PaperTrade] holdings_image ai_return 失败: {e}")
 
@@ -625,7 +650,7 @@ async def papertrade_trade_list(
     stock_code: str = "",
     limit: int = 20,
 ) -> str:
-    """查询本群 模拟盘（虚拟盘）历史买卖流水（买入/卖出记录 + 已实现盈亏）。
+    """查询 AI 模拟盘（虚拟盘）历史买卖流水（买入/卖出记录 + 已实现盈亏；默认全服共用账户）。
 
     问「你都买卖过什么 / 最近成交 / 交易记录 / 某只股什么时候买的」走这个。
     数据在 SQLModel 流水表，**不在** ``record:`` 集合 / ``state_*``。
@@ -681,16 +706,16 @@ async def papertrade_decision_list(
     stock_code: str = "",
     limit: int = 20,
 ) -> str:
-    """查询本群模拟盘的**决策日志**（buy/sell/hold 的理由 + 评分 + 指标 + 风控拦截）。
+    """查询 AI 模拟盘的**决策日志**（buy/sell/hold 的理由 + 评分 + 指标 + 风控拦截）。
 
     ⚠️ 问「你最近做了什么决策 / 为什么买/卖/持有 XX / 上一轮怎么想的 / 为什么没动手」
     时走这个。模拟盘的决策推理**不会在群里主动播报**（只有真成交才由系统自动推一行
     冒泡），但每一条决策（含 hold）都落在 SQLModel 决策日志里，可随时查。与
     ``papertrade_trade_list`` 互补：trade_list 是"成交了什么"，decision_list 是"为什么
-    这样决策（含没成交的 hold 理由）"。
+    这样决策（含没成交的 hold 理由）"。默认全服共用账户，任意群可查。
 
     Args:
-        group_id / bot_id: 留空用当前会话群号 / bot
+        group_id / bot_id: 仅多群模式生效；共用模式忽略。留空即可。
         stock_code: 只看某只票的决策（留空看全部）
         limit: 返回最近多少条（默认 20，按时间倒序）
 
@@ -708,7 +733,7 @@ async def papertrade_decision_list(
     )
     if not rows:
         suffix: str = f"（{stock_code}）" if stock_code else ""
-        return f"ℹ️ 群 {gid} 暂无决策记录{suffix}。"
+        return f"ℹ️ 当前模拟盘暂无决策记录{suffix}（账户 group_id={gid}）。"
     items: list[dict[str, Any]] = []
     for d in rows:
         created_at: _dt.datetime | None = d.created_at
@@ -1453,7 +1478,7 @@ async def papertrade_snapshot_write(
 
     acc = await db.PaperAccountRepo.get(gid, bid)
     if not acc:
-        return f"ℹ️ 群 {gid} 尚未开通模拟盘，无法写快照。"
+        return account_scope.not_opened_message(gid, bid) + " 无法写快照。"
 
     # 东八区当天作为 trade_date（系统时钟漂到 UTC 时避免快照记错日）
     try:

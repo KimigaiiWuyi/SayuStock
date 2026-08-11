@@ -501,7 +501,10 @@ async def _kick_after_kanban_ready(ev: Event, group_id: str, bot_id: str, init_i
 async def send_view(bot: Bot, ev: Event) -> list[str] | None:
     gid, bid = await _scope.resolve_account_key(ev)
     if not gid or not bid:
-        return await bot.send("ℹ️ 尚未开通模拟盘，请群主/管理员发送「模拟盘初始化」")
+        return await bot.send(_scope.not_opened_message())
+    acc = await _db.PaperAccountRepo.get(gid, bid)
+    if acc is None:
+        return await bot.send(_scope.not_opened_message(gid, bid))
     img = await draw_account_view(gid, bid)
     await bot.send(img)
 
@@ -533,7 +536,10 @@ async def send_holdings(bot: Bot, ev: Event) -> list[str] | None:
     logger.info("[SayuStock] 开始执行[模拟盘自选/模拟盘持仓]")
     gid, bid = await _scope.resolve_account_key(ev)
     if not gid or not bid:
-        return await bot.send("ℹ️ 尚未开通模拟盘，请群主/管理员发送「模拟盘初始化」")
+        return await bot.send(_scope.not_opened_message())
+    acc = await _db.PaperAccountRepo.get(gid, bid)
+    if acc is None:
+        return await bot.send(_scope.not_opened_message(gid, bid))
 
     result = await build_holdings_snapshot_image(gid, bid)
     if isinstance(result, str):
@@ -593,7 +599,10 @@ async def send_pnl(bot: Bot, ev: Event) -> list[str] | None:
 
     gid, bid = await _scope.resolve_account_key(ev)
     if not gid or not bid:
-        return await bot.send("ℹ️ 尚未开通模拟盘，请群主/管理员发送「模拟盘初始化」")
+        return await bot.send(_scope.not_opened_message())
+    acc = await _db.PaperAccountRepo.get(gid, bid)
+    if acc is None:
+        return await bot.send(_scope.not_opened_message(gid, bid))
     agg = await _db.PaperTradeRepo.aggregate_pnl(gid, bid, since=since)
     period: str = text if text in ("总", "全部", "all") else f"近{text}"
     msg = (
@@ -615,7 +624,10 @@ async def send_pnl(bot: Bot, ev: Event) -> list[str] | None:
 async def send_records(bot: Bot, ev: Event) -> list[str] | None:
     gid, bid = await _scope.resolve_account_key(ev)
     if not gid or not bid:
-        return await bot.send("ℹ️ 尚未开通模拟盘，请群主/管理员发送「模拟盘初始化」")
+        return await bot.send(_scope.not_opened_message())
+    acc = await _db.PaperAccountRepo.get(gid, bid)
+    if acc is None:
+        return await bot.send(_scope.not_opened_message(gid, bid))
     rows = await _db.PaperTradeRepo.list_by_account(gid, bid, limit=20)
     if not rows:
         return await bot.send("ℹ️ 暂无交易记录")

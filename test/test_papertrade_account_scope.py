@@ -271,3 +271,31 @@ def test_is_home_context():
     _reset(multi_group=True)
     _StubAccountRepo.accounts = [_StubAccount("111", "onebot")]
     assert asyncio.run(scope.is_home_context(_ev("222"))) is True  # 多群模式不设限
+
+
+# ============================================================
+# 5) 文案：防止 B 群被说成「本群未开户」
+# ============================================================
+def test_not_opened_message_shared_vs_multi():
+    """共用模式未开户时不得说「群 B 尚未开通」——否则 Agent 会复读成跨群误报。"""
+    _reset(multi_group=False)
+    msg = scope.not_opened_message("222", "onebot")
+    assert "全服尚未开通" in msg
+    assert "群 222" not in msg
+
+    _reset(multi_group=True)
+    msg = scope.not_opened_message("222", "onebot")
+    assert "群 222" in msg
+    assert "全服" not in msg
+
+
+def test_scope_note_warns_against_false_unopened():
+    _reset(multi_group=False)
+    note = scope.scope_note_for_llm("111")
+    assert "全服共用" in note
+    assert "禁止" in note
+    assert "111" in note
+
+    _reset(multi_group=True)
+    note = scope.scope_note_for_llm("111")
+    assert "多群" in note

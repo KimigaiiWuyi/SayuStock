@@ -106,6 +106,30 @@ async def is_home_context(ev: Optional[Event]) -> bool:
     return str(ev.group_id) == key[0]
 
 
+def scope_note_for_llm(home_group_id: str = "") -> str:
+    """给工具 JSON / 文案附加的作用域说明，防止 LLM 看到 group_id≠当前群就误报未开户。"""
+    if is_shared_mode():
+        home = f"开户原群={home_group_id}，" if home_group_id else ""
+        return (
+            "全服共用一个模拟盘（配置「多群模拟盘」=关）。"
+            f"{home}返回的是全服唯一账户，与当前提问所在群无关；"
+            "禁止说「这个群没创建过/未开通模拟盘」。"
+        )
+    return "多群模式：每群各有独立模拟盘，数据按当前群隔离。"
+
+
+def not_opened_message(group_id: str = "", bot_id: str = "") -> str:
+    """统一的「未开户」提示：共用模式不说「本群」，避免 B 群误报。"""
+    if is_shared_mode():
+        return (
+            "ℹ️ 全服尚未开通模拟盘（当前为共用模式，任意群共享同一账户）。"
+            "请在任一群由群主/管理员发送「模拟盘初始化」。"
+        )
+    where = f"群 {group_id}" if group_id else "本群"
+    platform = f" 在 {bot_id} 上" if bot_id else ""
+    return f"ℹ️ {where}{platform}尚未开通模拟盘。发送「模拟盘初始化」开户。"
+
+
 # ============================================================
 # 播报改向
 # ============================================================

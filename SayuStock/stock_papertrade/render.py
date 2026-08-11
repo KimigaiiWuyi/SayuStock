@@ -410,7 +410,9 @@ async def build_holdings_snapshot_image(group_id: str, bot_id: str) -> bytes | s
 
     acc = await db.PaperAccountRepo.get(group_id, bot_id)
     if not acc:
-        return f"ℹ️ 群 {group_id} 尚未开通模拟盘，请群主/管理员发送「模拟盘初始化」"
+        from . import account_scope as _scope
+
+        return _scope.not_opened_message(group_id, bot_id)
 
     positions = await db.PaperPositionRepo.list_by_account(group_id, bot_id)
     secids = [p.secid for p in positions if p.secid]
