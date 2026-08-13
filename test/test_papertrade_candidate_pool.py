@@ -81,13 +81,13 @@ def _make_fake_sources(
 ):
     """生成假数据源闭包（async，与真实接口一致；默认全空，避免单测打真网）"""
 
-    async def _pos(gid, bid):
+    async def _pos(account_id):
         return list(position or [])
 
-    async def _wl(gid, bid):
+    async def _wl(account_id):
         return list(watchlist or [])
 
-    async def _ap(gid, bid):
+    async def _ap(account_id):
         return list(agent_pool or [])
 
     async def _sec(*a, **kw):
@@ -137,7 +137,7 @@ def test_pool_empty():
     out = []
     import asyncio
 
-    out = asyncio.run(build_candidate_pool("g1", "b1"))
+    out = asyncio.run(build_candidate_pool(1))
     assert out == []
     print("[OK] 多源空 → 候选池空")
 
@@ -149,7 +149,7 @@ def test_pool_single_source():
         setattr(pool, name, fn)
     import asyncio
 
-    out = asyncio.run(build_candidate_pool("g1", "b1"))
+    out = asyncio.run(build_candidate_pool(1))
     assert out == ["600519", "000001", "300750"]
     print(f"[OK] 单路持仓 → {len(out)} 只")
 
@@ -164,7 +164,7 @@ def test_pool_dedup():
         setattr(pool, name, fn)
     import asyncio
 
-    out = asyncio.run(build_candidate_pool("g1", "b1"))
+    out = asyncio.run(build_candidate_pool(1))
     assert out.count("600519") == 1
     # 顺序：position 先，watchlist 后 → position 在前
     assert out == ["600519", "000001", "300750"]
@@ -185,7 +185,7 @@ def test_pool_priority_order():
         setattr(pool, name, fn)
     import asyncio
 
-    out = asyncio.run(build_candidate_pool("g1", "b1"))
+    out = asyncio.run(build_candidate_pool(1))
     # 期望顺序：position 先，watchlist 后，依次类推
     expected = ["600001", "600002", "600003", "600004", "600005", "600006", "600007", "600008", "600009"]
     assert out == expected, f"got {out}, expected {expected}"
@@ -272,7 +272,7 @@ def test_pool_total_cap_50():
         setattr(pool, name, fn)
     import asyncio
 
-    out = asyncio.run(build_candidate_pool("g1", "b1"))
+    out = asyncio.run(build_candidate_pool(1))
     assert len(out) == TOTAL_CAP
     assert len(out) == 50
     print(f"[OK] 总池上限 50 截断：{len(out)} 只")
@@ -286,7 +286,7 @@ def test_pool_single_source_cap():
         setattr(pool, name, fn)
     import asyncio
 
-    out = asyncio.run(build_candidate_pool("g1", "b1"))
+    out = asyncio.run(build_candidate_pool(1))
     assert len(out) == SOURCE_CAPS["position"]  # 20
     print(f"[OK] position 单路限 {SOURCE_CAPS['position']}：{len(out)} 只")
 
@@ -298,7 +298,7 @@ def test_pool_invalid_codes_filtered():
         setattr(pool, name, fn)
     import asyncio
 
-    out = asyncio.run(build_candidate_pool("g1", "b1"))
+    out = asyncio.run(build_candidate_pool(1))
     assert out == ["600519", "000001", "300750"]
     print(f"[OK] 非法代码过滤 → {out}")
 
@@ -317,8 +317,7 @@ def test_pool_exclude_sources():
 
     out = asyncio.run(
         build_candidate_pool(
-            "g1",
-            "b1",
+            1,
             include_sector=False,
             include_hotmap=False,
             include_news=False,
@@ -396,7 +395,7 @@ def test_post_decision_pool_update_buy():
                 "reason": "test",
             }
         ]
-        await post_decision_pool_update("g1", "b1", decisions)
+        await post_decision_pool_update(1, decisions)
         assert len(upserted) == 1
         assert len(removed) == 0
         # expires_at 应在 7 天后
@@ -439,7 +438,7 @@ def test_post_decision_pool_update_sell():
                 "score": 0.0,
             }
         ]
-        await post_decision_pool_update("g1", "b1", decisions)
+        await post_decision_pool_update(1, decisions)
         assert len(removed) == 1
         assert len(upserted) == 0
         print("[OK] sell → 从 agent_pool 移除")
@@ -474,7 +473,7 @@ def test_post_decision_pool_update_hold_strong_signal():
         decisions = [
             {"action": "hold", "code": "600519", "name": "茅台", "score": 0.15},
         ]
-        await post_decision_pool_update("g1", "b1", decisions)
+        await post_decision_pool_update(1, decisions)
         assert len(upserted) == 0
         assert len(removed) == 0
         print("[OK] hold(强信号) → 不动 agent_pool（不再续期锚定）")
@@ -504,7 +503,7 @@ def test_post_decision_pool_update_hold_weak_no_action():
         decisions = [
             {"action": "hold", "code": "600519", "name": "茅台", "score": 0.05},  # < 0.1 弱信号
         ]
-        await post_decision_pool_update("g1", "b1", decisions)
+        await post_decision_pool_update(1, decisions)
         assert len(upserted) == 0
         assert len(removed) == 0
         print("[OK] hold(弱信号) → 不动 agent_pool")

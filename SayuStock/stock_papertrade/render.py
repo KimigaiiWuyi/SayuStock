@@ -74,24 +74,26 @@ def _paste_footer(img: Image.Image) -> Image.Image:
 # ============================================================
 # 1) 账户视图
 # ============================================================
-async def draw_account_view(
-    group_id: str,
-    bot_id: str,
-) -> bytes:
-    acc = await db.PaperAccountRepo.get(group_id, bot_id)
-    positions = await db.PaperPositionRepo.list_by_account(group_id, bot_id)
-    recent_trades = await db.PaperTradeRepo.list_by_account(group_id, bot_id, limit=5)
+async def draw_account_view(account_id: int) -> bytes:
+    acc = await db.PaperAccountRepo.get_by_id(account_id)
+    positions = await db.PaperPositionRepo.list_by_account(account_id)
+    recent_trades = await db.PaperTradeRepo.list_by_account(account_id, limit=5)
 
     W, H = 900, 1200
     img = _new_canvas(W, H)
 
     # 标题
     _draw_text(img, (40, 30), "【早柚 模拟盘 · 账户视图】", color=(255, 200, 100), size=30)
-    _draw_text(img, (40, 80), f"群 {group_id}  ·  {bot_id}", color=(180, 180, 180), size=18)
-
     if not acc:
-        _draw_text(img, (40, 140), "❌ 该群尚未开户，发送「模拟盘初始化」开户", color=(255, 100, 100), size=22)
+        _draw_text(img, (40, 140), "❌ 该模拟盘不存在，发送「模拟盘列表」查看现有的盘", color=(255, 100, 100), size=22)
         return await convert_img(img)
+    _draw_text(
+        img,
+        (40, 80),
+        f"{acc.name}  ·  策略 {acc.strategy_id}",
+        color=(180, 180, 180),
+        size=18,
+    )
 
     y = 130
     # 账户信息
@@ -287,8 +289,7 @@ def _holdings_layout(n_rows: int) -> tuple[int, int, int]:
 
 async def draw_holdings_snapshot(
     *,
-    group_id: str,
-    bot_id: str,
+    account_name: str,
     cash: float,
     initial_cash: float,
     holdings: list[HoldingBarRow],
@@ -351,7 +352,7 @@ async def draw_holdings_snapshot(
     line_font = ss_font(17)
     # 左右各留 20px
     max_text_w = 810
-    head = _fit_text(sd, f"模拟盘持仓简图 · 群 {group_id}", head_font, max_text_w)
+    head = _fit_text(sd, f"模拟盘持仓简图 · {account_name}", head_font, max_text_w)
     line1 = _fit_text(
         sd,
         f"总资产 {total_equity:,.0f}  ·  现金 {cash:,.0f}  ·  持仓市值 {pos_value:,.0f}",
@@ -400,21 +401,21 @@ async def draw_holdings_snapshot(
     return await convert_img(img)
 
 
-async def build_holdings_snapshot_image(group_id: str, bot_id: str) -> bytes | str:
+async def build_holdings_snapshot_image(account_id: int) -> bytes | str:
     """按账户拉持仓 + 刷价，渲染「模拟盘自选」简图。
 
     Returns:
-        图片 bytes；未开户等业务错误返回 str。
+        图片 bytes；盘不存在等业务错误返回 str。
     """
     from .quote_service import quote_service
 
-    acc = await db.PaperAccountRepo.get(group_id, bot_id)
+    acc = await db.PaperAccountRepo.get_by_id(account_id)
     if not acc:
         from . import account_scope as _scope
 
-        return _scope.not_opened_message(group_id, bot_id)
+        return _scope.not_opened_message()
 
-    positions = await db.PaperPositionRepo.list_by_account(group_id, bot_id)
+    positions = await db.PaperPositionRepo.list_by_account(account_id)
     secids = [p.secid for p in positions if p.secid]
     details = await quote_service.get_details_batch(secids) if secids else {}
 
@@ -431,7 +432,7 @@ async def build_holdings_snapshot_image(group_id: str, bot_id: str) -> bytes | s
             writes.append({"stock_code": p.stock_code, "price": float(d.price), "at": now})
     if writes:
         try:
-            await db.PaperPositionRepo.bulk_set_quote(writes, group_id, bot_id)
+            await db.PaperPositionRepo.bulk_set_quote(writes, account_id)
         except Exception:
             pass
 
@@ -467,8 +468,7 @@ async def build_holdings_snapshot_image(group_id: str, bot_id: str) -> bytes | s
         )
 
     return await draw_holdings_snapshot(
-        group_id=group_id,
-        bot_id=bot_id,
+        account_name=acc.name,
         cash=float(acc.cash),
         initial_cash=float(acc.initial_cash),
         holdings=rows,
@@ -479,12 +479,14 @@ async def build_holdings_snapshot_image(group_id: str, bot_id: str) -> bytes | s
 # 2) 排行
 # ============================================================
 async def draw_leaderboard() -> bytes:
-    snaps = await db.PaperSnapshotRepo.list_latest_all_groups(limit=20)
+    snaps = await db.PaperSnapshotRepo.list_latest_all_accounts(limit=20)
+    # 快照里只有 account_id，盘名要另查；一次拉全表比逐行查库省往返
+    accounts = {a.id: a for a in await db.PaperAccountRepo.list_all()}
 
     W, H = 900, 100 + 60 * (len(snaps) + 1)
     img = _new_canvas(W, H)
 
-    _draw_text(img, (40, 30), "【早柚 模拟盘 · 跨群收益排行 TOP 20】", color=(255, 200, 100), size=28)
+    _draw_text(img, (40, 30), "【早柚 模拟盘 · 各盘收益排行 TOP 20】", color=(255, 200, 100), size=28)
     y = 90
 
     if not snaps:
@@ -494,7 +496,7 @@ async def draw_leaderboard() -> bytes:
 
     # 表头
     _draw_text(img, (40, y), "排名", color=(180, 180, 180), size=18)
-    _draw_text(img, (100, y), "群号", color=(180, 180, 180), size=18)
+    _draw_text(img, (100, y), "盘名", color=(180, 180, 180), size=18)
     _draw_text(img, (250, y), "总资产", color=(180, 180, 180), size=18)
     _draw_text(img, (400, y), "累计盈亏", color=(180, 180, 180), size=18)
     _draw_text(img, (600, y), "收益率", color=(180, 180, 180), size=18)
@@ -503,7 +505,9 @@ async def draw_leaderboard() -> bytes:
     for i, s in enumerate(snaps, 1):
         pnl_color = (100, 255, 120) if s.total_pnl >= 0 else (255, 120, 120)
         _draw_text(img, (40, y), f"#{i}", color=(220, 220, 220), size=20)
-        _draw_text(img, (100, y), str(s.group_id)[:30], color=(220, 220, 220), size=20)
+        acc_row = accounts.get(s.account_id)
+        label = acc_row.name if acc_row is not None else f"#{s.account_id}"
+        _draw_text(img, (100, y), label[:30], color=(220, 220, 220), size=20)
         _draw_text(img, (250, y), f"{s.total_equity:,.0f}", color=(220, 220, 220), size=20)
         _draw_text(img, (400, y), f"{s.total_pnl:+,.0f}", color=pnl_color, size=20)
         _draw_text(

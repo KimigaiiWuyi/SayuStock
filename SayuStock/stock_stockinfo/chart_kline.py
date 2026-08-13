@@ -75,9 +75,9 @@ class BOLL(Indicator):
         _mid, upper, lower = ind.boll(_frame_column(prices, "close"), self.period, self.nbdev)
         return pd.DataFrame({"upperband": upper, "lowerband": lower})
 
-    # mplchart.Indicator.__call__ stub 无返回类型，直接 override 会报 incompatible；
-    # 用同名可调用属性挂到实例协议上，运行时与 __call__ 等价。
-    __call__ = _compute
+    def __call__(self, prices: object) -> pd.DataFrame:
+        assert isinstance(prices, pd.DataFrame)
+        return self._compute(prices)
 
 
 async def to_single_fig_kline(series: KlineSeries, sp: str | None = None) -> DrawResult:

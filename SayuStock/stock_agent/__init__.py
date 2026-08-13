@@ -316,21 +316,21 @@ def register_stock_agent() -> None:
 PAPERTRADE_SETUP_PROMPT = """你是「模拟盘建账代理」。
 
 【你的任务】
-验证当前群 模拟盘账户已就绪 + Kanban 心跳树已挂载。如有缺失，立即通过
-trigger 工具 ``send_init_command`` 触发完整 6 步流程（DB 账户 + Kanban init
-树 + Kanban period 树 + APScheduler cron + bind root_id + 踢 init/decision）。
+验证**本任务所属**的命名模拟盘已就绪 + Kanban 心跳树已挂载。如有缺失，立即通过
+trigger 工具 ``send_init_command`` 触发完整流程（默认盘）或提示管理员用
+「模拟盘创建 <盘名>」。模拟盘是命名账户，不是某个群的财产。
 
 ⚠️ **绝对不要**直接写 DB：trigger 是唯一权威入口，所有"建账户"路径必须走它。
 
 【工作流】
-1. papertrade_account_query → 看账户是否存在、cash / mode / enabled
+1. papertrade_account_query → 看账户是否存在、cash / mode / enabled / name
 2. 看 kanban_init_root_id / kanban_period_root_id 是否有值
 3. 两者都齐全 → 返回"账户 + Kanban 已就绪，等下次 cron"，不写任何东西
-4. 缺任何一个 → 调 send_init_command（by_trigger）让 trigger 跑完整 6 步
-5. 返回 1 段简短确认：群号 + 账户 id + mode + Kanban root_id 前缀 + "已就绪"
+4. 缺任何一个 → 调 send_init_command（by_trigger）让 trigger 跑完整流程
+5. 返回 1 段简短确认：盘名 + 账户 id + mode + Kanban root_id 前缀 + "已就绪"
 
 【纪律】
-- 不传群号时，从 ctx.deps.ev.group_id 拿
+- 空 account_name 时读工具会绑定本任务树对应的盘（不是「当前群」）
 - 不调任何 ai_tools 写 DB；所有持久化都委派给 trigger
 - 重复 init 是无害的（trigger 内部有幂等守卫），无须前置判断
 - ⚠️ **建账确认里严禁写"当前持仓 / 现金 / 浮盈"这类会变的即时数字**
@@ -404,7 +404,8 @@ PAPERTRADE_DECISION_PROMPT = """你是「模拟盘决策代理」（无人格）
    - **设计意图**：每轮都有新陈代谢；即使有持仓也必须评估轮换进来的新标的。
 
 == Phase 1：账户与持仓 ==
-1. papertrade_account_query → 看现金 / 模式 / enabled / **真·total_equity**
+1. papertrade_account_query（可省略 account_name：心跳树会绑定本盘，不会落到别的盘）
+   → 看现金 / 模式 / enabled / **真·total_equity**
    （2026-07-01 起 total_equity = cash + Σposition_value，含持仓市值；不再单
    独报 cash 当总资产）
 1.5 papertrade_position_list → 拿**含现价的持仓列表**（current_price /
@@ -621,9 +622,9 @@ PAPERTRADE_DECISION_PROMPT = """你是「模拟盘决策代理」（无人格）
 PAPERTRADE_REPORTER_PROMPT = """你是「模拟盘复盘代理」。
 
 【作用域 · 硬门】
-默认全服共用一个模拟盘：工具会自动解析到唯一账户，与当前提问所在群无关。
-返回 JSON 的 group_id 是开户原群号；**禁止**因 group_id ≠ 当前群就说「本群未开通」。
-只有工具明确返回「全服尚未开通 / 本群尚未开通」才是没有账户。
+模拟盘是**命名账户**：用户说了盘名就传 ``account_name``；心跳任务里省略盘名会绑定本树的盘。
+返回 JSON 的 origin_group_id 只是建盘原群；**禁止**因它 ≠ 当前群就说「本群未开通」。
+只有工具明确返回「尚未创建任何模拟盘 / 不存在名为 X」才是没有账户。
 
 【两类任务】
 A. **持仓速览图**：有人只要当前持仓/盈亏一眼图 → 调 ``papertrade_holdings_image``
@@ -641,7 +642,8 @@ B. **完整复盘报告**：拉期内 trade_log + decision_log，统计总盈亏
 PAPERTRADE_SUMMARY_PROMPT = """你是「模拟盘明细汇总代理」。无角色人格，只交 Markdown 事实包。
 
 【作用域 · 硬门】
-默认全服共用一个模拟盘；任意群提问都查同一份。group_id 是开户原群，不是「本群无盘」。
+模拟盘是命名账户。用户指定盘名则传 ``account_name``；省略时默认盘（或心跳树绑定的盘）。
+origin_group_id 是建盘原群，不是「本群无盘」。
 
 【任务】
 用户要「详细总结当前模拟盘」时使用：账户汇总 + 全部持仓 + 近期流水 + 决策日志，
@@ -676,11 +678,10 @@ PAPERTRADE_SUMMARY_PROMPT = """你是「模拟盘明细汇总代理」。无角�
 PAPERTRADE_POOL_REFRESH_PROMPT = """你是「模拟盘候选池轮换代理」。
 
 【你的任务】
-给本群候选池（agent_pool）做一次**轮换**：淘汰旧标的 + 补充蓝筹底仓 + 多源
-动量（行业/概念/热股/涨跌榜/成交额/高ROE质量/新闻）。**只做入池 / 轮换，不是
-买卖决策**——你完全不调任何撮合/流水/持仓/决策工具，不做 buy/sell/hold 判断。
-你的唯一产出是让下一轮 papertrade_decision_agent 有一批**新陈代谢过、风格多样**
-的候选可看。
+给**本任务所属模拟盘**的候选池（agent_pool）做一次**轮换**：淘汰旧标的 + 按该盘
+策略补源（多因子含蓝筹底仓；量能盘提高跌幅榜/成交额权重、不补高 ROE 蓝筹）。
+**只做入池 / 轮换，不是买卖决策**——你完全不调任何撮合/流水/持仓/决策工具。
+你的唯一产出是让下一轮决策代理有一批**新陈代谢过**的候选可看。
 
 【工作流】
 0. **先调 stock_is_trading_day**：若 ``should_decide=false``（非交易日 / 非交易
@@ -706,7 +707,7 @@ PAPERTRADE_POOL_REFRESH_PROMPT = """你是「模拟盘候选池轮换代理」�
 PAPERTRADE_SNAPSHOT_PROMPT = """你是「模拟盘收盘快照代理」（无人格）。
 
 【你的唯一任务】
-收盘后为本群写一条当日净值快照。**纯记账，不做任何买卖 / 撮合 / 决策 / 候选池操作。**
+收盘后为本任务所属模拟盘写一条当日净值快照。**纯记账，不做任何买卖 / 撮合 / 决策 / 候选池操作。**
 
 【工作流】
 1. 直接调 papertrade_snapshot_write()（不带参数即可）。它内部会：读账户 + 持仓实时
@@ -738,56 +739,21 @@ def register_papertrade_agents() -> None:
             ],
         )
     )
-    register_agent_node(
-        AgentNode(
-            node_id="papertrade_decision_agent",
-            display_name="模拟盘决策代理",
-            when_to_use=(
-                "模拟盘每 30 分钟决策；查行情+多周期指标+财报+新闻/事件"
-                "（get_latest_news + web_search 补充）→ 四维评分 → 决策 → 撮合 → 写库"
-            ),
-            prompt=PAPERTRADE_DECISION_PROMPT,
-            match_keywords=[
-                "模拟盘",
-                "模拟盘买",
-                "模拟盘卖",
-                "看盘",
-                "决策",
-                "虚拟盘",
-                "papertrade",
-            ],
-            tool_packs=[TASK_BASICS_PACK],
-            tool_names=[
-                # 业务/账本
-                "papertrade_account_query",
-                "papertrade_position_list",
-                "papertrade_trade_list",
-                "papertrade_decision_list",  # 回看买入决策/入场计划（卖出一致性）
-                "papertrade_watchlist_list",
-                "papertrade_agent_pool_list",
-                # 私有
-                "papertrade_decision_insert",
-                "papertrade_trade_insert",
-                "papertrade_position_upsert",
-                "papertrade_match_order",
-                "papertrade_candidate_refresh",
-                # 通用
-                "stock_financials",
-                "stock_indicators",
-                "stock_is_trading_day",
-                # 自主选股工具链（P1 新增）
-                "get_market_overview",  # 大盘概览：指数/涨跌/北向
-                "get_sector_heatmap",  # 板块热力：全表 ranked + 两端明细
-                "get_market_ranking",  # 通用榜：资金/换手/ROE/量额/净利增速（仅线索）
-                "get_latest_news",
-                "get_vix_index",
-                "search_stock",
-                "get_stock_change_rate",
-                "send_cloudmap_img",
-                "send_stock_PB_info",
-            ],
+    from SayuStock.stock_papertrade.strategies import decision_profiles
+
+    for strat in decision_profiles():
+        extra = strat.agent_prompt_extra()
+        register_agent_node(
+            AgentNode(
+                node_id=strat.agent_profile,
+                display_name=f"模拟盘决策代理（{strat.name}）",
+                when_to_use=strat.description,
+                prompt=PAPERTRADE_DECISION_PROMPT + (f"\n\n{extra}" if extra else ""),
+                match_keywords=list(strat.match_keywords),
+                tool_packs=[TASK_BASICS_PACK],
+                tool_names=strat.decision_tools(),
+            )
         )
-    )
     register_agent_node(
         AgentNode(
             node_id="papertrade_pool_refresh_agent",

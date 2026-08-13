@@ -81,7 +81,8 @@ def draw_cloudmap_chart(snap: BoardSnapshot, market: str, sector: str | None = N
     ax.set_ylim(0, 1)
     ax.axis("off")
 
-    items: list[CloudmapItem] = cloudmap.df.to_dict("records")
+    raw_records = cloudmap.df.to_dict("records")
+    items: list[CloudmapItem] = [{str(k): v for k, v in rec.items()} for rec in raw_records]
     for item, x, y, w, h in _split_rect(items, 0.0, 0.0, 1.0, 1.0):
         pad = 0.0025
         rx = x + pad

@@ -24,8 +24,8 @@ STOCK_CONFIG = StringConfig("SayuStock", CONFIG_PATH, CONFIG_DEFAULT)
 
 | 键 | 含义 | 默认 |
 |----|------|------|
-| `papertrade_multi_group` | 多群独立模拟盘 | False |
-| `papertrade_broadcast_group` | 共用模式播报群号 | `""` |
+| ~~`papertrade_multi_group`~~ | **已废弃**（多盘制后无意义），运行时不再读 | False |
+| ~~`papertrade_broadcast_group`~~ | **已废弃**，只在 v2 迁移时读一次转成 `SayuPaperBroadcastTarget` | `""` |
 | `mapcloud_viewport` | 云图截图分辨率 | 2500 |
 | `mapcloud_scale` | 云图放大倍数 | 2 |
 | `mapcloud_refresh_minutes` | 图/数据缓存 TTL | 3 |

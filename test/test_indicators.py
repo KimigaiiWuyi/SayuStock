@@ -406,3 +406,15 @@ def test_volume_ratio_zero_avg_volume_is_none() -> None:
     df = _series(30)
     df.loc[df.index[-6:-1], "volume"] = 0.0
     assert pt.calc_volume_ratio(df) is None
+
+
+def test_rel_volume_and_close_percentile() -> None:
+    df = _series(80)
+    rel = pt.calc_rel_volume(df, 20)
+    pct = pt.calc_close_percentile(df["close"], 60)
+    assert rel is not None and rel > 0
+    assert pct is not None and 0.0 <= pct <= 1.0
+    out = pt.compute_indicators(df)
+    assert out["rel_volume"] == pytest.approx(rel)
+    assert out["close_percentile"] == pytest.approx(pct)
+    assert "bullish_close" in out

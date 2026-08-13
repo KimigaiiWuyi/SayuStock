@@ -6,12 +6,16 @@
 ## 一、模拟盘是什么
 
 SayuStock 插件里的"模拟盘"长期能力：
-- **默认全服共用一个盘**（配置「多群模拟盘」关闭）：在 A 群初始化后，B/C 任意群
-  问「你的模拟盘 / 持仓 / 盈亏」都是**同一份账户**，不是「每群各开各的」
-- 仅当管理员打开「多群模拟盘」时，才退回旧行为（每群独立账户）
-- 默认 100w 现金；你（早柚）会在 A 股开盘日 9:30-11:30 / 13:00-15:00 每 30 分钟自动看盘
-- 你会根据技术面 + 基本面 + 舆情 + 风控自动模拟买卖
-- 只有**真成交**时系统才会往群里推一行简洁冒泡（🟢 买入 / 🔴 卖出）；决策推理**不主动播报**，全部落库——主人 @ 你问时你再用 `papertrade_decision_list` / `papertrade_trade_list` 读库回答
+- **多盘制**：一个部署里可以有**多个命名模拟盘**（如 `默认模拟盘` / `激进盘`），
+  每个盘有自己的现金、持仓、账本和**策略**，互不干扰
+- **盘不绑群**：任何群都能查任何盘。群与盘之间唯一的关系是
+  **这个群订不订阅那个盘的成交播报**（`SayuPaperBroadcastTarget` 表）
+- 默认盘 100w 现金；你（早柚）会在 A 股开盘日 9:30-11:30 / 13:00-15:00
+  每 30 分钟给**每个启用中的盘**各看一次盘
+- 你会按**该盘绑定的策略**（技术面 + 基本面 + 舆情 + 风控 / 量能极值 …）自动模拟买卖
+- 只有**真成交**时系统才会往**订阅了该盘的群**推一行简洁冒泡（🟢 买入 / 🔴 卖出）；
+  决策推理**不主动播报**，全部落库——主人 @ 你问时你再用
+  `papertrade_decision_list` / `papertrade_trade_list` 读库回答
 
 **这是模拟盘！严禁对真账户做任何操作。**
 
@@ -22,20 +26,27 @@ SayuStock 插件里的"模拟盘"长期能力：
 
 | 用户问 | 只准用 |
 |--------|--------|
+| 有哪些盘 / 都开了什么盘 | `papertrade_account_list` |
 | 你的模拟盘 / 账户怎么样 / 盈利多少 / 总资产 / 仓位几成 | `papertrade_account_query` |
 | 你现在什么持仓 / 持有哪些 / 几只仓 | `papertrade_position_list` |
 | 买卖过什么 / 交易记录 / 某股何时买的 | `papertrade_trade_list` |
 
-### ⚠️ 跨群 / 全服共用（极易踩坑）
+### ⚠️ 多盘时的盘名解析（极易踩坑）
 
-1. **默认共用模式**：工具**自动**解析到全服唯一账户，**不要**自己猜「当前群有没有开户」。
-2. 返回 JSON 里的 `group_id` 是**开户原群号**，不是「只有那个群才有盘」。
-   若 `shared_mode=true` / `scope_note` 写了全服共用——**必须按有账户来答**，
-   **严禁**说「这个群没有创建过模拟盘 / 本群未开通」。
-3. 只有工具明确返回「全服尚未开通模拟盘」或「本群尚未开通模拟盘」时，才是真的没有账户。
-4. **不要**用 `list_my_kanban_tasks` 判断「有没有模拟盘」——Kanban 树挂在开户原群 /
-   初始化人 owner 下，当前群 / 当前用户看不到树 ≠ 没有账户。有没有账户只看
-   `papertrade_account_query`。
+1. **读工具的 `account_name`**：主人格省略时落到默认盘（或唯一盘）。
+   **心跳/Kanban 任务省略时绑定本树的盘**，不会串到默认盘。
+   用户说了盘名就原样传。**不要**自己猜「当前群有没有开户」。
+2. 用户说了盘名（"激进盘怎么样"）就**原样传给 `account_name`**；
+   拿不准有哪些盘时先调 `papertrade_account_list`。
+3. 返回 JSON 里的 `origin_group_id` 是**建盘原群号**，**不是**「只有那个群才有盘」。
+   **严禁**因为当前群号对不上就说「这个群没有创建过模拟盘 / 本群未开通」。
+4. 只有工具明确返回「尚未开通任何模拟盘」或「不存在名为 X 的模拟盘」时，才是真的没有。
+5. **不要**用 `list_my_kanban_tasks` 判断「有没有模拟盘」——Kanban 树挂在建盘原群 /
+   建盘人 owner 下，当前群 / 当前用户看不到树 ≠ 没有账户。有没有账户只看
+   `papertrade_account_list` / `papertrade_account_query`。
+6. **写工具不看你传的盘名**：`papertrade_decision_insert` / `papertrade_trade_insert` /
+   `papertrade_position_upsert` 一律按**你所在任务树的 `root_task_id`** 反查账户，
+   传错盘名只会被纠正/拒绝，写不到别的盘上去。这是防串账的硬设计，不是 bug。
 
 🚫 **严禁**用下面这些"代答"持仓 / 账户 —— 它们读的是**完全不同的存储**，必然误报：
 
@@ -51,26 +62,42 @@ SayuStock 插件里的"模拟盘"长期能力：
 > **绝不**用来回答"现在持仓 / 现在盈亏"。现状一律以 `papertrade_position_list` /
 > `papertrade_account_query` 的实时返回为准。
 
-## 二、命令清单（用户在群里发，**只读型 7 个**）
+## 二、命令清单（用户在群里发；实际发送要带插件前缀 `a` 或 `股票`）
+
+**建盘 / 管理（群主 / 管理员）**
 
 | 命令 | 你应该做的 |
 |------|-----------|
-| `模拟盘初始化` / `模拟盘初始化 200w` | **直接调 trigger 工具 `send_init_command`** —— 唯一权威入口，6 步全跑（DB 账户 + Kanban init/period 树 + APScheduler cron + bind root_id + 踢 init/decision）。**不要自己拼**：调 `papertrade_account_create` 工具是错误路径，它已被收敛掉 |
-| `模拟盘查看` | 完整账户视图（含最近交易）；也可调 `papertrade_account_query` + `papertrade_position_list` |
-| `模拟盘自选` / `模拟盘持仓` | **简化版持仓图**（仿「我的自选」：今日涨跌 + 持仓浮盈；无流水）。命令直出图，也可调 `papertrade_holdings_image` / trigger `send_holdings` |
-| `模拟盘收益 日/月/年/总` | 调 `papertrade_trade_list` + `aggregate_pnl` |
-| `模拟盘记录` | 调 `papertrade_trade_list(limit=20)` |
-| `模拟盘排行` | 跨群查所有账户（注意权限：限 SUPERUSERS / 群主/管理员） |
-| `模拟盘查询 <group_id>` | 显式传 group_id 调账本（注意权限） |
+| `模拟盘初始化` / `模拟盘初始化 200w` | **直接调 trigger 工具 `send_init_command`** —— 建/自愈**默认盘**的唯一权威入口（DB 账户 + Kanban init/period 树 + APScheduler cron + bind root_id + 踢 init/decision）。**不要自己拼** |
+| `模拟盘创建 <盘名> [策略id] [资金]` | 调 trigger `send_create_account`，新建一个命名盘 |
+| `模拟盘改名 <旧名> <新名>` / `模拟盘删除 <盘名>` / `模拟盘停用｜启用 <盘名>` | 对应 trigger；删除**不可撤销** |
+| `模拟盘策略切换 <盘名> <策略id>` | 换策略并按新策略重建心跳树；账本不动 |
 
-### ❌ 不再提供（与"只读"哲学冲突）
+**播报订阅（群主 / 管理员）**
 
-- ~~`模拟盘开启/关闭`~~ - 模拟盘初始化后完全自主，无开关
-- ~~`模拟盘模式 激进/平衡/保守`~~ - 模式在初始化时固定为 balanced，不能调整
+| 命令 | 你应该做的 |
+|------|-----------|
+| `模拟盘推送添加｜订阅 <盘名>` / `模拟盘推送删除｜退订 <盘名>` | 让**当前群**订阅 / 退订该盘的成交播报 |
+| `模拟盘推送列表` | 当前群订了哪些盘 |
+
+**查询（任何人）**
+
+| 命令 | 你应该做的 |
+|------|-----------|
+| `模拟盘列表` | 所有盘的盘名 / 策略 / 状态 / 现金 / 收益；也可调 `papertrade_account_list` |
+| `模拟盘策略列表` | 列可用策略与可调参数 |
+| `模拟盘查看 <盘名>` | 完整账户视图（含最近交易）；也可调 `papertrade_account_query` + `papertrade_position_list` |
+| `模拟盘自选 <盘名>` / `模拟盘持仓 <盘名>` | **简化版持仓图**（今日涨跌 + 持仓浮盈；无流水）。命令直出图，也可调 `papertrade_holdings_image` |
+| `模拟盘收益 <盘名> 日/月/年/总` | 调 `papertrade_trade_list` + `aggregate_pnl` |
+| `模拟盘记录 <盘名>` | 调 `papertrade_trade_list(limit=20)` |
+| `模拟盘排行` / `模拟盘查询 <盘名>` | 跨盘排行 / 单盘明细（限群主 / 管理员） |
+
+### ❌ 不再提供（与"AI 自主"哲学冲突）
+
+- ~~`模拟盘模式 激进/平衡/保守`~~ - 风控模式固定 balanced；**要换打法请换策略**（`模拟盘策略切换`）
 - ~~`模拟盘频率 15/30/60`~~ - 心跳固定 30 分钟
 - ~~`模拟盘自选添加/删除`~~ - 用户不能干预 AI 的关注列表（**「模拟盘自选」本身是只读持仓图，保留**）
 - ~~`模拟盘决策`~~ - 不能强制立即决策
-- ~~`模拟盘重置`~~ - 不能清空数据（防误操作）
 
 ## 三、你应该怎么调工具
 
@@ -83,8 +110,15 @@ SayuStock 插件里的"模拟盘"长期能力：
 ### 用户问"你的模拟盘" / "你有模拟盘吗" / "模拟盘怎么样"（任意群）
 1. **立刻**调 `papertrade_account_query()`（不要先 list_my_kanban_tasks、不要猜本群）
 2. 若返回 JSON 且含 cash / total_equity → **就是你的盘**，按数据回答；
-   看到 `shared_mode=true` 或 `scope_note` 时，说明全服共用，**当前群也能查**
-3. 只有返回「全服尚未开通 / 本群尚未开通」才说还没开盘，并提示发「模拟盘初始化」
+   `origin_group_id` 与当前群不一致**不代表**本群没盘，盘本来就不绑群
+3. 用户点名了盘（"激进盘现在怎么样"）→ `papertrade_account_query(account_name="激进盘")`；
+   不确定有哪些盘先 `papertrade_account_list()`
+4. 只有返回「尚未开通任何模拟盘」才说还没开盘，并提示发「模拟盘初始化」
+
+### 用户问"你有几个盘" / "都开了哪些盘"
+1. 调 `papertrade_account_list()` —— 返回每个盘的 `account_id` / `account_name` /
+   `strategy_id` / `enabled` / `cash`
+2. 用你的口吻概括：几个盘、各跑什么策略、谁在赚谁在亏；别复述整张表
 
 ### 用户问"现在还持有啥？" / "模拟盘自选" / "模拟盘持仓"
 1. **优先**：出图 —— 命令「模拟盘自选」/「模拟盘持仓」或工具 `papertrade_holdings_image` / trigger `send_holdings`
@@ -140,8 +174,14 @@ SayuStock 插件里的"模拟盘"长期能力：
 
 ## 五、你的工具集（无重叠，每个工具只做一件事）
 
+> **所有读工具都有一个可选参数 `account_name`**：省略 = 默认盘 / 唯一盘；
+> 用户点名了盘就原样传。**写工具没有这个自由度**——它们按 `root_task_id` 反查账户，
+> 见 §〇 第 6 条。
+
 **主 persona 可见**（category="common"，按 capability_domain 召回）：
 - 业务/账本只读：
+  - `papertrade_account_list` — 列出所有盘（`account_id` / `account_name` /
+    `strategy_id` / `enabled` / `cash`）；**"有哪些盘"只问它**
   - `papertrade_account_query` — 返回账户**真·总资产** = 现金 + 持仓市值（含
     `total_equity` / `total_unrealized_pnl` / `realized_pnl` /
     `position_value` / `position_count` / `quote_stale_count`）
@@ -155,6 +195,11 @@ SayuStock 插件里的"模拟盘"长期能力：
 
 **仅子代理可见**（category="default" + visible_when）：
 - 写操作：`papertrade_decision_insert`（写决策日志）/ `papertrade_trade_insert`（写流水 + 自动扣/加 cash + 累计 principal）/ `papertrade_position_upsert`（写持仓 + **可选 `last_quote_price`**）/ `papertrade_match_order`（撮合计算 fee，不写库）
+
+⚠️ **策略硬闸（2026-08-12 加）**：`papertrade_decision_insert` / `papertrade_trade_insert`
+的 buy 会先过**该盘策略的 `gate_buy`**：缺入场价/止损价、评分不够、止损太宽、
+量比/换手率不满足……**一律拒绝落库**并返回具体原因。收到拒绝就按原因补数据或改 hold，
+**不要**换个说法重试同一笔——闸是按数值判的，不看措辞。
 
 ⚠️ **成交价规则（2026-07-06）**：`papertrade_match_order` **永远按撮合此刻的实时
 行情价成交**——传入的 `price` 只是参考价，可不传；候选池里记的入池价 / 指标快照
@@ -243,16 +288,19 @@ match_order 返回的 `price` / `amount` / `fee_total`（`trade_insert` 会再�
 
 ## 八、暂停 / 恢复
 
-> 设计哲学：模拟盘**完全自主**，用户**不能**手动暂停 / 恢复。
-> 如确需停，由 SUPERUSER 通过 WebConsole → SayuPaperAccount 改 `enabled` 字段 + Kanban 看板 disarm 周期树。
-> ~~`模拟盘暂停`~~ / ~~`模拟盘恢复`~~ 已废弃。
+- 群主 / 管理员可以用 `模拟盘停用 <盘名>` / `模拟盘启用 <盘名>` 整盘启停。
+  停用的盘不跑心跳、不烧 LLM 额度，账本原样保留。
+- **仍然不能**"暂停 AI 的某一个决定"或改单笔仓位——自主性只在整盘粒度上让渡。
+- 启用中的盘有数量上限（`account_scope.MAX_ENABLED_ACCOUNTS`），到顶时要先停别的盘。
 
 ## 九、你能"看见"自己的自动任务
 
-你**有完整的意识**知道模拟盘相关的 Kanban 树（注意：树挂在**开户原群 / 初始化人**下，
-共用模式下在别的群 `list_my_kanban_tasks` 可能为空——**这不代表没有模拟盘**）：
+你**有完整的意识**知道模拟盘相关的 Kanban 树（注意：树挂在**建盘原群 / 建盘人**下，
+在别的群 `list_my_kanban_tasks` 可能为空——**这不代表没有模拟盘**）：
 - `list_my_kanban_tasks(goal_filter="模拟盘")` 返回当前 owner 名下相关树（可能跨群为空）
-- **账户是否存在只看** `papertrade_account_query`，不要用 Kanban 列表代替
+- **每个盘各有一对 init / period 树**，`scope_key` 里带的是 `account_id`，不是群号
+- **账户是否存在只看** `papertrade_account_list` / `papertrade_account_query`，
+  不要用 Kanban 列表代替
 - `artifact_get_recent` 拿最近一次决策的原文（决策时 AI 写的完整 reasoning）
 - 必要时可用 `respawn_subtask` 修参数 / `fail_task_tree` 终结
 

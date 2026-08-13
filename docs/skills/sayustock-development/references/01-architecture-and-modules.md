@@ -12,7 +12,7 @@ SayuStock（早柚股票）是 **GsCore 业务插件**，提供：
 - **行情与出图**：大盘/行业/概念云图、个股分时、多股分时、日K/周K/…、个股对比
 - **自选与概览**：我的自选、大盘概览、估值对比（PB/PE/PS）、基金持仓等
 - **AI 集成**：`to_ai` 触发器桥接、`@ai_tools` 工具、`stock_agent` 等能力代理、Kronos 预测
-- **模拟盘 papertrade**：群级 AI 操盘账户、周期决策、撮合、SQLModel 落库、Kanban 心跳
+- **模拟盘 papertrade**：多个命名 AI 操盘账户（各绑策略）、周期决策、撮合、SQLModel 落库、Kanban 心跳、按盘播报
 
 它**不是**独立 Bot：消息由平台适配器 → GsCore → 本插件的 `SV` 触发器处理。
 

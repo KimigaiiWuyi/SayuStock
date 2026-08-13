@@ -1,8 +1,9 @@
 """模拟盘 ai_tools 集合。
 
-15 个 ai_tools，分三类（**没有重叠**，每个工具只做一件事）：
-- 业务/账本（**6 个只读**，capability_domain="AI模拟盘"，category="common"）
+16 个 ai_tools，分三类（**没有重叠**，每个工具只做一件事）：
+- 业务/账本（**7 个只读**，capability_domain="AI模拟盘"，category="common"）
   —— 主 persona + 能力代理都能用
+  —— 含 ``papertrade_account_list``：多盘时先看有哪些盘，再拿盘名查明细
   —— 含 ``papertrade_holdings_image``：仿「我的自选」的持仓简图（含今日涨跌+持仓浮盈）
 - 能力代理私有（**6 个写**，capability_domain="AI模拟盘"，category="default" + visible_when）
   —— 仅 papertrade_*_agent 可见；防止主 persona 误调写操作
@@ -15,12 +16,17 @@
 - ~~papertrade_account_create~~ —— 与 trigger ``send_init_command`` 重叠；统一走 trigger
 - ~~papertrade_account_update~~ —— 死代码（没有命令 / 流程使用）
 
-**所有 group_id 参数**：默认（全服共用一个盘）一律解析到那个钉死的账户，与提问
-来自哪个群无关；开了 ``papertrade_multi_group`` 才退回从 ctx.deps.ev.group_id 推断。
+**账户解析：读工具与写工具走的是两条不同的路，这不是冗余**（见 ``account_scope``）：
 
-**写工具的两道闸**（见 ``account_scope``）：``visible_when`` 只是不把工具端到模型
-面前，真正鉴权的是工具体内的 ``_deny_write`` —— 只有账户自己的 Kanban 心跳树、
-或 ``grant_write()`` 显式授权的路径能写，用户指使一律拒。
+- **读工具**收 ``account_name``：传了按名字查；留空时若在心跳树 / grant 里则绑定
+  该盘，否则默认盘。
+- **写工具不收账户参数**，只认 ``root_task_id``（框架派发 Kanban 任务时注入，LLM
+  伪造不了）。若写工具也按 LLM 传的盘名解析，它拼错一个字轻则整轮心跳被拒到空转，
+  重则把 A 盘的成交静默写进 B 盘的账本。
+
+**写工具的两道闸**：``visible_when`` 只是不把工具端到模型面前，真正鉴权的是工具体
+内的 ``_deny_write`` —— 只有账户自己的 Kanban 心跳树、或 ``grant_write()`` 显式授权
+的路径能写，用户指使一律拒。
 """
 
 import json
@@ -33,7 +39,7 @@ from gsuid_core.ai_core.models import ToolContext
 from gsuid_core.ai_core.register import ai_tools
 from gsuid_core.ai_core.planning.runtime import PlanRunContext, get_plan_context
 
-from . import db, account_scope
+from . import db, broadcast, strategies, account_scope
 from .indicators import compute_indicators
 from ..utils.market import KlinePeriod, get_market, is_market_error
 from .quote_service import quote_service
@@ -50,7 +56,7 @@ from ..utils.eastmoney_finance import (
 )
 from ..utils.stock.request_utils import get_code_id
 from ..utils.market.convert.dataframe import kline_to_df
-from ..utils.database.papertrade_models import SayuPaperPosition
+from ..utils.database.papertrade_models import SayuPaperAccount, SayuPaperPosition
 
 # ============================================================
 # 语境工具池标签（context_tags）
@@ -83,9 +89,10 @@ _PAPERTRADE_CTX_TAGS: list[str] = [
 # TypedDict：每个 ai_tool 的 JSON 输出契约，供下游 JSON 序列化
 # ============================================================
 class _AccountView(TypedDict):
-    group_id: str
-    bot_id: str
-    shared_mode: bool
+    account_id: int
+    account_name: str
+    strategy_id: str
+    origin_group_id: str
     scope_note: str
     cash: float
     initial_cash: float
@@ -174,10 +181,9 @@ class _TradingDayView(TypedDict):
 # ============================================================
 # 写工具的 profile 白名单。**逐个枚举而非前缀匹配**：``startswith("papertrade_")``
 # 意味着任何人新注册一个叫 papertrade_xxx 的画像就白拿下单权限。
-_WRITE_AGENT_PROFILES: frozenset[str] = frozenset(
+_WRITE_AGENT_PROFILES_BASE: frozenset[str] = frozenset(
     {
         "papertrade_setup_agent",
-        "papertrade_decision_agent",
         "papertrade_snapshot_agent",
         "papertrade_pool_refresh_agent",
         "papertrade_reporter_agent",
@@ -185,23 +191,35 @@ _WRITE_AGENT_PROFILES: frozenset[str] = frozenset(
 )
 
 
-async def _resolve_scope(
-    ctx: RunContext[ToolContext],
-    group_id: str = "",
-    bot_id: str = "",
-) -> tuple[str, str]:
-    """解析本次调用的账户键。共用模式（默认）下恒为那个钉死的账户，与提问来自哪个群无关。
+def _write_agent_profiles() -> frozenset[str]:
+    return _WRITE_AGENT_PROFILES_BASE | {s.agent_profile for s in strategies.list_strategies()}
 
-    显式传入的 group_id / bot_id 只在多群模式下生效（跨群查询用）；共用模式下
-    忽略它们 —— 全服只有一个盘，让 LLM 传当前群号也不会改指向。
+
+async def _read_account(account_name: str = "") -> SayuPaperAccount | None:
+    """读工具：显式盘名优先；空名绑定当前心跳树 / grant，再回落默认盘。"""
+    return await account_scope.resolve_account_for_read(
+        name=account_name,
+        root_task_id=_root_task_id(),
+    )
+
+
+def _root_task_id() -> str:
+    plan_ctx: PlanRunContext | None = get_plan_context()
+    return plan_ctx.root_task_id if plan_ctx is not None else ""
+
+
+async def _write_account(account_name: str = "") -> tuple[SayuPaperAccount | None, str]:
+    """**写工具**的账户解析：只认 ``root_task_id``，返回 ``(account, 提示/拒绝理由)``。
+
+    ``account_name`` 仅作一致性校验（对不上时纠正而非拒绝），绝不作为解析依据 ——
+    详见 ``account_scope.resolve_account_for_write``。
     """
-    deps = getattr(ctx, "deps", None)
-    ev = getattr(deps, "ev", None) if deps is not None else None
-    if account_scope.is_shared_mode():
-        return await account_scope.resolve_account_key(ev)
-    gid: str = str(group_id) if group_id else (str(ev.group_id) if ev and ev.group_id else "")
-    bid: str = bot_id if bot_id else (ev.bot_id if ev and ev.bot_id else "")
-    return (gid, bid)
+    acc, note = await account_scope.resolve_account_for_write(_root_task_id(), account_name=account_name)
+    if acc is not None:
+        disabled = account_scope.account_disabled_reason(acc)
+        if disabled:
+            return (None, disabled)
+    return acc, note
 
 
 def _current_profile() -> str:
@@ -216,14 +234,55 @@ def _visible_to_papertrade_agent(ctx: RunContext[ToolContext]) -> bool:
     只是"不把工具端到模型面前"，**不是鉴权** —— profile 能被主 persona 临时委派
     出来。真正的闸门是每个写工具体内的 ``_deny_write``。
     """
-    return _current_profile() in _WRITE_AGENT_PROFILES
+    return _current_profile() in _write_agent_profiles()
 
 
-async def _deny_write(ctx: RunContext[ToolContext], group_id: str, bot_id: str) -> str:
+async def _deny_write(account: SayuPaperAccount | None) -> str:
     """写工具的执行层鉴权；放行返回 ``""``，否则返回给 LLM 的拒绝理由。"""
-    plan_ctx: PlanRunContext | None = get_plan_context()
-    root_task_id: str = plan_ctx.root_task_id if plan_ctx is not None else ""
-    return await account_scope.deny_write_reason(root_task_id, group_id, bot_id)
+    return await account_scope.deny_write_reason(_root_task_id(), account)
+
+
+def _strategy_of(account: SayuPaperAccount) -> tuple[strategies.Strategy, dict[str, Any]]:
+    """拿账户的策略对象 + 归一化参数。"""
+    return strategies.resolve_with_params(
+        account.strategy_id,
+        db.parse_strategy_params(account.strategy_params),
+    )
+
+
+async def _gate_entry(
+    account: SayuPaperAccount,
+    *,
+    stock_code: str,
+    indicators: dict[str, Any],
+    score: float,
+    source: str,
+    side: str,
+) -> str:
+    """落库硬闸。量能盘的顶底/放量在这里用日 K 函数算，覆盖 Agent 传入值。"""
+    from .strategies.base import _is_stop_triggered
+    from .strategies.volume_extremum import VolumeExtremumStrategy, load_structure
+
+    strategy, params = _strategy_of(account)
+    merged = dict(indicators)
+    # 止损卖必须先放行：load_structure 失败会短路，把 stop_triggered 旁路锁死
+    if str(side).strip().lower() == "sell" and _is_stop_triggered(merged):
+        return ""
+    if strategy.id == VolumeExtremumStrategy.id:
+        measured = await load_structure(stock_code, params, intent=side)
+        if isinstance(measured, str):
+            return measured
+        merged.update(measured.as_indicators())
+    return strategy.validate_entry(
+        params,
+        strategies.GateInput(
+            stock_code=stock_code,
+            indicators=merged,
+            score=score,
+            source=source,
+            side=side,
+        ),
+    )
 
 
 # ============================================================
@@ -245,61 +304,15 @@ async def _deny_write(ctx: RunContext[ToolContext], group_id: str, bot_id: str) 
 from gsuid_core.logger import logger as _gslogger  # noqa: E402  -- pyright 看不见根包导入
 
 
-async def _broadcast_fill(
-    ctx: RunContext[ToolContext],
-    *,
-    side: str,
-    stock_code: str,
-    stock_name: str,
-    qty: int,
-    price: float,
-    realized_pnl: float,
-) -> None:
-    """成交后向群里推一行简洁冒泡（buy/sell 都推）。
-
-    这是**系统级确定性播报**——不依赖决策代理的最终输出（代理最终永远只出
-    ``<<NO_BROADCAST>>``）。每次 ``papertrade_trade_insert`` 成功即调一次，保证
-    "全部买卖都在群里公布"，且只公布这一行、不带任何决策推理 / 账户汇总。
-    失败只记 debug、绝不抛出（已落库的成交不能被播报失败连累）。
-
-    投递目标由 ``account_scope.broadcast_event`` 决定：配了播报群就改向到那儿，
-    没配就还是推到触发上下文的群（老行为）。配置读时取值，改完立刻生效。
-    """
-    ev = ctx.deps.ev
-    if ev is None:
-        return
-    ev = await account_scope.broadcast_event(ev)
-    name: str = stock_name or stock_code
-    if side == "sell":
-        sign: str = "+" if realized_pnl >= 0 else "-"
-        line = f"🔴 卖出 {name}({stock_code}) {qty} 股 @¥{price:.2f}（{sign}¥{abs(realized_pnl):,.0f}）"
-    else:
-        line = f"🟢 买入 {name}({stock_code}) {qty} 股 @¥{price:.2f}"
-    try:
-        from gsuid_core.ai_core.proactive.emitter import emit_proactive_message
-
-        await emit_proactive_message(
-            event=ev,
-            message=line,
-            source="tool",
-            trigger_reason=f"papertrade_fill:{stock_code}:{side}",
-            suppress_when_heartbeat_recent=False,  # 成交播报是关键信息，不被心跳抑制
-        )
-    except Exception as e:
-        _gslogger.debug(f"[SayuStock][PaperTrade] 成交播报失败（不影响落库）: {e}")
-
-
 async def _get_enriched_positions(
-    group_id: str,
-    bot_id: str,
+    account_id: int,
     *,
     max_stale_seconds: int = 60,
 ) -> list[tuple[SayuPaperPosition, dict]]:
     """拿 enriched 后的持仓列表。
 
     Args:
-        group_id: 群号。
-        bot_id: bot_id。
+        account_id: 账户 id。
         max_stale_seconds: 报价超过多少秒就算 stale，触发刷新。
 
     Returns:
@@ -309,7 +322,7 @@ async def _get_enriched_positions(
         （"live"=60s 内/db=已有缓存但超龄/cost=未刷过用均价兜底）。
         ``quote_age_seconds`` 为 None 表示从未刷过价。
     """
-    positions: list[SayuPaperPosition] = await db.PaperPositionRepo.list_by_account(group_id, bot_id)
+    positions: list[SayuPaperPosition] = await db.PaperPositionRepo.list_by_account(account_id)
     if not positions:
         return []
 
@@ -354,7 +367,7 @@ async def _get_enriched_positions(
                 ]
                 if writes:
                     try:
-                        await db.PaperPositionRepo.bulk_set_quote(writes, group_id, bot_id)
+                        await db.PaperPositionRepo.bulk_set_quote(writes, account_id)
                     except Exception as e:
                         # 老库可能列未迁移完；这里 swallow 不影响主流程
                         _gslogger.debug(f"[SayuStock][PaperTrade] bulk_set_quote 写 DB 失败（降级）：{e}")
@@ -421,8 +434,55 @@ def _aggregate_enriched(
 
 
 # ============================================================
-# 1) 业务/账本工具（6 个，主人格 + 能力代理共用）
+# 1) 业务/账本工具（7 个，主人格 + 能力代理共用）
 # ============================================================
+
+
+@ai_tools(
+    category="common",
+    capability_domain="AI模拟盘",
+    context_tags=_PAPERTRADE_CTX_TAGS,
+)
+async def papertrade_account_list(ctx: RunContext[ToolContext]) -> str:
+    """列出**所有**模拟盘（盘名 / 策略 / 总资产 / 状态）。
+
+    ⚠️ 多盘之后这是**其它 papertrade_* 工具的前置**：用户说「你的模拟盘怎么样」
+    而库里有多个盘时，先调本工具看有哪些盘，再拿 ``account_name`` 去查明细。
+    **不要**凭空猜盘名——猜错会解析不到盘，用户会看到"不存在这个盘"。
+
+    盘与群**无关**：任意群调用返回的都是同一份全量列表。
+
+    返回 [{account_id, account_name, strategy_id, enabled, cash, initial_cash,
+    total_equity, total_pnl_pct, position_count, last_decided_at}, ...]。
+    ``total_equity`` 取最近一次收盘快照（当日盘中未刷新时会略滞后，需要精确
+    实时值请对具体的盘调 ``papertrade_account_query``）。
+    """
+    accounts = await db.PaperAccountRepo.list_all()
+    if not accounts:
+        return account_scope.not_opened_message()
+    items: list[dict[str, Any]] = []
+    for a in accounts:
+        if a.id is None:
+            continue
+        snap = await db.PaperSnapshotRepo.latest(a.id)
+        positions = await db.PaperPositionRepo.list_codes(a.id)
+        last_decided: _dt.datetime | None = a.last_decided_at
+        items.append(
+            {
+                "account_id": a.id,
+                "account_name": a.name,
+                "strategy_id": a.strategy_id,
+                "enabled": a.enabled,
+                "cash": round(a.cash, 2),
+                "initial_cash": a.initial_cash,
+                "total_equity": snap.total_equity if snap is not None else None,
+                "total_pnl_pct": snap.total_pnl_pct if snap is not None else None,
+                "snapshot_date": snap.trade_date.isoformat() if snap is not None and snap.trade_date else None,
+                "position_count": len(positions),
+                "last_decided_at": last_decided.isoformat() if last_decided else None,
+            }
+        )
+    return json.dumps(items, ensure_ascii=False)
 
 
 @ai_tools(
@@ -432,8 +492,7 @@ def _aggregate_enriched(
 )
 async def papertrade_account_query(
     ctx: RunContext[ToolContext],
-    group_id: str = "",
-    bot_id: str = "",
+    account_name: str = "",
 ) -> str:
     """查询 AI 自己的模拟盘（虚拟盘）账户：现金 / 总资产 / 浮盈 / 已实现盈亏 / 持仓数。
 
@@ -443,11 +502,10 @@ async def papertrade_account_query(
     framework 的 ``record:`` 集合、``state_*`` 或 init 阶段的 artifact 里——**严禁**用
     ``record_list`` / ``state_get`` / ``artifact_get_recent`` 代答账户状态。
 
-    ⚠️ **作用域（默认全服共用）**：配置「多群模拟盘」关闭时，全服只有一个盘；
-    在 A 群开户后，在 B 群提问也必须调本工具，返回的就是那同一份账户。
-    ``group_id`` 字段是开户原群号，**不等于**「当前群没开盘」。**严禁**因为
-    返回的 group_id 与当前会话群号不同就说「这个群没有创建过模拟盘」。
-    只有工具明确返回「全服尚未开通 / 本群尚未开通」时，才是真的没有账户。
+    ⚠️ **模拟盘是命名账户，不属于任何群**：同一个盘在任意群提问查到的都是同一份
+    数据。返回里的 ``origin_group_id`` 只是**创建时所在的群**，**严禁**因为它与当前
+    会话群号不同就说「这个群没有创建过模拟盘」。想知道有哪些盘用
+    ``papertrade_account_list``。
 
     2026-07-01 修复：``total_equity`` 现在是 **真·总资产 = 现金 + Σ持仓市值**，
     不再返回 cash-only；同时给出 ``total_unrealized_pnl`` / ``realized_pnl`` /
@@ -455,18 +513,14 @@ async def papertrade_account_query(
     可以直接做盈亏推算。
 
     Args:
-        group_id: 仅多群模式生效；共用模式下忽略（全服唯一账户）。留空即可。
-        bot_id: 仅多群模式生效；共用模式下忽略。留空即可。
+        account_name: 盘名。留空 = 默认盘（或全库唯一的那个盘）。
     """
-    gid, bid = await _resolve_scope(ctx, group_id, bot_id)
-    if not gid or not bid:
-        return "⚠️ 无法确定 group_id/bot_id"
-    acc = await db.PaperAccountRepo.get(gid, bid)
-    if not acc:
-        return account_scope.not_opened_message(gid, bid)
+    acc = await _read_account(account_name)
+    if acc is None or acc.id is None:
+        return account_scope.not_opened_message(name=account_name)
 
     # ── enriched 持仓聚合（自动刷报价，含浮盈 / 现价） ──
-    enriched: list[tuple[SayuPaperPosition, dict]] = await _get_enriched_positions(gid, bid)
+    enriched: list[tuple[SayuPaperPosition, dict]] = await _get_enriched_positions(acc.id)
     agg: dict[str, float] = _aggregate_enriched(enriched)
     position_value: float = agg["position_value"]
     total_unrealized_pnl: float = agg["total_unrealized_pnl"]
@@ -479,12 +533,12 @@ async def papertrade_account_query(
     )
 
     last_decided: _dt.datetime | None = acc.last_decided_at
-    shared = account_scope.is_shared_mode()
     view: _AccountView = {
-        "group_id": gid,
-        "bot_id": bid,
-        "shared_mode": shared,
-        "scope_note": account_scope.scope_note_for_llm(gid),
+        "account_id": acc.id,
+        "account_name": acc.name,
+        "strategy_id": acc.strategy_id,
+        "origin_group_id": acc.group_id,
+        "scope_note": account_scope.scope_note_for_llm(acc),
         "cash": acc.cash,
         "initial_cash": acc.initial_cash,
         "principal": acc.principal,
@@ -512,8 +566,7 @@ async def papertrade_account_query(
 )
 async def papertrade_position_list(
     ctx: RunContext[ToolContext],
-    group_id: str = "",
-    bot_id: str = "",
+    account_name: str = "",
 ) -> str:
     """列出 AI 自己的模拟盘（虚拟盘）当前持仓：持有哪些股票 / 现价 / 市值 / 浮盈。
 
@@ -525,8 +578,8 @@ async def papertrade_position_list(
     ``artifact_get_recent`` 代答持仓——init artifact 的"0 持仓"是建账时的旧
     快照，成交后永不更新，据它回答会误报空仓。
 
-    ⚠️ **作用域**：默认全服共用一个盘；在任意群提问都查同一份持仓。不要因为
-    当前群不是开户群就说「这个群没有模拟盘」。
+    ⚠️ **模拟盘是命名账户，不属于任何群**：在任意群提问都查同一份持仓。不要因为
+    当前群不是创建盘的那个群就说「这个群没有模拟盘」。
 
     2026-07-01 修复：每行新增 ``current_price`` / ``market_value`` /
     ``unrealized_pnl`` / ``unrealized_pnl_pct`` / ``quote_age_seconds`` /
@@ -534,20 +587,18 @@ async def papertrade_position_list(
         ``"live"`` = 60s 内新鲜报价
         ``"db"``   = DB 有缓存但超过 max_stale_seconds（默认 60s）
         ``"cost"`` = 从未刷过价，用 avg_cost 兜底
+
+    Args:
+        account_name: 盘名。留空 = 默认盘。
     """
-    gid, bid = await _resolve_scope(ctx, group_id, bot_id)
-    if not gid or not bid:
-        return "⚠️ 无法确定 group_id/bot_id"
+    # 未开户与「空仓」必须区分：解析不到账户才是"没有这个盘"，解析到但没持仓是空仓
+    acc = await _read_account(account_name)
+    if acc is None or acc.id is None:
+        return account_scope.not_opened_message(name=account_name)
 
-    # 未开户与「空仓」必须区分：共用模式下 resolve 到开户原群；若仍无账户则明确说未开通
-    acc = await db.PaperAccountRepo.get(gid, bid)
-    if not acc:
-        return account_scope.not_opened_message(gid, bid)
-
-    enriched: list[tuple[SayuPaperPosition, dict]] = await _get_enriched_positions(gid, bid)
+    enriched: list[tuple[SayuPaperPosition, dict]] = await _get_enriched_positions(acc.id)
     if not enriched:
-        note = account_scope.scope_note_for_llm(gid)
-        return f"ℹ️ 当前模拟盘无持仓（账户 group_id={gid}）。{note}"
+        return f"ℹ️ 模拟盘「{acc.name}」当前无持仓。{account_scope.scope_note_for_llm(acc)}"
 
     items: list[_PositionItem] = []
     for p, e in enriched:
@@ -578,13 +629,12 @@ async def papertrade_position_list(
 )
 async def papertrade_holdings_image(
     ctx: RunContext[ToolContext],
-    group_id: str = "",
-    bot_id: str = "",
+    account_name: str = "",
 ) -> str:
     """把 AI **模拟盘当前持仓**渲染成「模拟盘自选」风格的**简化版持仓图**并发出。
 
     与用户命令「**模拟盘自选**」/「**模拟盘持仓**」同一张图（也可不经 agent、直接发该命令）。
-    默认全服共用一个盘：任意群调用都出同一份持仓图。
+    模拟盘是命名账户：任意群调用同一个盘名都出同一份持仓图。
 
     ⚠️ **这是简化快照，不是完整账户报告**：
     - **有**：账户摘要（现金 / 总资产 / 持仓市值 / 浮盈 / 累计盈亏）、
@@ -602,23 +652,23 @@ async def papertrade_holdings_image(
     时出图；主 persona 可直接调，不必先委派决策代理。
 
     Args:
-        group_id / bot_id: 仅多群模式生效；共用模式忽略。留空即可。
+        account_name: 盘名。留空 = 默认盘。
     """
     from gsuid_core.segment import MessageSegment
     from gsuid_core.ai_core.trigger_bridge import ai_return
 
     from .render import build_holdings_snapshot_image
 
-    gid, bid = await _resolve_scope(ctx, group_id, bot_id)
-    if not gid or not bid:
-        return "⚠️ 无法确定 group_id/bot_id"
+    acc = await _read_account(account_name)
+    if acc is None or acc.id is None:
+        return account_scope.not_opened_message(name=account_name)
 
     bot = ctx.deps.bot
     if bot is None:
         return "❌ 当前上下文拿不到 Bot，无法发图；请改用 papertrade_position_list 文本查询。"
 
     try:
-        result = await build_holdings_snapshot_image(gid, bid)
+        result = await build_holdings_snapshot_image(acc.id)
     except Exception as e:
         _gslogger.exception(f"[SayuStock][PaperTrade] holdings_image 渲染失败: {e}")
         return f"❌ 持仓简图渲染失败：{e}；请改用 papertrade_position_list。"
@@ -627,8 +677,9 @@ async def papertrade_holdings_image(
         return result
 
     try:
-        scope = "全服共用账户" if account_scope.is_shared_mode() else f"群 {gid}"
-        ai_return(f"【模拟盘自选·简化版】{scope}持仓图已发送：含今日涨跌与持仓浮盈，不含交易流水/决策日志。")
+        ai_return(
+            f"【模拟盘自选·简化版】模拟盘「{acc.name}」持仓图已发送：含今日涨跌与持仓浮盈，不含交易流水/决策日志。"
+        )
     except Exception as e:
         _gslogger.debug(f"[SayuStock][PaperTrade] holdings_image ai_return 失败: {e}")
 
@@ -643,13 +694,12 @@ async def papertrade_holdings_image(
 )
 async def papertrade_trade_list(
     ctx: RunContext[ToolContext],
-    group_id: str = "",
-    bot_id: str = "",
+    account_name: str = "",
     stock_code: str = "",
     limit: int = 20,
     include_snapshot: bool = True,
 ) -> str:
-    """查询 AI 模拟盘（虚拟盘）历史买卖流水（买入/卖出记录 + 已实现盈亏；默认全服共用账户）。
+    """查询 AI 模拟盘（虚拟盘）历史买卖流水（买入/卖出记录 + 已实现盈亏）。
 
     问「你都买卖过什么 / 最近成交 / 交易记录 / 某只股什么时候买的」走这个。
     数据在 SQLModel 流水表，**不在** ``record:`` 集合 / ``state_*``。
@@ -658,15 +708,15 @@ async def papertrade_trade_list(
     ``decision_id`` / ``mode``，供决策代理在卖出前回看入场止损止盈。
 
     Args:
+        account_name: 盘名。留空 = 默认盘。
         include_snapshot: snapshot 是大段入场指标 JSON；批量扫流水（非复核某笔卖出）
             时传 False 可大幅省 token。默认 True。
     """
-    gid, bid = await _resolve_scope(ctx, group_id, bot_id)
-    if not gid or not bid:
-        return "⚠️ 无法确定 group_id/bot_id"
+    acc = await _read_account(account_name)
+    if acc is None or acc.id is None:
+        return account_scope.not_opened_message(name=account_name)
     rows = await db.PaperTradeRepo.list_by_account(
-        gid,
-        bid,
+        acc.id,
         limit=limit,
         stock_code=stock_code or None,
     )
@@ -705,8 +755,7 @@ async def papertrade_trade_list(
 )
 async def papertrade_decision_list(
     ctx: RunContext[ToolContext],
-    group_id: str = "",
-    bot_id: str = "",
+    account_name: str = "",
     stock_code: str = "",
     limit: int = 20,
     include_indicators: bool = True,
@@ -717,10 +766,10 @@ async def papertrade_decision_list(
     时走这个。模拟盘的决策推理**不会在群里主动播报**（只有真成交才由系统自动推一行
     冒泡），但每一条决策（含 hold）都落在 SQLModel 决策日志里，可随时查。与
     ``papertrade_trade_list`` 互补：trade_list 是"成交了什么"，decision_list 是"为什么
-    这样决策（含没成交的 hold 理由）"。默认全服共用账户，任意群可查。
+    这样决策（含没成交的 hold 理由）"。模拟盘是命名账户，任意群可查。
 
     Args:
-        group_id / bot_id: 仅多群模式生效；共用模式忽略。留空即可。
+        account_name: 盘名。留空 = 默认盘。
         stock_code: 只看某只票的决策（留空看全部）
         limit: 返回最近多少条（默认 20，按时间倒序）
         include_indicators: indicators 是大段指标 JSON；只扫决策脉络（不复盘单条指标）
@@ -729,18 +778,17 @@ async def papertrade_decision_list(
     返回 [{id, action, stock_code, stock_name, score, reason, blocked_by, trade_id,
     indicators, decided_at}, ...]。
     """
-    gid, bid = await _resolve_scope(ctx, group_id, bot_id)
-    if not gid or not bid:
-        return "⚠️ 无法确定 group_id/bot_id"
+    acc = await _read_account(account_name)
+    if acc is None or acc.id is None:
+        return account_scope.not_opened_message(name=account_name)
     rows = await db.PaperDecisionRepo.list_recent(
-        gid,
-        bid,
+        acc.id,
         limit=limit,
         stock_code=stock_code or None,
     )
     if not rows:
         suffix: str = f"（{stock_code}）" if stock_code else ""
-        return f"ℹ️ 当前模拟盘暂无决策记录{suffix}（账户 group_id={gid}）。"
+        return f"ℹ️ 模拟盘「{acc.name}」暂无决策记录{suffix}。"
     items: list[dict[str, Any]] = []
     for d in rows:
         created_at: _dt.datetime | None = d.created_at
@@ -765,14 +813,20 @@ async def papertrade_decision_list(
 @ai_tools(category="common", capability_domain="AI模拟盘")
 async def papertrade_watchlist_list(
     ctx: RunContext[ToolContext],
-    group_id: str = "",
-    bot_id: str = "",
+    account_name: str = "",
 ) -> str:
-    """查询某群群友关注列表（公开）。"""
-    gid, bid = await _resolve_scope(ctx, group_id, bot_id)
-    if not gid or not bid:
-        return "⚠️ 无法确定 group_id/bot_id"
-    rows = await db.PaperWatchlistRepo.list_by_account(gid, bid)
+    """查询某个盘的群友关注列表（公开）。
+
+    关注表挂在**盘**上而不是群上：候选池的保护集按盘算，挂在群上会让两个盘
+    互相污染对方的"永不淘汰"集合。
+
+    Args:
+        account_name: 盘名。留空 = 默认盘。
+    """
+    acc = await _read_account(account_name)
+    if acc is None or acc.id is None:
+        return account_scope.not_opened_message(name=account_name)
+    rows = await db.PaperWatchlistRepo.list_by_account(acc.id)
     items: list[_WatchlistItem] = []
     for w in rows:
         created_at: _dt.datetime | None = w.created_at
@@ -791,19 +845,21 @@ async def papertrade_watchlist_list(
 @ai_tools(category="common", capability_domain="AI模拟盘")
 async def papertrade_agent_pool_list(
     ctx: RunContext[ToolContext],
-    group_id: str = "",
-    bot_id: str = "",
+    account_name: str = "",
 ) -> str:
     """查询内部候选池（agent_pool）当前内容（公开只读）。
 
     返回 [{stock_code, stock_name, reason, priority, expires_at}, ...]。
     决策代理在每轮开头调此工具候选池充盈度，不足时调 papertrade_candidate_refresh
     增量补充；避免永远只看持仓股、不再找新标的的"锚定陷阱"。
+
+    Args:
+        account_name: 盘名。留空 = 默认盘。
     """
-    gid, bid = await _resolve_scope(ctx, group_id, bot_id)
-    if not gid or not bid:
-        return "⚠️ 无法确定 group_id/bot_id"
-    rows = await db.PaperAgentPoolRepo.list_by_account(gid, bid)
+    acc = await _read_account(account_name)
+    if acc is None or acc.id is None:
+        return account_scope.not_opened_message(name=account_name)
+    rows = await db.PaperAgentPoolRepo.list_by_account(acc.id)
     items: list[dict[str, Any]] = []
     for r in rows:
         expires_at: _dt.datetime | None = r.expires_at
@@ -866,10 +922,10 @@ async def papertrade_decision_insert(
 
       - ``blocked_by`` —— 风控拦截原因；hold 不带风控时传 ''。
     """
-    from .strategy import indicators_have_entry_stop
-
-    gid, bid = await _resolve_scope(ctx)
-    denied: str = await _deny_write(ctx, gid, bid)
+    acc, note = await _write_account()
+    if acc is None or acc.id is None:
+        return note or "⚠️ 无法确定要写入的模拟盘。"
+    denied: str = await _deny_write(acc)
     if denied:
         return denied
 
@@ -899,16 +955,20 @@ async def papertrade_decision_insert(
         indicators = ""
         ind_obj = {}
 
-    if action_lc == "buy" and (stock_code or "").strip():
-        if not indicators_have_entry_stop(ind_obj):
-            return (
-                "⚠️ buy 须在 indicators JSON 写入 plan_stop_pct(<0) 或 plan_stop_price(>0)"
-                "（可解析数值止损）；已拒绝落库，请补全后重试"
-            )
+    if action_lc in ("buy", "sell") and (stock_code or "").strip():
+        gate_msg: str = await _gate_entry(
+            acc,
+            stock_code=stock_code,
+            indicators=ind_obj,
+            score=score,
+            source="decision",
+            side=action_lc,
+        )
+        if gate_msg:
+            return gate_msg
 
     d = await db.PaperDecisionRepo.append(
-        gid,
-        bid,
+        acc.id,
         action=action,
         stock_code=stock_code or None,
         stock_name=stock_name or None,
@@ -925,8 +985,7 @@ async def papertrade_decision_insert(
             from .candidate_pool import post_decision_pool_update
 
             await post_decision_pool_update(
-                gid,
-                bid,
+                acc.id,
                 [
                     {
                         "action": action_lc,
@@ -1001,19 +1060,18 @@ async def papertrade_trade_insert(
     # + 现金维护都在 executor 里，模拟盘/实盘可切换）；本工具只透传 + 回传说明。
     from .trade_executor import get_executor
 
-    gid, bid = await _resolve_scope(ctx)
-    denied: str = await _deny_write(ctx, gid, bid)
+    acc, note = await _write_account()
+    if acc is None or acc.id is None:
+        return note or "⚠️ 无法确定要写入的模拟盘。"
+    denied: str = await _deny_write(acc)
     if denied:
         return denied
 
-    # buy 硬门：snapshot 须含可解析数值止损，避免「先成交再 decision 失败」无计划仓
     side_lc: str = (side or "").lower().strip()
-    if side_lc == "buy":
+    if side_lc in ("buy", "sell"):
         import json as _json
 
-        from .strategy import indicators_have_entry_stop
-
-        snap_obj: dict[str, object] = {}
+        snap_obj: dict[str, Any] = {}
         raw_snap = (snapshot or "").strip()
         if raw_snap and raw_snap != "{}":
             try:
@@ -1022,15 +1080,19 @@ async def papertrade_trade_insert(
                 parsed_snap = None
             if isinstance(parsed_snap, dict):
                 snap_obj = {str(k): v for k, v in parsed_snap.items()}
-        if not indicators_have_entry_stop(snap_obj):
-            return (
-                "⚠️ buy 的 snapshot JSON 须含 plan_stop_pct(<0) 或 plan_stop_price(>0)；"
-                "已拒绝落库，请补全入场止损后再 trade_insert"
-            )
+        gate_msg: str = await _gate_entry(
+            acc,
+            stock_code=stock_code,
+            indicators=snap_obj,
+            score=0.0,
+            source="trade",
+            side=side_lc,
+        )
+        if gate_msg:
+            return gate_msg
 
     result = await get_executor().record_trade(
-        group_id=gid,
-        bot_id=bid,
+        account_id=acc.id,
         stock_code=stock_code,
         stock_name=stock_name,
         secid=secid,
@@ -1045,10 +1107,10 @@ async def papertrade_trade_insert(
         decision_id=decision_id,
         mode=mode,
     )
-    # 成交成功 → 系统确定性向群里推一行成交冒泡（不依赖 agent 最终输出）。
+    # 成交成功 → 系统确定性向该盘订阅的所有群推一行成交冒泡（不依赖 agent 最终输出）。
     if result.ok:
-        await _broadcast_fill(
-            ctx,
+        await broadcast.broadcast_fill(
+            acc,
             side=side,
             stock_code=stock_code,
             stock_name=stock_name,
@@ -1093,13 +1155,14 @@ async def papertrade_position_upsert(
     # 交易执行统一走 TradeExecutor 抽象层（模拟盘/实盘可切换）。
     from .trade_executor import get_executor
 
-    gid, bid = await _resolve_scope(ctx)
-    denied: str = await _deny_write(ctx, gid, bid)
+    acc, note = await _write_account()
+    if acc is None or acc.id is None:
+        return note or "⚠️ 无法确定要写入的模拟盘。"
+    denied: str = await _deny_write(acc)
     if denied:
         return denied
     pos_id: int = await get_executor().update_position(
-        group_id=gid,
-        bot_id=bid,
+        account_id=acc.id,
         stock_code=stock_code,
         stock_name=stock_name,
         secid=secid,
@@ -1117,8 +1180,6 @@ async def papertrade_position_upsert(
 )
 async def papertrade_candidate_refresh(
     ctx: RunContext[ToolContext],
-    group_id: str = "",
-    bot_id: str = "",
     target_size: int = 0,
     rotate_out: int = 0,
     batch_size: int = 0,
@@ -1179,38 +1240,45 @@ async def papertrade_candidate_refresh(
         _from_news_extract_tickers,
     )
 
-    gid, bid = await _resolve_scope(ctx, group_id, bot_id)
-    if not gid or not bid:
-        return "⚠️ 无法确定 group_id/bot_id"
-    denied: str = await _deny_write(ctx, gid, bid)
+    acc, note = await _write_account()
+    if acc is None or acc.id is None:
+        return note or "⚠️ 无法确定要轮换候选池的模拟盘。"
+    denied: str = await _deny_write(acc)
     if denied:
         return denied
+    account_id: int = acc.id
 
-    tgt: int = target_size if target_size > 0 else POOL_TARGET_SIZE
+    # ── 生效点 2：策略的候选池偏好 ──
+    # 优先级：LLM 显式传参 > 策略偏好 > 全局默认。LLM 传参排最前是因为它可能在
+    # 某轮明确想扩池找新标的；策略偏好排第二，全局默认兜底。
+    strategy, strategy_params = _strategy_of(acc)
+    pref = strategy.pool_preference(strategy_params)
+
+    tgt: int = target_size if target_size > 0 else (pref.target_size or POOL_TARGET_SIZE)
     tgt = max(5, min(tgt, 50))
-    rot: int = rotate_out if rotate_out > 0 else ROTATE_OUT_PER_REFRESH
+    rot: int = rotate_out if rotate_out > 0 else (pref.rotate_out or ROTATE_OUT_PER_REFRESH)
     rot = max(0, min(rot, tgt))
     now = _dt.datetime.now()
 
     # ── 0) 清过期（物理删除，腾出轮换空间） ──
     expired: int = 0
     try:
-        expired = await db.PaperAgentPoolRepo.cleanup_expired_for(gid, bid)
+        expired = await db.PaperAgentPoolRepo.cleanup_expired_for(account_id)
     except Exception as e:
         _gslogger.debug(f"[SayuStock][PaperTrade] candidate_refresh 清过期失败: {e}")
 
     # ── 保护集：持仓 + 群友关注（永不淘汰） ──
     protected: Set[str] = set()
     try:
-        protected.update(await _from_position(gid, bid))
+        protected.update(await _from_position(account_id))
     except Exception as e:
         _gslogger.debug(f"[SayuStock][PaperTrade] candidate_refresh position 保护集失败: {e}")
     try:
-        protected.update(await _from_watchlist(gid, bid))
+        protected.update(await _from_watchlist(account_id))
     except Exception as e:
         _gslogger.debug(f"[SayuStock][PaperTrade] candidate_refresh watchlist 保护集失败: {e}")
 
-    entries = await db.PaperAgentPoolRepo.list_by_account(gid, bid)
+    entries = await db.PaperAgentPoolRepo.list_by_account(account_id)
     pool_size_before: int = len(entries)
 
     # ── 1) 淘汰最旧的 rot 只 auto 候选（"剔除"） ──
@@ -1221,18 +1289,20 @@ async def papertrade_candidate_refresh(
     evicted: list[str] = []
     for e in autos[:rot]:
         try:
-            if await db.PaperAgentPoolRepo.remove(gid, bid, e.stock_code):
+            if await db.PaperAgentPoolRepo.remove(account_id, e.stock_code):
                 evicted.append(e.stock_code)
         except Exception as ex:
             _gslogger.debug(f"[SayuStock][PaperTrade] candidate_refresh 淘汰 {e.stock_code} 失败: {ex}")
 
     # 淘汰后重算 seen（现池 + 保护集）
-    seen: Set[str] = set(await db.PaperAgentPoolRepo.list_codes(gid, bid)) | protected
+    seen: Set[str] = set(await db.PaperAgentPoolRepo.list_codes(account_id)) | protected
     base_now: int = sum(1 for e in entries if e.added_by == "base" and e.stock_code not in evicted)
 
-    # ── 2) 补蓝筹底仓到 BASE_KEEP ──
+    # ── 2) 补蓝筹底仓到 BASE_KEEP（volume 策略关掉，避免锚高 ROE 蓝筹）──
     base_added: list[str] = []
     base_slots: int = max(0, min(BASE_KEEP - base_now, tgt - len(seen)))
+    if not pref.seed_bluechip:
+        base_slots = 0
     if base_slots > 0:
         for code, name in pick_base_slice(len(BLUECHIP_BASE)):
             if len(base_added) >= base_slots:
@@ -1242,8 +1312,7 @@ async def papertrade_candidate_refresh(
             secid = derive_secid(code)
             try:
                 await db.PaperAgentPoolRepo.upsert(
-                    gid,
-                    bid,
+                    account_id,
                     stock_code=code,
                     stock_name=name,
                     secid=secid,
@@ -1288,17 +1357,29 @@ async def papertrade_candidate_refresh(
                 _gslogger.debug(f"[SayuStock][PaperTrade] candidate_refresh {label} 失败: {ex}")
                 return []
 
-        # 多源并行拉取，降低 8 路串行时延
-        batches = await asyncio.gather(
-            _safe_source("sector", _from_sector_top_picks(top_sectors=4, per_sector=3)),
-            _safe_source("concept", _from_concept_top_picks(top_concepts=3, per_concept=3)),
-            _safe_source("hotmap", _from_hotmap_top_n(n=12)),
-            _safe_source("gainer", _from_market_gainers(n=10)),
-            _safe_source("laggard", _from_market_laggards(n=8)),
-            _safe_source("amount", _from_amount_leaders(n=10)),
-            _safe_source("quality", _from_quality_roe(n=10)),
-            _safe_source("news", _from_news_extract_tickers()),
-        )
+        # 策略权重为 0 的来源**根本不拉**（省掉一整轮 HTTP），不是拉回来再丢
+        def _weight(label: str) -> float:
+            return float(pref.source_weights.get(label, 1.0)) if pref.source_weights else 1.0
+
+        planned: list[tuple[str, Any]] = [
+            ("sector", _from_sector_top_picks(top_sectors=4, per_sector=3)),
+            ("concept", _from_concept_top_picks(top_concepts=3, per_concept=3)),
+            ("hotmap", _from_hotmap_top_n(n=12)),
+            ("gainer", _from_market_gainers(n=10)),
+            ("laggard", _from_market_laggards(n=8)),
+            ("amount", _from_amount_leaders(n=10)),
+            ("quality", _from_quality_roe(n=10)),
+            ("news", _from_news_extract_tickers()),
+        ]
+        active: list[tuple[str, Any]] = []
+        for label, coro in planned:
+            if _weight(label) > 0:
+                active.append((label, coro))
+            else:
+                coro.close()  # 未 await 的协程必须显式关闭，否则 RuntimeWarning 刷屏
+
+        # 多源并行拉取，降低串行时延
+        batches = await asyncio.gather(*(_safe_source(label, coro) for label, coro in active))
         raw_pairs: list[tuple[str, str]] = []
         for batch in batches:
             raw_pairs.extend(batch)
@@ -1319,10 +1400,17 @@ async def papertrade_candidate_refresh(
 
         # 轮询交织：各源交替占位，避免 sector 一路写满
         uniq = interleave_source_pairs(uniq)
+        # 权重 > 1 的来源额外提前：交织后再按权重稳定排序，高权重源先占满 momentum_cap
+        if pref.source_weights:
+            uniq.sort(key=lambda pair: -_weight(pair[1]))
 
-        # 一次批量报价过滤涨停/过热（跌幅榜几乎不会被误杀）
-        kept: Set[str] = set(await filter_overheated([c for c, _ in uniq]))
-        sources["overheated"] = len(uniq) - len(kept)
+        # 一次批量报价过滤涨停/过热（跌幅榜几乎不会被误杀）。
+        # 量能类策略会关掉这一层——涨停附近正是它的战场，过滤掉就没得做了。
+        if pref.filter_overheated:
+            kept: Set[str] = set(await filter_overheated([c for c, _ in uniq]))
+            sources["overheated"] = len(uniq) - len(kept)
+        else:
+            kept = {c for c, _ in uniq}
 
         _src_reason: dict[str, str] = {
             "sector": "行业板块龙头",
@@ -1343,8 +1431,7 @@ async def papertrade_candidate_refresh(
             src_label = _src_reason[s] if s in _src_reason else s
             try:
                 await db.PaperAgentPoolRepo.upsert(
-                    gid,
-                    bid,
+                    account_id,
                     stock_code=c,
                     stock_name="",
                     secid=secid,
@@ -1365,13 +1452,15 @@ async def papertrade_candidate_refresh(
 
     pool_after: list[str] = []
     try:
-        pool_after = await db.PaperAgentPoolRepo.list_codes(gid, bid)
+        pool_after = await db.PaperAgentPoolRepo.list_codes(account_id)
     except Exception as e:
         _gslogger.debug(f"[SayuStock][PaperTrade] candidate_refresh 读池失败: {e}")
         pool_after = list(seen)
 
     return json.dumps(
         {
+            "account_name": acc.name,
+            "strategy_id": strategy.id,
             "expired": expired,
             "evicted": evicted,
             "base_added": base_added,
@@ -1461,8 +1550,6 @@ async def papertrade_match_order(
 )
 async def papertrade_snapshot_write(
     ctx: RunContext[ToolContext],
-    group_id: str = "",
-    bot_id: str = "",
 ) -> str:
     """写当日收盘净值快照（现金 + Σ持仓实时市值），按 trade_date 幂等 upsert。
 
@@ -1477,16 +1564,12 @@ async def papertrade_snapshot_write(
     这是**纯记账**，不做任何买卖 / 撮合 / 决策，收盘后（非交易时段）调用。
     trade_date 取东八区当天。
     """
-    gid, bid = await _resolve_scope(ctx, group_id, bot_id)
-    if not gid or not bid:
-        return "⚠️ 无法确定 group_id/bot_id"
-    denied: str = await _deny_write(ctx, gid, bid)
+    acc, note = await _write_account()
+    if acc is None or acc.id is None:
+        return note or "⚠️ 无法确定要写快照的模拟盘。"
+    denied: str = await _deny_write(acc)
     if denied:
         return denied
-
-    acc = await db.PaperAccountRepo.get(gid, bid)
-    if not acc:
-        return account_scope.not_opened_message(gid, bid) + " 无法写快照。"
 
     # 东八区当天作为 trade_date（系统时钟漂到 UTC 时避免快照记错日）
     try:
@@ -1496,7 +1579,7 @@ async def papertrade_snapshot_write(
     except Exception:
         today_cn = _dt.date.today()
 
-    enriched: list[tuple[SayuPaperPosition, dict]] = await _get_enriched_positions(gid, bid)
+    enriched: list[tuple[SayuPaperPosition, dict]] = await _get_enriched_positions(acc.id)
     agg: dict[str, float] = _aggregate_enriched(enriched)
     position_value: float = agg["position_value"]
     total_equity: float = round(acc.cash + position_value, 2)
@@ -1504,14 +1587,13 @@ async def papertrade_snapshot_write(
     total_pnl_pct: float = round(total_pnl / acc.initial_cash * 100, 4) if acc.initial_cash else 0.0
 
     # day_pnl：相对上一交易日快照的 total_equity；无历史则相对初始本金
-    prev = await db.PaperSnapshotRepo.prev_before(gid, bid, today_cn)
+    prev = await db.PaperSnapshotRepo.prev_before(acc.id, today_cn)
     baseline_equity: float = prev.total_equity if prev is not None else acc.initial_cash
     day_pnl: float = round(total_equity - baseline_equity, 2)
     day_pnl_pct: float = round(day_pnl / baseline_equity * 100, 4) if baseline_equity else 0.0
 
     snap = await db.PaperSnapshotRepo.upsert_for_date(
-        gid,
-        bid,
+        acc.id,
         today_cn,
         cash=round(acc.cash, 2),
         position_value=position_value,
@@ -1524,6 +1606,8 @@ async def papertrade_snapshot_write(
     return json.dumps(
         {
             "ok": True,
+            "account_id": acc.id,
+            "account_name": acc.name,
             "snapshot_id": snap.id,
             "trade_date": today_cn.isoformat(),
             "cash": round(acc.cash, 2),
@@ -1725,6 +1809,47 @@ async def stock_indicators(
         "kline_count": len(df),
     }
     return json.dumps(result, ensure_ascii=False, default=str)
+
+
+@ai_tools(category="common", capability_domain="AI模拟盘")
+async def papertrade_volume_scan(
+    ctx: RunContext[ToolContext],
+    stock_code: str,
+    lookback_m: int = 60,
+    vol_ma_n: int = 20,
+) -> str:
+    """只读：用日 K 函数算出这只票现在是底部放量 / 顶部放量 / 都不是。
+
+    硬闸自己会再算一遍，不依赖本工具的返回值。
+    """
+    from .strategies.volume_extremum import load_structure
+
+    _, params = strategies.resolve_with_params(
+        "volume_extremum",
+        {"lookback_m": lookback_m, "vol_ma_n": vol_ma_n},
+    )
+    measured = await load_structure(stock_code, params, intent="scan")
+    if isinstance(measured, str):
+        return measured
+    zone = "none"
+    rel = measured.rel_volume
+    pct = measured.close_percentile
+    if rel is not None and pct is not None and rel >= float(params["vol_ratio_min"]):
+        if pct <= float(params["bottom_pct"]):
+            zone = "bottom_volume_buy"
+        elif pct >= float(params["top_pct"]):
+            zone = "top_volume_sell"
+    return json.dumps(
+        {
+            "stock_code": stock_code,
+            **measured.as_indicators(),
+            "lookback_m": measured.lookback_m,
+            "vol_ma_n": measured.vol_ma_n,
+            "structure": zone,
+        },
+        ensure_ascii=False,
+        default=str,
+    )
 
 
 @ai_tools(category="common", capability_domain="AI模拟盘")

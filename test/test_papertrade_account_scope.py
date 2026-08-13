@@ -1,16 +1,22 @@
-"""模拟盘作用域单测：账户键钉死 / 播报改向 / 写入鉴权。
+"""模拟盘作用域单测：盘名校验 / 账户解析 / 写入鉴权。
 
-默认是"全服共用一个盘"；``papertrade_multi_group=True`` 才回到旧的一群一盘。
+多盘改造后，账户由**盘名**（全库唯一）标识，与"在哪个群提问"彻底解耦。因此
+这里覆盖的三件事互相正交，任何一个串味都会出线上事故：
 
-``db`` 与 ``STOCK_CONFIG`` 都替换成桩，这样能精确摆布"开没开多群模式"和
-"库里有没有账户"，不碰真实数据库。
+1. 盘名校验 —— 挡住会让命令解析歧义的名字（周期词 / 命令词 / 纯数字）。
+2. 账户解析 —— 读路径可以信盘名，写路径**只认 root_task_id**，防 LLM 把 A 盘的
+   成交写进 B 盘。
+3. 写入鉴权 —— 心跳树 / 显式发票之外一律拒绝，且发票是**记名**的。
+
+``db`` 与 ``papertrade_models`` 都替换成桩：前者用来精确摆布库里有哪些盘，后者
+是为了不让 SQLModel 表在合成包里被二次定义（会污染真实 metadata）。
 """
 
 import sys
 import asyncio
 import importlib.util
 from types import ModuleType
-from typing import Optional
+from typing import List, Optional
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent.parent.parent
@@ -19,70 +25,74 @@ sys.path.insert(0, str(REPO_ROOT))
 PKG_ROOT = Path(__file__).resolve().parent.parent / "SayuStock"
 PKG_NAME = "_papertrade_scope_test"
 
-from gsuid_core.models import Event  # noqa: E402
-
 
 # ============================================================
-# 桩：配置 + db
+# 桩：模型 + db
 # ============================================================
-class _StubConfigItem:
-    def __init__(self, data: object) -> None:
-        self.data = data
-
-
-class _StubConfig:
-    """替身 STOCK_CONFIG：用 set() 直接摆布配置值。"""
-
-    def __init__(self) -> None:
-        self._d: dict[str, object] = {
-            "papertrade_multi_group": False,  # 默认 = 全服共用一个盘
-            "papertrade_broadcast_group": "",
-        }
-
-    def set(self, key: str, value: object) -> None:
-        self._d[key] = value
-
-    def get_config(self, key: str) -> _StubConfigItem:
-        return _StubConfigItem(self._d[key])
-
-
 class _StubAccount:
+    """替身 SayuPaperAccount：只保留 account_scope 会读的字段。"""
+
     def __init__(
         self,
-        group_id: str,
-        bot_id: str,
+        account_id: int,
+        name: str,
+        *,
+        strategy_id: str = "multi_factor",
         init_root: Optional[str] = None,
         period_root: Optional[str] = None,
     ) -> None:
-        self.group_id = group_id
-        self.bot_id = bot_id
+        self.id = account_id
+        self.name = name
+        self.strategy_id = strategy_id
         self.kanban_init_root_id = init_root
         self.kanban_period_root_id = period_root
+        self.enabled = 1
 
 
 class _StubAccountRepo:
-    """替身 PaperAccountRepo：accounts 列表按插入顺序模拟 created_at asc。"""
+    """替身 PaperAccountRepo：accounts 按插入顺序模拟 created_at asc。"""
 
-    accounts: list[_StubAccount] = []
-
-    @classmethod
-    async def get_earliest(cls) -> Optional[_StubAccount]:
-        return cls.accounts[0] if cls.accounts else None
+    accounts: List[_StubAccount] = []
 
     @classmethod
-    async def get(cls, group_id: str, bot_id: str) -> Optional[_StubAccount]:
+    async def get_by_id(cls, account_id: int) -> Optional[_StubAccount]:
         for a in cls.accounts:
-            if a.group_id == group_id and a.bot_id == bot_id:
+            if a.id == account_id:
                 return a
         return None
 
+    @classmethod
+    async def get_by_name(cls, name: str) -> Optional[_StubAccount]:
+        for a in cls.accounts:
+            if a.name == name:
+                return a
+        return None
 
-def _install_stubs() -> tuple[_StubConfig, ModuleType]:
+    @classmethod
+    async def get_by_kanban_root(cls, root_task_id: str) -> Optional[_StubAccount]:
+        if not root_task_id:
+            return None
+        for a in cls.accounts:
+            if root_task_id in (a.kanban_init_root_id, a.kanban_period_root_id):
+                return a
+        return None
+
+    @classmethod
+    async def search(cls, keyword: str) -> List[_StubAccount]:
+        return [a for a in cls.accounts if keyword in a.name]
+
+    @classmethod
+    async def list_all(cls) -> List[_StubAccount]:
+        return list(cls.accounts)
+
+
+def _install_stubs() -> ModuleType:
     """造合成包 + 注入桩，然后加载真实的 account_scope.py。"""
     for name, path in (
         (PKG_NAME, PKG_ROOT),
         (f"{PKG_NAME}.stock_papertrade", PKG_ROOT / "stock_papertrade"),
-        (f"{PKG_NAME}.stock_config", PKG_ROOT / "stock_config"),
+        (f"{PKG_NAME}.utils", PKG_ROOT / "utils"),
+        (f"{PKG_NAME}.utils.database", PKG_ROOT / "utils" / "database"),
     ):
         mod = ModuleType(name)
         mod.__path__ = [str(path)]
@@ -92,10 +102,13 @@ def _install_stubs() -> tuple[_StubConfig, ModuleType]:
     setattr(db_stub, "PaperAccountRepo", _StubAccountRepo)
     sys.modules[db_stub.__name__] = db_stub
 
-    cfg = _StubConfig()
-    cfg_stub = ModuleType(f"{PKG_NAME}.stock_config.stock_config")
-    setattr(cfg_stub, "STOCK_CONFIG", cfg)
-    sys.modules[cfg_stub.__name__] = cfg_stub
+    # 模型桩：真模块会 declare SQLModel 表，在合成包里再 import 一次会把同名表
+    # 塞进同一份 metadata 而报 "Table already defined"。
+    models_stub = ModuleType(f"{PKG_NAME}.utils.database.papertrade_models")
+    setattr(models_stub, "DEFAULT_ACCOUNT_NAME", "默认模拟盘")
+    setattr(models_stub, "DEFAULT_STRATEGY_ID", "multi_factor")
+    setattr(models_stub, "SayuPaperAccount", _StubAccount)
+    sys.modules[models_stub.__name__] = models_stub
 
     spec = importlib.util.spec_from_file_location(
         f"{PKG_NAME}.stock_papertrade.account_scope",
@@ -105,197 +118,292 @@ def _install_stubs() -> tuple[_StubConfig, ModuleType]:
     mod = importlib.util.module_from_spec(spec)
     sys.modules[spec.name] = mod
     spec.loader.exec_module(mod)
-    return cfg, mod
+    return mod
 
 
-CFG, scope = _install_stubs()
+scope = _install_stubs()
+
+DEFAULT = "默认模拟盘"
 
 
-def _reset(multi_group: bool = False, broadcast: str = "") -> None:
-    """默认 multi_group=False，即"全服共用一个盘"这个新默认。"""
-    CFG.set("papertrade_multi_group", multi_group)
-    CFG.set("papertrade_broadcast_group", broadcast)
-    _StubAccountRepo.accounts = []
-    scope.invalidate_home_cache()
-
-
-def _ev(group_id: str, bot_id: str = "onebot") -> Event:
-    return Event(bot_id=bot_id, group_id=group_id, user_id="u1", user_type="group")
+def _reset(*accounts: _StubAccount) -> None:
+    _StubAccountRepo.accounts = list(accounts)
 
 
 # ============================================================
-# 1) 账户键
+# 1) 盘名归一 + 校验
 # ============================================================
-def test_shared_mode_is_the_default():
-    """默认（未配任何东西）= 全服共用：任意群都解析到最早那个账户。"""
-    _reset()
-    _StubAccountRepo.accounts = [
-        _StubAccount("111", "onebot"),  # 最早 = 开盘的原群
-        _StubAccount("999", "onebot"),  # 升级前遗留的账户 → 孤儿
-    ]
-    assert asyncio.run(scope.resolve_account_key(_ev("222"))) == ("111", "onebot")
-    assert asyncio.run(scope.resolve_account_key(_ev("999"))) == ("111", "onebot")
+def test_normalize_strips_and_folds_fullwidth():
+    """手机输入法很容易带出全角；不归一会让「放量盘」和「放量盘 」变成两个盘。"""
+    assert scope.normalize_account_name("  放量盘  ") == "放量盘"
+    assert scope.normalize_account_name("ＡＢＣ１２") == "ABC12"
+    assert scope.normalize_account_name("放量盘\u3000") == "放量盘"
+    assert scope.normalize_account_name("") == ""
 
 
-def test_multi_group_restores_legacy_behaviour():
-    """开 papertrade_multi_group = 回到旧的一群一盘：各群解析到自己的键。"""
-    _reset(multi_group=True)
-    _StubAccountRepo.accounts = [_StubAccount("111", "onebot")]
-    assert asyncio.run(scope.resolve_account_key(_ev("111"))) == ("111", "onebot")
-    assert asyncio.run(scope.resolve_account_key(_ev("222"))) == ("222", "onebot")
+def test_validate_accepts_normal_names():
+    assert scope.validate_account_name("放量盘") == ""
+    assert scope.validate_account_name("test_2") == ""
+    assert scope.validate_account_name(" 激进盘 ") == ""  # 归一后合法
 
 
-def test_shared_mode_ignores_foreign_bot_id():
-    """跨平台提问不能让 bot_id 跟着 ev 跑，否则键对不上 → 查成"未开户"。"""
-    _reset()
-    _StubAccountRepo.accounts = [_StubAccount("111", "onebot")]
-    got = asyncio.run(scope.resolve_account_key(_ev("222", bot_id="discord")))
-    assert got == ("111", "onebot")
+def test_validate_rejects_length_violations():
+    assert "不能为空" in scope.validate_account_name("   ")
+    assert "长度" in scope.validate_account_name("A")
+    assert "长度" in scope.validate_account_name("盘" * 17)
 
 
-def test_shared_mode_without_account_falls_back():
-    """还没人开盘时退回会话上下文，否则第一个「模拟盘初始化」就建不出账户。"""
-    _reset()
-    assert asyncio.run(scope.resolve_account_key(_ev("111"))) == ("111", "onebot")
+def test_validate_rejects_bad_charset():
+    assert "空格" in scope.validate_account_name("放量 盘")
+    assert "非法字符" in scope.validate_account_name("放量-盘")
 
 
-# ============================================================
-# 2) 播报改向
-# ============================================================
-def test_broadcast_unchanged_when_not_configured():
-    _reset(broadcast="")
-    ev = _ev("111")
-    assert asyncio.run(scope.broadcast_event(ev)).group_id == "111"
+def test_validate_rejects_pure_digits():
+    """纯数字盘名会和「模拟盘查询 <群号>」撞车。"""
+    assert "纯数字" in scope.validate_account_name("123456")
 
 
-def test_broadcast_redirects_when_configured():
-    _reset(broadcast="555")
-    ev = _ev("111")
-    out = asyncio.run(scope.broadcast_event(ev))
-    assert out.group_id == "555"
-    assert out.bot_id == "onebot"  # 同一个 bot，只换群
-    assert ev.group_id == "111"  # 原 ev 不被就地改写
-
-
-def test_broadcast_redirect_is_hot_and_ignored_in_multi_group():
-    """改配置立刻生效；多群模式下配了也不改向（各群播各群的）。"""
-    _reset(multi_group=True, broadcast="555")
-    assert asyncio.run(scope.broadcast_event(_ev("111"))).group_id == "111"
-    CFG.set("papertrade_multi_group", False)
-    assert asyncio.run(scope.broadcast_event(_ev("111"))).group_id == "555"
-    CFG.set("papertrade_broadcast_group", "777")
-    assert asyncio.run(scope.broadcast_event(_ev("111"))).group_id == "777"
+def test_validate_rejects_period_and_command_tokens():
+    """周期词当盘名会让「模拟盘收益 <盘名> <周期>」无法分词；命令词同理。"""
+    assert "周期" in scope.validate_account_name("本周")
+    assert "保留词" in scope.validate_account_name("持仓")
 
 
 # ============================================================
-# 3) 写入鉴权
+# 2) 参数分词
 # ============================================================
-def test_write_allowed_from_own_kanban_tree():
-    """cron 心跳：root_task_id 命中账户自己的树 → 放行。"""
-    _reset()
-    _StubAccountRepo.accounts = [_StubAccount("111", "onebot", "init_root", "period_root")]
-    assert asyncio.run(scope.deny_write_reason("period_root", "111", "onebot")) == ""
-    assert asyncio.run(scope.deny_write_reason("init_root", "111", "onebot")) == ""
+def test_split_name_and_period():
+    assert scope.split_name_and_period("") == ("", "")
+    assert scope.split_name_and_period("放量盘") == ("放量盘", "")
+    assert scope.split_name_and_period("本周") == ("", "本周")
+    assert scope.split_name_and_period("放量盘 本周") == ("放量盘", "本周")
+    # 顺序反了也认：周期词的身份是靠词表判定的，不靠位置
+    assert scope.split_name_and_period("本周 放量盘") == ("放量盘", "本周")
 
 
-def test_write_denied_from_adhoc_delegation():
-    """用户指使 persona 委派出来的 ad-hoc 执行体 → 拒。"""
-    _reset()
-    _StubAccountRepo.accounts = [_StubAccount("111", "onebot", "init_root", "period_root")]
-    reason = asyncio.run(scope.deny_write_reason("adhoc_abc123", "111", "onebot"))
-    assert reason and "未经授权" in reason
+# ============================================================
+# 3) 读路径解析
+# ============================================================
+def test_resolve_prefers_explicit_id_then_name():
+    _reset(_StubAccount(1, DEFAULT), _StubAccount(2, "放量盘"))
+    assert asyncio.run(scope.resolve_account(account_id=2)).name == "放量盘"
+    assert asyncio.run(scope.resolve_account(name="放量盘")).id == 2
+
+
+def test_resolve_falls_back_to_fuzzy_single_match():
+    """精确名没中时做一次包含匹配，用户少打两个字也能查到。"""
+    _reset(_StubAccount(1, DEFAULT), _StubAccount(2, "放量极值盘"))
+    assert asyncio.run(scope.resolve_account(name="放量")).id == 2
+
+
+def test_resolve_refuses_to_guess_when_ambiguous():
+    """命中多个盘时必须返回 None——猜一个等于把用户引到错误的账本上。"""
+    _reset(_StubAccount(1, "放量A盘"), _StubAccount(2, "放量B盘"))
+    assert asyncio.run(scope.resolve_account(name="放量")) is None
+
+
+def test_resolve_default_when_name_omitted():
+    _reset(_StubAccount(1, "放量盘"), _StubAccount(2, DEFAULT))
+    assert asyncio.run(scope.resolve_account()).name == DEFAULT
+
+
+def test_resolve_single_account_when_no_default():
+    """全库只有一个盘时，它显然就是用户问的那个。"""
+    _reset(_StubAccount(7, "放量盘"))
+    assert asyncio.run(scope.resolve_account()).id == 7
+
+
+def test_resolve_returns_none_when_ambiguous_without_default():
+    _reset(_StubAccount(1, "放量盘"), _StubAccount(2, "价值盘"))
+    assert asyncio.run(scope.resolve_account()) is None
+
+
+def test_resolve_respects_fallback_flag():
+    _reset(_StubAccount(1, DEFAULT))
+    assert asyncio.run(scope.resolve_account(fallback_default=False)) is None
+
+
+def test_read_empty_name_binds_to_kanban_tree():
+    """心跳树上空名必须落到本盘，不能回落默认盘。"""
+    _reset(
+        _StubAccount(1, DEFAULT, period_root="period_default"),
+        _StubAccount(2, "放量盘", period_root="period_vol"),
+    )
+    acc = asyncio.run(scope.resolve_account_for_read(name="", root_task_id="period_vol"))
+    assert acc is not None and acc.id == 2
+
+
+def test_read_explicit_name_beats_tree():
+    _reset(
+        _StubAccount(1, DEFAULT, period_root="period_default"),
+        _StubAccount(2, "放量盘", period_root="period_vol"),
+    )
+    acc = asyncio.run(scope.resolve_account_for_read(name="默认模拟盘", root_task_id="period_vol"))
+    assert acc is not None and acc.id == 1
+
+
+def test_read_empty_name_binds_to_grant():
+    _reset(_StubAccount(1, DEFAULT), _StubAccount(9, "压测临时盘"))
+
+    async def _run():
+        with scope.grant_write(9):
+            return await scope.resolve_account_for_read(name="")
+
+    acc = asyncio.run(_run())
+    assert acc is not None and acc.id == 9
+
+
+def test_disabled_reason():
+    acc = _StubAccount(1, DEFAULT)
+    acc.enabled = 0
+    assert "已停用" in scope.account_disabled_reason(acc)
+    acc.enabled = 1
+    assert scope.account_disabled_reason(acc) == ""
+
+
+# ============================================================
+# 4) 写路径解析：只认 root_task_id
+# ============================================================
+def test_write_resolves_by_root_task_id():
+    _reset(_StubAccount(1, DEFAULT, init_root="init_1", period_root="period_1"))
+    acc, note = asyncio.run(scope.resolve_account_for_write("period_1"))
+    assert acc.id == 1 and note == ""
+
+
+def test_write_corrects_instead_of_rejecting_wrong_name():
+    """LLM 把盘名拼错不该让整轮心跳报废——按任务归属的盘执行 + 提示纠正。"""
+    _reset(_StubAccount(1, "放量盘", period_root="period_1"))
+    acc, note = asyncio.run(scope.resolve_account_for_write("period_1", account_name="价值盘"))
+    assert acc.name == "放量盘"
+    assert "放量盘" in note and "价值盘" in note
+
+
+def test_write_never_falls_back_to_name_without_grant():
+    """关键回归：盘名不能成为写路径的解析依据，否则拼错名字就写错账本。"""
+    _reset(_StubAccount(1, "放量盘", period_root="period_1"), _StubAccount(2, "价值盘"))
+    acc, note = asyncio.run(scope.resolve_account_for_write("adhoc_x", account_name="价值盘"))
+    assert acc is None and note != ""
 
 
 def test_write_denied_without_task_context():
-    """主 persona 直聊（无任务上下文）→ 拒。"""
-    _reset()
-    _StubAccountRepo.accounts = [_StubAccount("111", "onebot", "init_root", "period_root")]
-    reason = asyncio.run(scope.deny_write_reason("", "111", "onebot"))
-    assert reason != ""
+    _reset(_StubAccount(1, DEFAULT, period_root="period_1"))
+    acc, note = asyncio.run(scope.resolve_account_for_write(""))
+    assert acc is None and "无任务上下文" in note
 
 
-def test_grant_write_opens_the_gate():
-    """init 立即决策 / dry_run 显式发票 → 放行。"""
-    _reset()
-    _StubAccountRepo.accounts = [_StubAccount("111", "onebot", "init_root", "period_root")]
+# ============================================================
+# 5) 记名发票
+# ============================================================
+def test_grant_write_resolves_to_the_granted_account_only():
+    """压测/init 的写工具大多不暴露 account_name，发票必须自己带 account_id。"""
+    _reset(_StubAccount(1, DEFAULT), _StubAccount(9, "压测临时盘"))
 
-    async def _run() -> tuple[str, str]:
-        with scope.grant_write():
-            granted = await scope.deny_write_reason("adhoc_abc", "111", "onebot")
-        after = await scope.deny_write_reason("adhoc_abc", "111", "onebot")
-        return granted, after
+    async def _run():
+        with scope.grant_write(9):
+            return await scope.resolve_account_for_write("adhoc_x")
 
-    granted, after = asyncio.run(_run())
-    assert granted == ""  # 票内放行
-    assert after != ""  # 出了 with 立刻恢复拒绝
+    acc, _ = asyncio.run(_run())
+    assert acc.id == 9  # 不是默认盘
+
+
+def test_grant_write_opens_and_closes_the_gate():
+    _reset(_StubAccount(1, DEFAULT, period_root="period_1"))
+    acc = _StubAccountRepo.accounts[0]
+
+    async def _run():
+        with scope.grant_write(1):
+            inside = await scope.deny_write_reason("adhoc_x", acc)
+        outside = await scope.deny_write_reason("adhoc_x", acc)
+        return inside, outside
+
+    inside, outside = asyncio.run(_run())
+    assert inside == ""
+    assert outside != ""
 
 
 def test_grant_write_survives_child_task():
-    """capagent 内部若在子任务里调工具，contextvar 必须能继承下去。"""
-    _reset()
-    _StubAccountRepo.accounts = [_StubAccount("111", "onebot", "init_root", "period_root")]
+    """capagent 常在子任务里调工具，contextvar 必须继承下去。"""
+    _reset(_StubAccount(1, DEFAULT))
+    acc = _StubAccountRepo.accounts[0]
 
     async def _run() -> str:
-        with scope.grant_write():
-            return await asyncio.create_task(scope.deny_write_reason("adhoc_x", "111", "onebot"))
+        with scope.grant_write(1):
+            return await asyncio.create_task(scope.deny_write_reason("adhoc_x", acc))
 
     assert asyncio.run(_run()) == ""
 
 
+def test_grant_write_is_scoped_to_one_account():
+    """记名发票不能被拿去写别的盘。"""
+    _reset(_StubAccount(1, DEFAULT), _StubAccount(2, "放量盘"))
+    other = _StubAccountRepo.accounts[1]
+
+    async def _run() -> str:
+        with scope.grant_write(1):
+            return await scope.deny_write_reason("adhoc_x", other)
+
+    assert "只被授权" in asyncio.run(_run())
+
+
+# ============================================================
+# 6) 写入鉴权
+# ============================================================
+def test_write_allowed_from_own_kanban_tree():
+    acc = _StubAccount(1, DEFAULT, init_root="init_1", period_root="period_1")
+    _reset(acc)
+    assert asyncio.run(scope.deny_write_reason("period_1", acc)) == ""
+    assert asyncio.run(scope.deny_write_reason("init_1", acc)) == ""
+
+
+def test_write_denied_from_adhoc_delegation():
+    """用户一句「帮我买 xx」能把写工具委派出来，执行层必须自己挡住。"""
+    acc = _StubAccount(1, DEFAULT, init_root="init_1", period_root="period_1")
+    _reset(acc)
+    assert asyncio.run(scope.deny_write_reason("adhoc_abc", acc)) != ""
+
+
+def test_write_denied_across_accounts():
+    """多盘后的新风险：A 盘的心跳树不能写 B 盘的账本。"""
+    a = _StubAccount(1, "放量盘", period_root="period_a")
+    b = _StubAccount(2, "价值盘", period_root="period_b")
+    _reset(a, b)
+    reason = asyncio.run(scope.deny_write_reason("period_a", b))
+    assert "禁止跨盘写入" in reason
+
+
 def test_write_denied_when_account_missing():
     _reset()
-    reason = asyncio.run(scope.deny_write_reason("period_root", "111", "onebot"))
-    assert "账户不存在" in reason
+    assert "账户不存在" in asyncio.run(scope.deny_write_reason("period_1", None))
 
 
 # ============================================================
-# 4) 缓存失效
+# 7) 文案：绝不能说「本群未开通」
 # ============================================================
-def test_invalidate_cache_after_clear():
-    """清盘后缓存必须重算，否则会一直指向已删掉的账户键。"""
-    _reset()
-    _StubAccountRepo.accounts = [_StubAccount("111", "onebot")]
-    assert asyncio.run(scope.resolve_account_key(_ev("222"))) == ("111", "onebot")
-
-    _StubAccountRepo.accounts = []
-    scope.invalidate_home_cache()
-    assert asyncio.run(scope.resolve_account_key(_ev("222"))) == ("222", "onebot")
-
-
-def test_is_home_context():
-    _reset()
-    _StubAccountRepo.accounts = [_StubAccount("111", "onebot")]
-    assert asyncio.run(scope.is_home_context(_ev("111"))) is True
-    assert asyncio.run(scope.is_home_context(_ev("222"))) is False
-
-    _reset(multi_group=True)
-    _StubAccountRepo.accounts = [_StubAccount("111", "onebot")]
-    assert asyncio.run(scope.is_home_context(_ev("222"))) is True  # 多群模式不设限
-
-
-# ============================================================
-# 5) 文案：防止 B 群被说成「本群未开户」
-# ============================================================
-def test_not_opened_message_shared_vs_multi():
-    """共用模式未开户时不得说「群 B 尚未开通」——否则 Agent 会复读成跨群误报。"""
-    _reset(multi_group=False)
-    msg = scope.not_opened_message("222", "onebot")
-    assert "全服尚未开通" in msg
-    assert "群 222" not in msg
-
-    _reset(multi_group=True)
-    msg = scope.not_opened_message("222", "onebot")
-    assert "群 222" in msg
-    assert "全服" not in msg
+def test_not_opened_message_never_blames_the_group():
+    """说成「本群未开通」会被 Agent 复读成跨群误报——盘根本不属于群。"""
+    for msg in (scope.not_opened_message(), scope.not_opened_message(name="放量盘")):
+        assert "本群" not in msg
+    assert "放量盘" in scope.not_opened_message(name="放量盘")
+    assert DEFAULT in scope.not_opened_message()
 
 
 def test_scope_note_warns_against_false_unopened():
-    _reset(multi_group=False)
-    note = scope.scope_note_for_llm("111")
-    assert "全服共用" in note
-    assert "禁止" in note
-    assert "111" in note
+    acc = _StubAccount(3, "放量盘", strategy_id="volume_extremum")
+    note = scope.scope_note_for_llm(acc)
+    assert "放量盘" in note
+    assert "volume_extremum" in note
+    assert "严禁" in note
+    assert "命名账户" in note
 
-    _reset(multi_group=True)
-    note = scope.scope_note_for_llm("111")
-    assert "多群" in note
+    assert "命名账户" in scope.scope_note_for_llm(None)
+
+
+def test_account_label_falls_back_to_id():
+    assert scope.account_label(_StubAccount(5, "放量盘")) == "放量盘"
+    assert scope.account_label(_StubAccount(5, "")) == "#5"
+
+
+def test_enabled_account_cap_exists():
+    """成本闸：N 个启用盘 = N 倍 LLM 账单，必须有上限常量兜底。"""
+    assert isinstance(scope.MAX_ENABLED_ACCOUNTS, int)
+    assert scope.MAX_ENABLED_ACCOUNTS >= 1

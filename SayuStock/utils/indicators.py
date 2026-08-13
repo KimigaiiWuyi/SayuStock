@@ -462,6 +462,35 @@ def calc_volume_ratio(df: pd.DataFrame) -> float | None:
     return _last(volume_ratio(_col_float(df, "volume"), 5))
 
 
+def calc_rel_volume(df: pd.DataFrame, n: int = 20) -> float | None:
+    """当日量 / 近 n 日均量。"""
+    if n <= 0 or "volume" not in df.columns or len(df) < n:
+        return None
+    vol = _col_float(df, "volume")
+    rolled = vol.rolling(n).mean()
+    assert isinstance(rolled, pd.Series)
+    avg = _last(rolled)
+    last = _to_float(vol.iloc[-1])
+    if avg is None or avg == 0 or last is None:
+        return None
+    return last / avg
+
+
+def calc_close_percentile(close: pd.Series, m: int = 60) -> float | None:
+    """近 m 根收盘价分位，0=窗口最低，1=窗口最高。"""
+    if m <= 1 or len(close) < 2:
+        return None
+    window = close.tail(min(m, len(close)))
+    lo = _to_float(window.min())
+    hi = _to_float(window.max())
+    last = _to_float(close.iloc[-1])
+    if lo is None or hi is None or last is None:
+        return None
+    if hi == lo:
+        return 0.5
+    return (last - lo) / (hi - lo)
+
+
 def calc_bias(close: pd.Series, period: int = 20) -> float | None:
     if len(close) < period:
         return None
@@ -580,6 +609,11 @@ def compute_indicators(df: pd.DataFrame) -> dict[str, float | bool | None]:
     rsi24 = calc_rsi(close, 24)
     cmf20 = calc_cmf(df, 20)
     vol_ratio = calc_volume_ratio(df)
+    rel_vol = calc_rel_volume(df, 20)
+    close_pct = calc_close_percentile(close, 60)
+    last_open: float | None = None
+    if "open" in df.columns:
+        last_open = _to_float(df["open"].iloc[-1])
     bias20 = calc_bias(close, 20)
     atr = calc_atr_pct(df, 14)
     support, resistance = calc_support_resistance(df, 20)
@@ -616,6 +650,9 @@ def compute_indicators(df: pd.DataFrame) -> dict[str, float | bool | None]:
         "rsi24": rsi24,
         "cmf20": cmf20,
         "volume_ratio": vol_ratio,
+        "rel_volume": rel_vol,
+        "close_percentile": close_pct,
+        "bullish_close": (last_open is not None and last_close > last_open),
         "bias": bias20,
         "atr_pct": atr,
         "support": support,
@@ -669,6 +706,8 @@ def _empty_indicators() -> dict[str, float | bool | None]:
         "rsi24",
         "cmf20",
         "volume_ratio",
+        "rel_volume",
+        "close_percentile",
         "bias",
         "atr_pct",
         "support",
@@ -693,6 +732,7 @@ def _empty_indicators() -> dict[str, float | bool | None]:
         "kdj_j",
     ]
     bool_keys = [
+        "bullish_close",
         "macd_golden_cross_in_3d",
         "macd_death_cross_in_3d",
         "kdj_golden_cross_in_3d",

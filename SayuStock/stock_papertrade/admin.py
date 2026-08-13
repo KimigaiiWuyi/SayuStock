@@ -28,20 +28,30 @@ from ..utils.database.papertrade_models import (
     SayuPaperPosition,
 )
 
+# 压测专用盘：**绝不能**复用用户的真盘。压测会真买真卖、末尾还会 reset_account 把
+# 账本清空，跑在真盘上等于把用户几个月的记录抹了。
+_DRY_RUN_ACCOUNT_NAME: str = "压测临时盘"
+
+# 压测走 ad-hoc agent：写路径靠 grant_write(account_id)；空名读也会绑到该盘。
+_ACC_HINT: str = f"本轮已授权模拟盘「{_DRY_RUN_ACCOUNT_NAME}」。读工具可省略 account_name；写工具不要传盘名。"
+
 
 # ============================================================
 # 模拟盘清盘（master-only）
 # ============================================================
-@sv_papertrade_admin.on_fullmatch(
-    ("模拟盘清盘"),
+@sv_papertrade_admin.on_fullmatch(("模拟盘清盘",))
+@sv_papertrade_admin.on_prefix(
+    ("模拟盘清盘",),
 )
 async def send_clear_all(bot: Bot, ev: Event) -> list[str] | None:
-    """一键清掉 模拟盘在 DB / Kanban / APScheduler 上的所有残留。
+    """一键清掉某个模拟盘在 DB / Kanban / APScheduler 上的所有残留。
+
+    ``模拟盘清盘 <盘名>``。无参只回用法，禁止落到默认盘。
 
     清理范围（按顺序）：
-        1. **DB**：``PaperAccountRepo.reset_account(group_id, bot_id)`` 一次性清
-           7 张表（account / position / trade / decision / snapshot / watchlist /
-           agent_pool）对应分区。
+        1. **DB**：``PaperAccountRepo.reset_account(account_id)`` 一次性清
+           8 张表（account / position / trade / decision / snapshot / watchlist /
+           agent_pool / broadcast_target）对应分区。
         2. **Kanban init 树**：``hard_delete_task_tree(init_root_id)`` 删任务
            节点 + 日志 + artifact + workspace 文件 + 摘 recurring job。
         3. **Kanban period 树**：同上 + ``include_instances=True`` 把 APScheduler
@@ -57,9 +67,13 @@ async def send_clear_all(bot: Bot, ev: Event) -> list[str] | None:
     if not ev.group_id:
         return await bot.send("⚠️ 清理需要在群聊触发，私聊不支持。")
 
-    # 全局模式下清的是那个钉死的账户，与命令在哪个群发的无关——否则在别的群发清盘
-    # 只会清一个空分区，用户还以为清干净了。
-    group_id, bot_id = await _scope.resolve_account_key(ev)
+    name = _scope.normalize_account_name(ev.text)
+    if not name:
+        return await bot.send("⚠️ 用法：模拟盘清盘 <盘名>")
+    target = await _scope.resolve_account(name=name, fallback_default=False)
+    if target is None or target.id is None:
+        return await bot.send(_scope.not_opened_message(name=name))
+    account_id: int = target.id
 
     # 顶层 lazy import；失败时给清楚报错
     try:
@@ -75,8 +89,8 @@ async def send_clear_all(bot: Bot, ev: Event) -> list[str] | None:
 
     sections: list[str] = [
         "🧹 **模拟盘 · 一键清盘**\n"
-        f"群 {group_id} / bot {bot_id}\n"
-        "⚠️ 本操作会清掉该群所有 papertrade 数据 + Kanban 树，不可恢复。"
+        f"目标盘：{target.name}（id={account_id}，策略 {target.strategy_id}）\n"
+        "⚠️ 本操作会清掉该盘的全部 papertrade 数据 + Kanban 树，不可恢复。"
     ]
 
     # ─── 1) 取一下账户绑定（用来定位 init / period 树） ───
@@ -86,7 +100,7 @@ async def send_clear_all(bot: Bot, ev: Event) -> list[str] | None:
     init_root_id: str | None = None
     period_root_id: str | None = None
     try:
-        acc = await _db.PaperAccountRepo.get(group_id, bot_id)
+        acc = await _db.PaperAccountRepo.get_by_id(account_id)
         if acc is not None:
             init_root_id = acc.kanban_init_root_id
             period_root_id = acc.kanban_period_root_id
@@ -101,13 +115,12 @@ async def send_clear_all(bot: Bot, ev: Event) -> list[str] | None:
     pre_dt: float = _time.perf_counter() - t0
     sections.append("─── 1) 账户定位 ───\n" + "\n".join(pre_lines) + f"\n⏱ {pre_dt:.2f}s")
 
-    # ─── 2) 清 DB（7 张表） ───
+    # ─── 2) 清 DB（8 张表） ───
     t0 = _time.perf_counter()
     db_lines: list[str] = []
     deleted: dict[str, int] = {}
     try:
-        deleted = await _db.PaperAccountRepo.reset_account(group_id, bot_id)
-        _scope.invalidate_home_cache()  # 账户没了，钉死的键必须重算
+        deleted = await _db.PaperAccountRepo.reset_account(account_id)
         db_lines.append("✅ PaperAccountRepo.reset_account OK")
         if not deleted:
             db_lines.append("   (各表均无记录可清)")
@@ -119,7 +132,7 @@ async def send_clear_all(bot: Bot, ev: Event) -> list[str] | None:
     except Exception as e:
         db_lines.append(f"❌ DB 清理失败: {type(e).__name__}: {e}")
     db_dt: float = _time.perf_counter() - t0
-    sections.append("─── 2) DB 清理（7 张表） ───\n" + "\n".join(db_lines) + f"\n⏱ {db_dt:.2f}s")
+    sections.append("─── 2) DB 清理（8 张表） ───\n" + "\n".join(db_lines) + f"\n⏱ {db_dt:.2f}s")
 
     # ─── 3) 清 Kanban init 树 + period 树 ───
     t0 = _time.perf_counter()
@@ -191,7 +204,7 @@ async def send_clear_all(bot: Bot, ev: Event) -> list[str] | None:
     # ─── 5) 总结 ───
     summary_lines: list[str] = []
     if acc is not None:
-        summary_lines.append(f"已清账户: id={acc.id}, group={acc.group_id}, bot={acc.bot_id}")
+        summary_lines.append(f"已清账户: id={acc.id}, name={acc.name}, strategy={acc.strategy_id}")
     else:
         summary_lines.append("账户: 本就不存在（无需清理）")
     summary_lines.append(f"DB 合计删除: {sum(deleted.values())} 行")
@@ -254,6 +267,33 @@ async def send_dry_run(bot: Bot, ev: Event) -> list[str] | None:
     group_id: str = str(ev.group_id)
     bot_id: str = ev.bot_id
 
+    # 压测跑在**专用盘**上：它会真买真卖、末尾还 reset_account 清账本，
+    # 复用用户真盘等于把人家的记录抹掉。存在就先清干净，保证每次从同一起点开始。
+    existing_dry = await _db.PaperAccountRepo.get_by_name(_DRY_RUN_ACCOUNT_NAME)
+    if existing_dry is not None and existing_dry.id is not None:
+        await _db.PaperAccountRepo.reset_account(existing_dry.id)
+    try:
+        dry_acc: SayuPaperAccount = await _db.PaperAccountRepo.create(
+            _DRY_RUN_ACCOUNT_NAME,
+            group_id,
+            bot_id,
+            initial_cash=1_000_000.0,
+            mode="balanced",
+            initialized_by=f"{ev.user_id} (DRY_RUN)",
+        )
+    except Exception as e:
+        return await bot.send(f"⚠️ 压测盘创建失败: {type(e).__name__}: {e}")
+    account_id: int = dry_acc.id or 0
+    # 订阅本群，让压测里的成交冒泡真的推得出来（这也是在验播报链路）
+    await _db.PaperBroadcastRepo.add(
+        account_id,
+        bot_id=bot_id,
+        group_id=group_id,
+        bot_self_id=ev.bot_self_id or "",
+        ws_bot_id=ev.WS_BOT_ID or ev.real_bot_id or "",
+        created_by=str(ev.user_id),
+    )
+
     # 顶层 lazy import 失败时给清楚报错；不进 preflight
     try:
         from gsuid_core.ai_core.planning.kanban import (  # noqa: E402  -- 懒加载
@@ -277,8 +317,8 @@ async def send_dry_run(bot: Bot, ev: Event) -> list[str] | None:
     sections: list[str] = []
     sections.append(
         "🧪 **模拟盘 · 真 Agent 端到端压测**\n"
-        f"群 {group_id} / bot {bot_id} / master uid={ev.user_id}\n"
-        f"⚠️ 本压测会调真实 LLM API 并持久化测试数据到 DB + Kanban"
+        f"压测盘「{_DRY_RUN_ACCOUNT_NAME}」(id={account_id}) / 群 {group_id} / master uid={ev.user_id}\n"
+        f"⚠️ 本压测会调真实 LLM API 并持久化测试数据到 DB + Kanban（末尾自动清理，不动你的真盘）"
     )
 
     # ─── preflight ───
@@ -347,16 +387,16 @@ async def send_dry_run(bot: Bot, ev: Event) -> list[str] | None:
         nonlocal root_init
         # leaf-root 模式：subtasks=None + root_agent_profile="papertrade_setup_agent"
         root, _ = await create_kanban_tree(
-            goal=f"群{group_id} 模拟盘 init (DRY_RUN {ev.user_id})",
+            goal=f"压测盘 init (DRY_RUN {ev.user_id})",
             owner_user_id=str(ev.user_id),
-            scope_key=f"papertrade_init_{group_id}_{bot_id}",
+            scope_key=f"papertrade_init_acc_{account_id}",
             bot_id=bot_id,
             persona_name=None,
-            bot_self_id="",
+            bot_self_id=ev.bot_self_id or "",
             group_id=group_id,
             user_type="group",
-            WS_BOT_ID=None,
-            session_id=f"dry_run_init_{group_id}",
+            WS_BOT_ID=ev.WS_BOT_ID,
+            session_id=f"dry_run_init_acc_{account_id}",
             user_pm=0,
             broadcast_targets=[group_id],
             subtasks=None,
@@ -365,7 +405,7 @@ async def send_dry_run(bot: Bot, ev: Event) -> list[str] | None:
             root_agent_profile="papertrade_setup_agent",
         )
         root_init = root
-        await _db.PaperAccountRepo.bind_kanban_init(group_id, bot_id, root.id)
+        await _db.PaperAccountRepo.bind_kanban_init(account_id, root.id)
         # fire-and-forget：kick_root 真跑一次（用具名变量避免 _ 与内层 _ 冲突）
         _kick_task: asyncio.Task[None] = asyncio.create_task(kick_root(root.id))
 
@@ -373,7 +413,7 @@ async def send_dry_run(bot: Bot, ev: Event) -> list[str] | None:
         await _build_init_tree()
         init_lines.append("✅ create_kanban_tree OK")
         init_lines.append(f"   root_id = {root_init.id}")
-        init_lines.append(f"   goal    = 群{group_id} 模拟盘 init (DRY_RUN {ev.user_id})")
+        init_lines.append(f"   goal    = 压测盘 init (DRY_RUN {ev.user_id})")
         init_lines.append("   profile = papertrade_setup_agent (leaf-root)")
         init_lines.append("   bind    → PaperAccount.kanban_init_root_id")
         init_lines.append("   kick_root 任务已派发（异步执行）")
@@ -412,16 +452,16 @@ async def send_dry_run(bot: Bot, ev: Event) -> list[str] | None:
             },
         ]
         root, _ = await create_kanban_tree(
-            goal=f"群{group_id} 模拟盘 周期托管 (DRY_RUN {ev.user_id})",
+            goal=f"压测盘 周期托管 (DRY_RUN {ev.user_id})",
             owner_user_id=str(ev.user_id),
-            scope_key=f"papertrade_period_{group_id}_{bot_id}",
+            scope_key=f"papertrade_period_acc_{account_id}",
             bot_id=bot_id,
             persona_name=None,
-            bot_self_id="",
+            bot_self_id=ev.bot_self_id or "",
             group_id=group_id,
             user_type="group",
-            WS_BOT_ID=None,
-            session_id=f"dry_run_period_{group_id}",
+            WS_BOT_ID=ev.WS_BOT_ID,
+            session_id=f"dry_run_period_acc_{account_id}",
             user_pm=0,
             broadcast_targets=[group_id],
             subtasks=subtasks,
@@ -430,7 +470,7 @@ async def send_dry_run(bot: Bot, ev: Event) -> list[str] | None:
             root_agent_profile="",
         )
         root_period = root
-        await _db.PaperAccountRepo.bind_kanban_period(group_id, bot_id, root.id)
+        await _db.PaperAccountRepo.bind_kanban_period(account_id, root.id)
         # ROOT 不设 recurring_trigger（同 commands._setup_papertrade_kanban_trees
         # 的 2026-07-01 修复：ROOT 带 recurring_trigger 会让 create_kanban_tree
         # 直接把 recurring_status 写成 'armed'，随后 execute_ready_tasks 早返，
@@ -460,15 +500,19 @@ async def send_dry_run(bot: Bot, ev: Event) -> list[str] | None:
     setup_result: str = ""
 
     async def _run_setup_agent() -> str:
+        # 账户已由本命令预先建好（见开头）：建盘是 trigger 的职责，没有 ai_tool
+        # 能建账户。这一段验的是 setup_agent **读得到**账户、工具链通。
         task: str = (
-            f"为群{group_id} 在 bot {bot_id} 上初始化 模拟盘账户（DRY_RUN smoke test by master uid={ev.user_id}）。"
-            f"调用 papertrade_account_create 工具建账户："
-            f"initial_cash=1000000, mode='balanced', initialized_by='{ev.user_id} (DRY_RUN)'。"
-            f"完成后简短报告：账户 id / cash / mode。"
+            f"为模拟盘「{_DRY_RUN_ACCOUNT_NAME}」做一次初始化自检"
+            f"（DRY_RUN smoke test by master uid={ev.user_id}）。\n"
+            f"Step 1: papertrade_account_list → 确认「{_DRY_RUN_ACCOUNT_NAME}」在列表里\n"
+            f"Step 2: papertrade_account_query(account_name='{_DRY_RUN_ACCOUNT_NAME}') → 拿 cash / mode / strategy_id\n"
+            f"Step 3: papertrade_position_list(account_name='{_DRY_RUN_ACCOUNT_NAME}') → 应为空仓\n"
+            f"完成后简短报告：account_id / cash / mode / strategy_id / 持仓数。"
         )
         # grant_write：压测走 ad-hoc capagent，root_task_id 对不上账户的 Kanban 树，
         # 不显式发票会被 _deny_write 拒掉（压测本来就要真写库）。
-        with _scope.grant_write():
+        with _scope.grant_write(account_id):
             return await run_capability_agent(
                 profile_id="papertrade_setup_agent",
                 task=task,
@@ -490,21 +534,15 @@ async def send_dry_run(bot: Bot, ev: Event) -> list[str] | None:
             setup_lines.append(f"   │ {line[:60]}")
         setup_lines.append("   └─")
         try:
-            acc_now = await _db.PaperAccountRepo.get(group_id, bot_id)
+            acc_now = await _db.PaperAccountRepo.get_by_id(account_id)
             if acc_now is not None:
-                setup_lines.append(f"   副作用: account.id={acc_now.id}, cash={acc_now.cash:.0f}, mode={acc_now.mode}")
-                # 关键：build_init_tree 触发时 account 还不存在 → bind_kanban_init 早退；
-                # 现在 setup_agent 创建了 account，重试一次 bind 把 root_id 回填
-                if root_init is not None and not acc_now.kanban_init_root_id:
-                    await _db.PaperAccountRepo.bind_kanban_init(group_id, bot_id, root_init.id)
-                    setup_lines.append(f"   bind_kanban_init 重试 OK → {root_init.id[:8]}…")
-                if root_period is not None and not acc_now.kanban_period_root_id:
-                    await _db.PaperAccountRepo.bind_kanban_period(group_id, bot_id, root_period.id)
-                    setup_lines.append(f"   bind_kanban_period 重试 OK → {root_period.id[:8]}…")
+                setup_lines.append(f"   账户: id={acc_now.id}, cash={acc_now.cash:.0f}, mode={acc_now.mode}")
+                setup_lines.append(f"   kanban_init   = {acc_now.kanban_init_root_id or '(未绑定)'}")
+                setup_lines.append(f"   kanban_period = {acc_now.kanban_period_root_id or '(未绑定)'}")
             else:
-                setup_lines.append("   副作用: account 未被创建（agent 没调工具？）")
+                setup_lines.append("   ❌ 压测盘不见了（被并发清理？）")
         except Exception as ex:
-            setup_lines.append(f"   ⚠️ 副作用/补 bind 异常: {type(ex).__name__}: {ex}")
+            setup_lines.append(f"   ⚠️ 账户读取异常: {type(ex).__name__}: {ex}")
     except Exception as e:
         setup_lines.append(f"❌ papertrade_setup_agent 失败: {type(e).__name__}: {e}")
 
@@ -556,10 +594,10 @@ async def send_dry_run(bot: Bot, ev: Event) -> list[str] | None:
         positions_d: int = 0
         decisions_d: int = 0
         proactive_ok: bool = False
-        baseline = await snapshot_decision_state(group_id, bot_id)
+        baseline = await snapshot_decision_state(account_id)
 
         try:
-            with _scope.grant_write():
+            with _scope.grant_write(account_id):
                 result = await run_capability_agent(
                     profile_id="papertrade_decision_agent",
                     task=task,
@@ -578,7 +616,7 @@ async def send_dry_run(bot: Bot, ev: Event) -> list[str] | None:
             lines.append(f"❌ LLM 调用失败: {type(e).__name__}: {e}")
 
         try:
-            trades_d, positions_d, decisions_d = await decision_state_delta(baseline, group_id, bot_id)
+            trades_d, positions_d, decisions_d = await decision_state_delta(baseline, account_id)
         except Exception as e:
             lines.append(f"❌ 副作用查询失败: {type(e).__name__}: {e}")
 
@@ -590,8 +628,7 @@ async def send_dry_run(bot: Bot, ev: Event) -> list[str] | None:
         if step_no in _STEP_VARIANT:
             try:
                 text = await build_papertrade_proactive_text(
-                    group_id,
-                    bot_id,
+                    account_id,
                     variant=_STEP_VARIANT[step_no],
                     trades_d=trades_d,
                     positions_d=positions_d,
@@ -635,7 +672,9 @@ async def send_dry_run(bot: Bot, ev: Event) -> list[str] | None:
         step_no="②",
         head_label="自主决策（LLM 自由选股 + buy/sell/hold）",
         task=(
-            f"为群{group_id} 做 1 次【完全自主】模拟盘心跳决策（DRY_RUN by master uid={ev.user_id}）。\n"
+            f"为模拟盘「{_DRY_RUN_ACCOUNT_NAME}」做 1 次【完全自主】心跳决策"
+            f"（DRY_RUN by master uid={ev.user_id}）。\n"
+            f"{_ACC_HINT}\n"
             f"\n"
             f"⚠️ 本轮**不预选股票**——决策股由你（LLM）自主挑选：先扫描大盘 → 选行业 → 选个股 → 评估。\n"
             f"\n"
@@ -710,7 +749,8 @@ async def send_dry_run(bot: Bot, ev: Event) -> list[str] | None:
         step_no="③",
         head_label="强制 BUY（真撮合 + 主动消息推送）",
         task=(
-            f"为群{group_id} 做【强制 BUY】模拟盘心跳（DRY_RUN by master uid={ev.user_id}）。\n"
+            f"为模拟盘「{_DRY_RUN_ACCOUNT_NAME}」做【强制 BUY】心跳（DRY_RUN by master uid={ev.user_id}）。\n"
+            f"{_ACC_HINT}\n"
             f"\n"
             f"⚠️ 【DRY_RUN 强制 BUY】 — 不允许 action='hold'。\n"
             f"决策股已固定为 000001 平安银行；价格取 stock_indicators 返回的当日 close；"
@@ -757,7 +797,8 @@ async def send_dry_run(bot: Bot, ev: Event) -> list[str] | None:
         step_no="④",
         head_label="强制 SELL（真撮合平仓 + 主动消息推送）",
         task=(
-            f"为群{group_id} 做【强制 SELL】模拟盘心跳（DRY_RUN by master uid={ev.user_id}）。\n"
+            f"为模拟盘「{_DRY_RUN_ACCOUNT_NAME}」做【强制 SELL】心跳（DRY_RUN by master uid={ev.user_id}）。\n"
+            f"{_ACC_HINT}\n"
             f"\n"
             f"⚠️ 【DRY_RUN 强制 SELL】 — 不允许 action='hold'。\n"
             f'如持仓列表为空（③ 段没真建上），先做"建仓兜底"再 sell：\n'
@@ -805,7 +846,8 @@ async def send_dry_run(bot: Bot, ev: Event) -> list[str] | None:
         step_no="⑤",
         head_label="强制 HOLD（仅写决策日志，不交易）",
         task=(
-            f"为群{group_id} 做【强制 HOLD】模拟盘心跳（DRY_RUN by master uid={ev.user_id}）。\n"
+            f"为模拟盘「{_DRY_RUN_ACCOUNT_NAME}」做【强制 HOLD】心跳（DRY_RUN by master uid={ev.user_id}）。\n"
+            f"{_ACC_HINT}\n"
             f"\n"
             f"⚠️ 【DRY_RUN 强制 HOLD】 — 必须 action='hold'。\n"
             f"**禁止调用 papertrade_match_order / papertrade_trade_insert / papertrade_position_upsert**。\n"
@@ -843,7 +885,8 @@ async def send_dry_run(bot: Bot, ev: Event) -> list[str] | None:
         step_no="⑥",
         head_label="KB + Web search 通路验证（不依赖决策）",
         task=(
-            f"为群{group_id} 验证 ai_core 知识库 + 网络搜索 + 新闻三条通路（DRY_RUN by master uid={ev.user_id}）。\n"
+            f"验证 ai_core 知识库 + 网络搜索 + 新闻三条通路（DRY_RUN by master uid={ev.user_id}）。\n"
+            f"{_ACC_HINT}\n"
             f"\n"
             f"⚠️ 严格按以下顺序调用【真实】ai_core 工具，缺工具就明说，不要 KV 替代。\n"
             f"\n"
@@ -868,7 +911,7 @@ async def send_dry_run(bot: Bot, ev: Event) -> list[str] | None:
     db_lines: list[str] = []
 
     try:
-        acc = await _db.PaperAccountRepo.get(group_id, bot_id)
+        acc = await _db.PaperAccountRepo.get_by_id(account_id)
         if acc is not None:
             db_lines.append(f"account: id={acc.id}, cash={acc.cash:.0f}, mode={acc.mode}, enabled={acc.enabled}")
             db_lines.append(f"  kanban_init_root_id   = {acc.kanban_init_root_id or '(未绑定)'}")
@@ -879,12 +922,12 @@ async def send_dry_run(bot: Bot, ev: Event) -> list[str] | None:
         else:
             db_lines.append("account: (不存在)")
 
-        positions = await _db.PaperPositionRepo.list_by_account(group_id, bot_id)
+        positions = await _db.PaperPositionRepo.list_by_account(account_id)
         db_lines.append(f"\npositions (持仓, qty>0, {len(positions)} 只):")
         for p in positions[:5]:
             db_lines.append(f"  - {p.stock_code} ({p.stock_name}) ×{p.qty}@{p.avg_cost:.2f} pos_id={p.id}")
 
-        trades = await _db.PaperTradeRepo.list_by_account(group_id, bot_id, limit=5)
+        trades = await _db.PaperTradeRepo.list_by_account(account_id, limit=5)
         db_lines.append("\ntrades (最近 5 笔):")
         for t in trades[:5]:
             side = "买" if t.side == "buy" else "卖"
@@ -893,7 +936,7 @@ async def send_dry_run(bot: Bot, ev: Event) -> list[str] | None:
                 f"{side} {t.stock_code} {t.qty}@{t.price:.2f} fee={t.fee:.2f} trade_id={t.id}"
             )
 
-        decisions = await _db.PaperDecisionRepo.list_recent(group_id, bot_id, limit=3)
+        decisions = await _db.PaperDecisionRepo.list_recent(account_id, limit=3)
         db_lines.append("\ndecisions (最近 3 条):")
         for d in decisions[:3]:
             db_lines.append(
@@ -901,7 +944,7 @@ async def send_dry_run(bot: Bot, ev: Event) -> list[str] | None:
                 f"action={d.action} stock={d.stock_code or '(none)'} decision_id={d.id}"
             )
 
-        snapshots = await _db.PaperSnapshotRepo.list_range(group_id, bot_id)
+        snapshots = await _db.PaperSnapshotRepo.list_range(account_id)
         db_lines.append(f"\nsnapshots ({len(snapshots)} 条):")
         for s in snapshots[-3:]:
             db_lines.append(
@@ -909,7 +952,7 @@ async def send_dry_run(bot: Bot, ev: Event) -> list[str] | None:
                 f"pnl={s.total_pnl:+.0f} ({s.total_pnl_pct:+.2f}%) snap_id={s.id}"
             )
 
-        agg: dict[str, float] = await _db.PaperTradeRepo.aggregate_pnl(group_id, bot_id)
+        agg: dict[str, float] = await _db.PaperTradeRepo.aggregate_pnl(account_id)
         db_lines.append(
             f"\naggregate_pnl: amount={agg['total_amount']:.0f}, "
             f"fee={agg['total_fee']:.2f}, trades={int(agg['trade_count'])}"
@@ -924,12 +967,12 @@ async def send_dry_run(bot: Bot, ev: Event) -> list[str] | None:
     t0 = _time.perf_counter()
     delta_lines: list[str] = []
     try:
-        acc_now: SayuPaperAccount | None = await _db.PaperAccountRepo.get(group_id, bot_id)
+        acc_now: SayuPaperAccount | None = await _db.PaperAccountRepo.get_by_id(account_id)
         initial_cash: float = acc_now.initial_cash if acc_now else 1_000_000.0
         cash_now: float = acc_now.cash if acc_now else 0.0
-        positions_now: list[SayuPaperPosition] = await _db.PaperPositionRepo.list_by_account(group_id, bot_id)
-        trades_now: list[SayuPaperTrade] = await _db.PaperTradeRepo.list_by_account(group_id, bot_id, limit=50)
-        decisions_now: list[SayuPaperDecision] = await _db.PaperDecisionRepo.list_recent(group_id, bot_id, limit=50)
+        positions_now: list[SayuPaperPosition] = await _db.PaperPositionRepo.list_by_account(account_id)
+        trades_now: list[SayuPaperTrade] = await _db.PaperTradeRepo.list_by_account(account_id, limit=50)
+        decisions_now: list[SayuPaperDecision] = await _db.PaperDecisionRepo.list_recent(account_id, limit=50)
 
         total_fee: float = sum(t.fee for t in trades_now)
         buy_count: int = sum(1 for t in trades_now if t.side == "buy")
@@ -1013,11 +1056,11 @@ async def send_dry_run(bot: Bot, ev: Event) -> list[str] | None:
     try:
         from .db import PaperSnapshotRepo  # noqa: E402  -- 本仓 import
 
-        acc_snap: SayuPaperAccount | None = await _db.PaperAccountRepo.get(group_id, bot_id)
+        acc_snap: SayuPaperAccount | None = await _db.PaperAccountRepo.get_by_id(account_id)
         if acc_snap is None:
             snap_lines.append("⚠️ account 不存在，跳过写快照")
         else:
-            positions_snap: list[SayuPaperPosition] = await _db.PaperPositionRepo.list_by_account(group_id, bot_id)
+            positions_snap: list[SayuPaperPosition] = await _db.PaperPositionRepo.list_by_account(account_id)
             today: _dt.date = _dt.date.today()
             # 持仓市值用 avg_cost 近似（压测不实时拉行情，避免又烧一次东财接口）
             position_value: float = float(sum(p.qty * p.avg_cost for p in positions_snap))
@@ -1026,8 +1069,7 @@ async def send_dry_run(bot: Bot, ev: Event) -> list[str] | None:
             total_pnl: float = total_equity - acc_snap.initial_cash
             total_pnl_pct: float = total_pnl / acc_snap.initial_cash * 100 if acc_snap.initial_cash else 0.0
             snap = await PaperSnapshotRepo.upsert_for_date(
-                group_id,
-                bot_id,
+                account_id,
                 today,
                 cash=acc_snap.cash,
                 position_value=position_value,
@@ -1056,10 +1098,10 @@ async def send_dry_run(bot: Bot, ev: Event) -> list[str] | None:
     cleanup_lines.append("🧹 开始 auto-cleanup（与 模拟盘清盘 同逻辑）")
     cleanup_lines.append("")
 
-    # 8.1 DB（7 张表）
+    # 8.1 DB（8 张表）
     try:
-        deleted: dict[str, int] = await _db.PaperAccountRepo.reset_account(group_id, bot_id)
-        cleanup_lines.append("─── 8.1 DB（7 张表）───")
+        deleted: dict[str, int] = await _db.PaperAccountRepo.reset_account(account_id)
+        cleanup_lines.append("─── 8.1 DB（8 张表）───")
         for k, v in deleted.items():
             cleanup_lines.append(f"   {k}: -{v} 行")
         cleanup_lines.append(f"   合计删除: {sum(deleted.values())} 行")
@@ -1124,7 +1166,7 @@ async def send_dry_run(bot: Bot, ev: Event) -> list[str] | None:
         cleanup_lines.append(f"❌ 8.3 APScheduler 清理异常: {type(e).__name__}: {e}")
 
     cleanup_lines.append("")
-    cleanup_lines.append("✅ auto-cleanup 完成。下次发「模拟盘初始化」重新建账。")
+    cleanup_lines.append(f"✅ auto-cleanup 完成，压测盘「{_DRY_RUN_ACCOUNT_NAME}」已删除（你的真盘未受影响）。")
     cleanup_dt: float = _time.perf_counter() - t0
     sections.append("─── ⑧ auto-cleanup ───\n" + "\n".join(cleanup_lines) + f"\n⏱ {cleanup_dt:.2f}s")
 

@@ -1,10 +1,13 @@
 """SayuStock 模拟盘数据库表。
 
-7 张表全部继承 BaseIDModel（只 id 主键），按 (group_id, bot_id, ...) 分区
-实现多群数据隔离。WebConsole admin 一次性挂到"SayuStock 模拟盘"菜单分组下。
+8 张表全部继承 BaseIDModel（只 id 主键）。**账本主键是 ``account_id``**——
+模拟盘是"命名的盘"，不是"群的财产"，同一个盘可以推送到任意多个群。
+WebConsole admin 一次性挂到"SayuStock 模拟盘"菜单分组下。
 
 迁移说明：本文件末尾通过 ``exec_list.extend`` 把 ALTER/CREATE INDEX 挂到
 ``on_core_start_before`` 阶段的 ``trans_adapter`` 内执行；既有库会自动补齐。
+``trans_adapter`` 对每条 SQL 都 try/except pass，**失败是静默的**，所以数据
+回填（``papertrade_migration.py``）必须自己探测列是否真的加上了。
 """
 
 from typing import Optional
@@ -17,24 +20,35 @@ from gsuid_core.webconsole.mount_app import PageSchema, GsAdminModel, site
 from gsuid_core.utils.database.startup import exec_list
 from gsuid_core.utils.database.base_models import BaseIDModel
 
+# 默认盘名：迁移时最早建的那个账户会被命名成它；工具/命令未指定盘名时也解析到它。
+DEFAULT_ACCOUNT_NAME: str = "默认模拟盘"
+# 默认策略 id（与 stock_papertrade.strategies 注册表对齐）
+DEFAULT_STRATEGY_ID: str = "multi_factor"
+
 
 # ============================================================
 # 1) 账户表
 # ============================================================
 class SayuPaperAccount(BaseIDModel, table=True):
-    """模拟盘账户（每群每 bot 一份）
+    """模拟盘账户（一个"命名的盘"，与群解耦）
 
-    ``(group_id, bot_id)`` 复合唯一约束：
-    - 新库由 ``create_all`` 自动挂上 ``ux_sayupaperaccount_gid_bid``；
+    ``name`` 全库唯一：
+    - 新库由 ``create_all`` 自动挂上 ``ux_sayupaperaccount_name``；
     - 老库通过文件末尾的 ``exec_list`` 跑 CREATE UNIQUE INDEX 兜底补齐。
+
+    ``group_id`` / ``bot_id`` 保留但语义降级为**创建原群 / 心跳 bot**，
+    不再是账本主键；播报目标由 ``SayuPaperBroadcastTarget`` 决定。
     """
 
     __table_args__ = (
-        UniqueConstraint("group_id", "bot_id", name="ux_sayupaperaccount_gid_bid"),
+        UniqueConstraint("name", name="ux_sayupaperaccount_name"),
         {"extend_existing": True},
     )
 
-    group_id: str = Field(title="群号", index=True)
+    name: str = Field(default=DEFAULT_ACCOUNT_NAME, title="盘名（全库唯一）", index=True)
+    strategy_id: str = Field(default=DEFAULT_STRATEGY_ID, title="策略 id", index=True)
+    strategy_params: str = Field(default="{}", title="策略参数 JSON")
+    group_id: str = Field(title="创建原群", index=True)
     bot_id: str = Field(title="平台", index=True)
     cash: float = Field(default=1_000_000.0, title="现金余额")
     initial_cash: float = Field(default=1_000_000.0, title="期初本金")
@@ -45,6 +59,8 @@ class SayuPaperAccount(BaseIDModel, table=True):
     kanban_init_root_id: Optional[str] = Field(default=None, title="init Kanban 根任务 ID")
     kanban_period_root_id: Optional[str] = Field(default=None, title="周期 Kanban 根任务 ID")
     initialized_by: Optional[str] = Field(default=None, title="初始化人 user_id")
+    # 多账户迁移幂等标记：1 = 本行已跑过 v2 迁移，重启不再改名（用户改过的名字要保住）
+    schema_migrated_v2: int = Field(default=0, title="多账户迁移标记 0/1")
     created_at: Optional[datetime] = Field(default=None, title="创建时间")
     started_at: Optional[datetime] = Field(default=None, title="首次交易时间")
     last_decided_at: Optional[datetime] = Field(default=None, title="上次决策时间")
@@ -54,12 +70,13 @@ class SayuPaperAccount(BaseIDModel, table=True):
 # 2) 持仓表
 # ============================================================
 class SayuPaperPosition(BaseIDModel, table=True):
-    """模拟盘持仓（每群每 bot 每股票最多一行）"""
+    """模拟盘持仓（每盘每股票最多一行）"""
 
     __table_args__ = {"extend_existing": True}
 
-    group_id: str = Field(title="群号", index=True)
-    bot_id: str = Field(title="平台", index=True)
+    account_id: int = Field(default=0, title="模拟盘账户 ID", index=True)
+    group_id: str = Field(default="", title="创建原群（仅排障）", index=True)
+    bot_id: str = Field(default="", title="平台（仅排障）", index=True)
     stock_code: str = Field(title="股票代码", index=True)
     stock_name: str = Field(default="", title="名称")
     secid: str = Field(default="", title="东财 secid")
@@ -84,8 +101,9 @@ class SayuPaperTrade(BaseIDModel, table=True):
 
     __table_args__ = {"extend_existing": True}
 
-    group_id: str = Field(title="群号", index=True)
-    bot_id: str = Field(title="平台", index=True)
+    account_id: int = Field(default=0, title="模拟盘账户 ID", index=True)
+    group_id: str = Field(default="", title="创建原群（仅排障）", index=True)
+    bot_id: str = Field(default="", title="平台（仅排障）", index=True)
     stock_code: str = Field(title="股票代码", index=True)
     stock_name: str = Field(default="", title="名称")
     secid: str = Field(default="", title="东财 secid")
@@ -111,8 +129,9 @@ class SayuPaperDecision(BaseIDModel, table=True):
 
     __table_args__ = {"extend_existing": True}
 
-    group_id: str = Field(title="群号", index=True)
-    bot_id: str = Field(title="平台", index=True)
+    account_id: int = Field(default=0, title="模拟盘账户 ID", index=True)
+    group_id: str = Field(default="", title="创建原群（仅排障）", index=True)
+    bot_id: str = Field(default="", title="平台（仅排障）", index=True)
     action: str = Field(title="buy/sell/hold", index=True)
     stock_code: Optional[str] = Field(default=None, title="股票代码", index=True)
     stock_name: Optional[str] = Field(default=None, title="名称")
@@ -132,8 +151,9 @@ class SayuPaperSnapshot(BaseIDModel, table=True):
 
     __table_args__ = {"extend_existing": True}
 
-    group_id: str = Field(title="群号", index=True)
-    bot_id: str = Field(title="平台", index=True)
+    account_id: int = Field(default=0, title="模拟盘账户 ID", index=True)
+    group_id: str = Field(default="", title="创建原群（仅排障）", index=True)
+    bot_id: str = Field(default="", title="平台（仅排障）", index=True)
     trade_date: date = Field(title="交易日", index=True)
     cash: float = Field(title="当日现金")
     position_value: float = Field(title="当日持仓市值")
@@ -149,12 +169,18 @@ class SayuPaperSnapshot(BaseIDModel, table=True):
 # 6) 群友关注列表（公开可查）
 # ============================================================
 class SayuPaperWatchlist(BaseIDModel, table=True):
-    """群友关注列表（@机器人 模拟盘自选 可查）"""
+    """群友关注列表（@机器人 模拟盘自选 可查）
+
+    归属于**盘**而非群：候选池把它当作"永不淘汰的保护集"
+    （``candidate_pool._from_watchlist``），跟着盘走才能让不同策略的盘
+    拥有各自的保护集。副作用：同一个群的关注在不同盘之间互不可见。
+    """
 
     __table_args__ = {"extend_existing": True}
 
-    group_id: str = Field(title="群号", index=True)
-    bot_id: str = Field(title="平台", index=True)
+    account_id: int = Field(default=0, title="模拟盘账户 ID", index=True)
+    group_id: str = Field(default="", title="添加时所在群", index=True)
+    bot_id: str = Field(default="", title="平台", index=True)
     user_id: str = Field(title="添加者 user_id", index=True)
     stock_code: str = Field(title="股票代码", index=True)
     stock_name: str = Field(default="", title="名称")
@@ -171,8 +197,9 @@ class SayuPaperAgentPool(BaseIDModel, table=True):
 
     __table_args__ = {"extend_existing": True}
 
-    group_id: str = Field(title="群号", index=True)
-    bot_id: str = Field(title="平台", index=True)
+    account_id: int = Field(default=0, title="模拟盘账户 ID", index=True)
+    group_id: str = Field(default="", title="创建原群（仅排障）", index=True)
+    bot_id: str = Field(default="", title="平台（仅排障）", index=True)
     stock_code: str = Field(title="股票代码", index=True)
     stock_name: str = Field(default="", title="名称")
     secid: str = Field(default="", title="东财 secid")
@@ -181,6 +208,44 @@ class SayuPaperAgentPool(BaseIDModel, table=True):
     priority: int = Field(default=0, title="优先级 0~10")
     expires_at: Optional[datetime] = Field(default=None, title="过期时间")
     created_at: datetime = Field(default_factory=datetime.now, title="加入时间")
+
+
+# ============================================================
+# 8) 播报目标表（一个盘 → 任意多个群）
+# ============================================================
+class SayuPaperBroadcastTarget(BaseIDModel, table=True):
+    """模拟盘播报目标（成交冒泡推到哪些群）。
+
+    ``ws_bot_id`` / ``bot_self_id`` 不是冗余：``emit_proactive_message`` 靠
+    ``Event.WS_BOT_ID`` 在 ``gss.active_bot`` 里选连接，选不到就
+    ``next(iter(...))`` 随便挑一条——多适配器部署下会把 A 平台的播报从 B 平台
+    发出去，消息静默丢失。``Event.session_id`` 也是
+    ``{WS_BOT_ID}:{bot_id}:{bot_self_id}:group:{group_id}``，缺字段会拼出对不上
+    的伪会话，让心跳去重与 AI 会话历史都记错账。
+
+    这三个字段在「模拟盘推送添加」命令执行时从当前 ``ev`` 直接抄——命令就是在
+    目标群里发的，此刻的 ev 正是"这个群收得到消息"的权威来源。迁移种子没有 ev
+    可抄，留空串退化到兜底连接，属可接受降级。
+    """
+
+    __table_args__ = (
+        UniqueConstraint(
+            "account_id",
+            "bot_id",
+            "group_id",
+            name="ux_sayupaperbroadcast_acc_bot_group",
+        ),
+        {"extend_existing": True},
+    )
+
+    account_id: int = Field(title="模拟盘账户 ID", index=True)
+    bot_id: str = Field(default="", title="发送用 bot（适配器名）", index=True)
+    bot_self_id: str = Field(default="", title="发送用 bot 自身账号")
+    ws_bot_id: str = Field(default="", title="WS 连接 ID")
+    group_id: str = Field(default="", title="目标群号", index=True)
+    enabled: int = Field(default=1, title="开关 0/1", index=True)
+    created_by: Optional[str] = Field(default=None, title="添加者 user_id")
+    created_at: datetime = Field(default_factory=datetime.now, title="添加时间")
 
 
 # ============================================================
@@ -256,6 +321,16 @@ class SayuPaperAgentPoolAdmin(GsAdminModel):
     model = SayuPaperAgentPool
 
 
+@site.register_admin
+class SayuPaperBroadcastTargetAdmin(GsAdminModel):
+    pk_name = "id"
+    page_schema = PageSchema(
+        label="模拟盘·推送目标",
+        icon="fa fa-bullhorn",
+    )
+    model = SayuPaperBroadcastTarget
+
+
 # ============================================================
 # 迁移 SQL（在 on_core_start_before 阶段的 trans_adapter 内执行）
 # 全部幂等：trans_adapter 对每条都 try/except pass，所以 SQLite/MySQL/PG
@@ -263,27 +338,49 @@ class SayuPaperAgentPoolAdmin(GsAdminModel):
 # ============================================================
 exec_list.extend(
     [
-        # 兼容已建过 sayupaperaccount 但未挂上 UniqueConstraint 的部署：
-        # 先清掉 (group_id, bot_id) 重复行，保留每个分区的最小 id；再补建唯一索引。
-        # SQLite / MySQL / PG 通用语法，subquery alias 在 SQLite 旧版可能需要别名，
-        # 用 INNER JOIN 形式兜底。
-        "DELETE FROM sayupaperaccount "
-        "WHERE id NOT IN ("
-        "  SELECT MIN(id) FROM sayupaperaccount GROUP BY group_id, bot_id"
-        ");",
-        # CREATE UNIQUE INDEX 三方言通用
-        "CREATE UNIQUE INDEX IF NOT EXISTS ux_sayupaperaccount_gid_bid ON sayupaperaccount (group_id, bot_id);",
-        # MySQL 没有 IF NOT EXISTS 的 INDEX 语法，用 try 兜底
-        "ALTER TABLE sayupaperaccount ADD UNIQUE INDEX ux_sayupaperaccount_gid_bid (group_id, bot_id);",
-        # PostgreSQL
-        "CREATE UNIQUE INDEX IF NOT EXISTS ux_sayupaperaccount_gid_bid ON sayupaperaccount (group_id, bot_id);",
-        # ─── 2026-07-01 迁移：SayuPaperPosition 加 last_quote_price + last_quote_at ───
-        # SQLite / PostgreSQL 老版本不支持 ADD COLUMN IF NOT EXISTS；trans_adapter 已经
-        # 用 try/except pass 兜底（重复执行 → 第二次失败无害），所以直接 ADD COLUMN 即可。
+        # 持仓报价缓存列。不要在这里 DELETE 同群多行或重建 (group_id, bot_id)
+        # 唯一索引：多盘后同 origin 群会有多行，每启动跑一次会把第二盘删掉。
         "ALTER TABLE sayupaperposition ADD COLUMN last_quote_price REAL;",
         "ALTER TABLE sayupaperposition ADD COLUMN last_quote_at DATETIME;",
-        # MySQL 同义（DATETIME 直接用，REAL → DOUBLE 也能存，但保留 REAL 跨方言一致）
         "ALTER TABLE sayupaperposition ADD COLUMN last_quote_price DOUBLE;",
         "ALTER TABLE sayupaperposition ADD COLUMN last_quote_at DATETIME;",
     ]
+)
+
+# ============================================================
+# 2026-08-12 迁移：多账户（去群主键）
+#
+# 顺序说明（不能乱）：
+#   1. 先给账户表加 name / strategy_id / strategy_params / schema_migrated_v2；
+#   2. 再给 6 张子表加 account_id；
+#   3. 唯一索引 ux_sayupaperaccount_name **不在这里建** —— 必须等
+#      papertrade_migration 把重名先修掉，否则老库有多行同为默认值
+#      '默认模拟盘' 时索引建不上（静默失败），后续创建第二个盘就查不出重名。
+#      建索引的动作放在 backfill 结尾（Python 侧，能看到失败）。
+#   4. DROP 旧的 (group_id, bot_id) 唯一索引 —— 不删掉就没法在同一个群里
+#      开第二个盘（本次改造的核心诉求）。同样在 backfill 里复验。
+# ============================================================
+_V2_CHILD_TABLES: tuple[str, ...] = (
+    "sayupaperposition",
+    "sayupapertrade",
+    "sayupaperdecision",
+    "sayupapersnapshot",
+    "sayupaperwatchlist",
+    "sayupaperagentpool",
+)
+
+exec_list.extend(
+    [
+        # ─── 账户表新列 ───
+        f"ALTER TABLE sayupaperaccount ADD COLUMN name VARCHAR(64) DEFAULT '{DEFAULT_ACCOUNT_NAME}';",
+        f"ALTER TABLE sayupaperaccount ADD COLUMN strategy_id VARCHAR(64) DEFAULT '{DEFAULT_STRATEGY_ID}';",
+        "ALTER TABLE sayupaperaccount ADD COLUMN strategy_params TEXT DEFAULT '{}';",
+        "ALTER TABLE sayupaperaccount ADD COLUMN schema_migrated_v2 INTEGER DEFAULT 0;",
+        # ─── 旧唯一索引：三方言各试一次（DROP 失败由 backfill 复验并报错） ───
+        "DROP INDEX IF EXISTS ux_sayupaperaccount_gid_bid;",
+        "ALTER TABLE sayupaperaccount DROP INDEX ux_sayupaperaccount_gid_bid;",
+    ]
+    # ─── 6 张子表加 account_id ───
+    + [f"ALTER TABLE {t} ADD COLUMN account_id INTEGER DEFAULT 0;" for t in _V2_CHILD_TABLES]
+    + [f"CREATE INDEX IF NOT EXISTS ix_{t}_account_id ON {t} (account_id);" for t in _V2_CHILD_TABLES]
 )

@@ -8,15 +8,15 @@ from gsuid_core.utils.plugins_config.models import (
 )
 
 CONFIG_DEFAULT: Dict[str, GSC] = {
+    # 保留键：迁移读旧播报群；运行时不再引用。
     "papertrade_multi_group": GsBoolConfig(
-        "多群模拟盘",
-        "开启后每个群各开各的模拟盘（旧行为）。默认关闭 = 全服共用一个盘："
-        "任意群都能查询同一账户，且只有第一个开盘的群能开",
+        "多群模拟盘（已废弃）",
+        "已失效：模拟盘改为命名账户，同一个群可开多个盘，任意群都能查任意盘。请用「模拟盘创建 <盘名>」",
         False,
     ),
     "papertrade_broadcast_group": GsStrConfig(
-        "模拟盘播报群号",
-        "共用模式下生效（即多群模拟盘关闭时）。填了就把成交播报推到该群；留空则推到开盘的那个原群",
+        "模拟盘播报群号（已废弃）",
+        "已失效：升级时会自动转成一条播报订阅。之后请用「模拟盘推送添加 <盘名>」/「模拟盘推送删除 <盘名>」维护",
         "",
     ),
     "mapcloud_viewport": GsIntConfig(

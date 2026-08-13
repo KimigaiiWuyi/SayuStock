@@ -118,10 +118,16 @@ class Chart(_MplChart):
         method = getattr(_MplChart, "add_legends", None)
         if callable(method):
             return method(self)
-        return self.canvas.add_legends()
+        canvas = getattr(self, "canvas", None)
+        if canvas is None:
+            raise AttributeError("chart has no canvas")
+        return canvas.add_legends()
 
     def main_axes(self) -> Any:
         method = getattr(_MplChart, "main_axes", None)
         if callable(method):
             return method(self)
-        return self.canvas.main_axes()
+        canvas = getattr(self, "canvas", None)
+        if canvas is None:
+            raise AttributeError("chart has no canvas")
+        return canvas.main_axes()

@@ -120,16 +120,16 @@ _INDICATOR_KEYS_WHITELIST: tuple[str, ...] = (
 # ============================================================
 # 副作用 Δ 工具（从 admin.py 抽出）
 # ============================================================
-async def snapshot_decision_state(group_id: str, bot_id: str) -> Tuple[int, int, int]:
-    """拿当前群在该 bot 上的 ``(trades, positions, decisions)`` 计数快照。
+async def snapshot_decision_state(account_id: int) -> Tuple[int, int, int]:
+    """拿某个盘的 ``(trades, positions, decisions)`` 计数快照。
 
     返回 ``(trades_count, positions_count, decisions_count)``；任何异常退回
     ``(0, 0, 0)`` 让调用方走 fallback。
     """
     try:
-        t = await _db.PaperTradeRepo.list_by_account(group_id, bot_id, limit=200)
-        p = await _db.PaperPositionRepo.list_by_account(group_id, bot_id)
-        d = await _db.PaperDecisionRepo.list_recent(group_id, bot_id, limit=200)
+        t = await _db.PaperTradeRepo.list_by_account(account_id, limit=200)
+        p = await _db.PaperPositionRepo.list_by_account(account_id)
+        d = await _db.PaperDecisionRepo.list_recent(account_id, limit=200)
         return (len(t), len(p), len(d))
     except Exception:
         return (0, 0, 0)
@@ -137,11 +137,10 @@ async def snapshot_decision_state(group_id: str, bot_id: str) -> Tuple[int, int,
 
 async def decision_state_delta(
     baseline: Tuple[int, int, int],
-    group_id: str,
-    bot_id: str,
+    account_id: int,
 ) -> Tuple[int, int, int]:
     """``snapshot - baseline``，返回本轮的 trades / positions / decisions Δ。"""
-    cur = await snapshot_decision_state(group_id, bot_id)
+    cur = await snapshot_decision_state(account_id)
     return (cur[0] - baseline[0], cur[1] - baseline[1], cur[2] - baseline[2])
 
 
@@ -211,8 +210,7 @@ def _format_positions(positions: list[SayuPaperPosition], max_show: int = 5) -> 
 # 主入口：build_papertrade_proactive_text
 # ============================================================
 async def build_papertrade_proactive_text(
-    group_id: str,
-    bot_id: str,
+    account_id: int,
     *,
     variant: Variant,
     trades_d: int,
@@ -223,7 +221,7 @@ async def build_papertrade_proactive_text(
     """根据 ``variant`` + DB 当前状态拼"📈 模拟盘·操盘播报"格式文本。
 
     Args:
-        group_id / bot_id: 定位账户。
+        account_id: 定位账户。
         variant: ``"auto"``（生产）/ ``"force_buy"`` 等（压测）。
         trades_d / positions_d / decisions_d: 本轮副作用 Δ 计数（用于决定
             是否展示 recent trade / position）。
@@ -233,18 +231,18 @@ async def build_papertrade_proactive_text(
         推群文本。失败时回退到 ``fallback_text``。
     """
     try:
-        acc: Optional[SayuPaperAccount] = await _db.PaperAccountRepo.get(group_id, bot_id)
+        acc: Optional[SayuPaperAccount] = await _db.PaperAccountRepo.get_by_id(account_id)
         latest_decision: Optional[SayuPaperDecision] = None
         latest_trade: Optional[SayuPaperTrade] = None
         if decisions_d > 0:
-            ds = await _db.PaperDecisionRepo.list_recent(group_id, bot_id, limit=1)
+            ds = await _db.PaperDecisionRepo.list_recent(account_id, limit=1)
             if ds:
                 latest_decision = ds[0]
         if trades_d > 0:
-            ts = await _db.PaperTradeRepo.list_by_account(group_id, bot_id, limit=1)
+            ts = await _db.PaperTradeRepo.list_by_account(account_id, limit=1)
             if ts:
                 latest_trade = ts[0]
-        positions_now: list[SayuPaperPosition] = await _db.PaperPositionRepo.list_by_account(group_id, bot_id)
+        positions_now: list[SayuPaperPosition] = await _db.PaperPositionRepo.list_by_account(account_id)
     except Exception:
         return fallback_text
 
@@ -275,7 +273,7 @@ async def build_papertrade_proactive_text(
 
     lines: list[str] = [
         "📈 【模拟盘 · 操盘播报】",
-        f"群 {group_id} · 模式 {acc.mode}",
+        f"{acc.name} · 策略 {acc.strategy_id} · 模式 {acc.mode}",
         "",
         header_block,
     ]

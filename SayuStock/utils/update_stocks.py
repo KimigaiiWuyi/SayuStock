@@ -386,8 +386,16 @@ async def async_main() -> None:
             "industry_l2": l2,
         }
 
-    detail_df["industry_l1"] = detail_df["code"].map(lambda x: final_mapping[x]["industry_l1"])
-    detail_df["industry_l2"] = detail_df["code"].map(lambda x: final_mapping[x]["industry_l2"])
+    def _industry(code: object, field: str) -> str:
+        if not isinstance(code, str) or not code:
+            return "未知"
+        info = final_mapping.get(code)
+        if info is None:
+            return "未知"
+        return str(info[field])
+
+    detail_df["industry_l1"] = detail_df["code"].map(lambda x: _industry(x, "industry_l1"))
+    detail_df["industry_l2"] = detail_df["code"].map(lambda x: _industry(x, "industry_l2"))
 
     if args.diff:
         show_diff(final_mapping, output_path)

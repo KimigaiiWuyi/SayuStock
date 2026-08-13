@@ -5,9 +5,12 @@ from sqlmodel import Field
 from gsuid_core.webconsole.mount_app import PageSchema, GsAdminModel, site
 from gsuid_core.utils.database.base_models import Bind, Type, T_Bind
 
+# 导入即注册「去群主键」迁移钩子（on_core_start_before priority=-70，
+# 排在框架的 exec_list 迁移 -80 之后）
+from . import papertrade_migration  # noqa: F401,E402
 from ..utils import convert_list
 
-# 导入 模拟盘 7 张表 + WebConsole 注册
+# 导入 模拟盘 8 张表 + WebConsole 注册
 from .papertrade_models import (  # noqa: F401
     SayuPaperTrade,
     SayuPaperAccount,
@@ -23,6 +26,8 @@ from .papertrade_models import (  # noqa: F401
     SayuPaperSnapshotAdmin,
     SayuPaperAgentPoolAdmin,
     SayuPaperWatchlistAdmin,
+    SayuPaperBroadcastTarget,
+    SayuPaperBroadcastTargetAdmin,
 )
 
 

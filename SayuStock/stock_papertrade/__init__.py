@@ -9,8 +9,12 @@
 模块分工：
 - ``sv.py``: 所有 SV 实例集中处（``sv_papertrade`` pm=3、``sv_papertrade_admin`` pm=0）
 - ``permissions.py``: 权限校验 helpers（``user_pm_level`` / ``check_admin``）
-- ``commands.py``: 业务命令（``sv_papertrade`` 注册，含「模拟盘自选」）
-- ``admin.py``: 1 个 master-only 压测命令（``sv_papertrade_admin`` 注册）
+- ``commands.py``: 业务命令（``sv_papertrade`` 注册，含建盘/改名/策略/播报订阅）
+- ``admin.py``: master-only 压测 / 清库命令（``sv_papertrade_admin`` 注册）
+- ``account_scope.py``: 盘名解析 / 账户解析 / 写入授权
+- ``broadcast.py``: 一个盘 → 多个群的成交播报扇出
+- ``strategies/``: 策略注册表；每个策略通过提示词注入 / 候选池偏好 / 数据库硬闸
+  三个生效点影响真实行为（见 ``strategies/base.py`` 的说明）
 - 其它兄弟文件（ai_tools / db / cross_group / indicators / matcher / render /
   strategy / candidate_pool / trading_calendar）按需导入。
 """
@@ -34,7 +38,12 @@ ai_alias(
 )
 ai_alias(
     "papertrade_query",
-    ["模拟盘查看", "模拟盘自选", "模拟盘持仓", "模拟盘收益", "模拟盘记录", "模拟盘排行"],
+    ["模拟盘查看", "模拟盘自选", "模拟盘持仓", "模拟盘收益", "模拟盘记录", "模拟盘排行", "模拟盘列表"],
+    scope="SayuStock",
+)
+ai_alias(
+    "papertrade_manage",
+    ["模拟盘创建", "模拟盘删除", "模拟盘改名", "模拟盘策略", "模拟盘推送"],
     scope="SayuStock",
 )
 
@@ -96,12 +105,14 @@ def _register_recurring_gates() -> None:
     except ImportError:
         logger.warning("[SayuStock][PaperTrade] 框架不支持 recurring gate（版本过旧），跳过注册")
         return
+    from . import strategies as _pt_strategies
     from .trading_calendar import should_run_papertrade, is_a_share_trading_day
 
-    register_recurring_gate("papertrade_decision_agent", should_run_papertrade)
+    for s in _pt_strategies.decision_profiles():
+        register_recurring_gate(s.agent_profile, should_run_papertrade)
     register_recurring_gate("papertrade_pool_refresh_agent", should_run_papertrade)
     register_recurring_gate("papertrade_snapshot_agent", is_a_share_trading_day)
-    logger.info("[SayuStock][PaperTrade] A 股交易日历 recurring gate 已注册（decision/pool_refresh/snapshot）")
+    logger.info("[SayuStock][PaperTrade] recurring gate 已按策略注册表挂上")
 
 
 _register_recurring_gates()
@@ -119,5 +130,15 @@ from .commands import (  # noqa: E402,F401
     send_holdings,
     send_leaderboard,
     send_query_group,
+    send_account_list,
     send_init_command,
+    send_broadcast_add,
+    send_strategy_list,
+    send_broadcast_list,
+    send_create_account,
+    send_delete_account,
+    send_rename_account,
+    send_toggle_account,
+    send_switch_strategy,
+    send_broadcast_remove,
 )

@@ -358,7 +358,7 @@ def render_portfolio_image(report: PortfolioRiskReport) -> Image.Image:
     sizes = [report.industry_weights[k] * 100 for k in labels]
     colors = _set3_colors(len(sizes))
     if sizes:
-        _wedges, _texts, autotexts = ax_pie.pie(
+        pie_out = ax_pie.pie(
             sizes,
             labels=None,
             autopct=lambda p: f"{p:.0f}%" if p >= 5 else "",
@@ -366,6 +366,7 @@ def render_portfolio_image(report: PortfolioRiskReport) -> Image.Image:
             textprops={"color": FG_COLOR, "fontsize": 10},
             startangle=90,
         )
+        autotexts = pie_out[2] if len(pie_out) == 3 else ()
         for t in autotexts:
             t.set_color("#111111")
             t.set_fontsize(9)

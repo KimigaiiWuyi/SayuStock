@@ -22,8 +22,10 @@ from ..utils.indicators import (
     calc_boll,
     calc_macd,
     calc_atr_pct,
+    calc_rel_volume,
     calc_volume_ratio,
     compute_indicators,
+    calc_close_percentile,
     calc_support_resistance,
 )
 
@@ -40,6 +42,8 @@ __all__ = [
     "calc_rsi",
     "calc_support_resistance",
     "calc_volume_ratio",
+    "calc_rel_volume",
+    "calc_close_percentile",
     "compute_indicators",
     "klines_to_df",
     "klines_to_df_mins",

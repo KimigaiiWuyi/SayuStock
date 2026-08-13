@@ -212,7 +212,9 @@ def _as_float(value: object, default: float = 0.0) -> float:
 def _series_from_value(value: object) -> pd.Series:
     if isinstance(value, pd.Series):
         return value
-    return pd.Series(value)
+    if isinstance(value, (list, tuple, pd.Index)):
+        return pd.Series(list(value))
+    return pd.Series([value])
 
 
 def _numeric_series(value: object, *, fill_value: float | None = None) -> pd.Series:
@@ -452,7 +454,10 @@ def _dodge_end_label_offsets(
         return [(x_base_pts, 0.0)]
 
     renderer = _ensure_axes_renderer(ax)
-    dpi = float(ax.figure.dpi)
+    fig = ax.figure
+    if fig is None:
+        return [(x_base_pts, 0.0) for _ in range(n)]
+    dpi = float(fig.dpi)
     px_per_pt = dpi / 72.0
 
     if heights_pts is None:
@@ -566,7 +571,10 @@ def _dodge_label_point_offsets(
         return [list(preferred_offsets)[0]]
 
     renderer = _ensure_axes_renderer(ax)
-    dpi = float(ax.figure.dpi)
+    fig = ax.figure
+    if fig is None:
+        return [list(preferred_offsets)[0] for _ in range(n)]
+    dpi = float(fig.dpi)
     px_per_pt = dpi / 72.0
     margin_px = max(min_sep_pts, 4.0) * px_per_pt
 

@@ -85,8 +85,7 @@ class TradeExecutor(ABC):
     async def record_trade(
         self,
         *,
-        group_id: str,
-        bot_id: str,
+        account_id: int,
         stock_code: str,
         stock_name: str,
         secid: str,
@@ -108,8 +107,7 @@ class TradeExecutor(ABC):
     async def update_position(
         self,
         *,
-        group_id: str,
-        bot_id: str,
+        account_id: int,
         stock_code: str,
         stock_name: str,
         secid: str,
@@ -199,8 +197,7 @@ class PaperTradeExecutor(TradeExecutor):
     async def record_trade(
         self,
         *,
-        group_id: str,
-        bot_id: str,
+        account_id: int,
         stock_code: str,
         stock_name: str,
         secid: str,
@@ -243,7 +240,7 @@ class PaperTradeExecutor(TradeExecutor):
             except Exception:
                 today_cn = _dt.date.today()
             try:
-                locked_qty: int = await db.PaperTradeRepo.locked_qty_today(group_id, bot_id, stock_code, today=today_cn)
+                locked_qty: int = await db.PaperTradeRepo.locked_qty_today(account_id, stock_code, today=today_cn)
             except Exception:
                 locked_qty = 0  # 防御：DB 异常不要阻塞 sell，让撮合层兜底
             if locked_qty > 0:
@@ -258,8 +255,7 @@ class PaperTradeExecutor(TradeExecutor):
 
         try:
             t = await db.PaperTradeRepo.append_with_cash_update(
-                group_id,
-                bot_id,
+                account_id,
                 stock_code=stock_code,
                 stock_name=stock_name,
                 secid=secid,
@@ -293,8 +289,7 @@ class PaperTradeExecutor(TradeExecutor):
     async def update_position(
         self,
         *,
-        group_id: str,
-        bot_id: str,
+        account_id: int,
         stock_code: str,
         stock_name: str,
         secid: str,
@@ -303,8 +298,7 @@ class PaperTradeExecutor(TradeExecutor):
         last_quote_price: float = 0.0,
     ) -> int:
         p = await db.PaperPositionRepo.upsert(
-            group_id,
-            bot_id,
+            account_id,
             stock_code=stock_code,
             stock_name=stock_name,
             secid=secid,
@@ -348,8 +342,7 @@ class LiveTradeExecutor(TradeExecutor):
     async def record_trade(
         self,
         *,
-        group_id: str,
-        bot_id: str,
+        account_id: int,
         stock_code: str,
         stock_name: str,
         secid: str,
@@ -369,8 +362,7 @@ class LiveTradeExecutor(TradeExecutor):
     async def update_position(
         self,
         *,
-        group_id: str,
-        bot_id: str,
+        account_id: int,
         stock_code: str,
         stock_name: str,
         secid: str,

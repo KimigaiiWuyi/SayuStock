@@ -117,7 +117,12 @@ def _frame_column(df: pd.DataFrame, key: str) -> pd.Series:
 
 
 def _numeric_series(data: object, *, fill_value: float | None = None) -> pd.Series:
-    source = data if isinstance(data, pd.Series) else pd.Series(data)
+    if isinstance(data, pd.Series):
+        source = data
+    elif isinstance(data, (list, tuple, pd.Index)):
+        source = pd.Series(list(data))
+    else:
+        source = pd.Series([data])
     series = pd.to_numeric(source, errors="coerce")
     assert isinstance(series, pd.Series), "to_numeric(Series) 恒返回 Series"
     if fill_value is None:

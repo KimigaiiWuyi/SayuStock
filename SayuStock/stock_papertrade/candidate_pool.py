@@ -165,16 +165,16 @@ async def filter_overheated(codes: List[str], *, gain_ratio: float = OVERHEATED_
 # ============================================================
 # 多路源
 # ============================================================
-async def _from_position(group_id: str, bot_id: str) -> List[str]:
-    return await db.PaperPositionRepo.list_codes(group_id, bot_id)
+async def _from_position(account_id: int) -> List[str]:
+    return await db.PaperPositionRepo.list_codes(account_id)
 
 
-async def _from_watchlist(group_id: str, bot_id: str) -> List[str]:
-    return await db.PaperWatchlistRepo.list_codes(group_id, bot_id)
+async def _from_watchlist(account_id: int) -> List[str]:
+    return await db.PaperWatchlistRepo.list_codes(account_id)
 
 
-async def _from_agent_pool(group_id: str, bot_id: str) -> List[str]:
-    return await db.PaperAgentPoolRepo.list_codes(group_id, bot_id)
+async def _from_agent_pool(account_id: int) -> List[str]:
+    return await db.PaperAgentPoolRepo.list_codes(account_id)
 
 
 def _valid_a_share_code(code: str | None) -> bool:
@@ -523,8 +523,7 @@ async def _from_news_extract_tickers(limit: int = 50) -> List[str]:
 # 主入口
 # ============================================================
 async def build_candidate_pool(
-    group_id: str,
-    bot_id: str,
+    account_id: int,
     *,
     include_sector: bool = True,
     include_hotmap: bool = True,
@@ -554,21 +553,21 @@ async def build_candidate_pool(
 
     # P0: 持仓
     try:
-        pos_codes = await _from_position(group_id, bot_id)
+        pos_codes = await _from_position(account_id)
         _add(pos_codes, SOURCE_CAPS["position"])
     except Exception as e:
         logger.debug(f"[PaperTrade] position 源失败: {e}")
 
     # P0: 群友关注
     try:
-        wl_codes = await _from_watchlist(group_id, bot_id)
+        wl_codes = await _from_watchlist(account_id)
         _add(wl_codes, SOURCE_CAPS["watchlist"])
     except Exception as e:
         logger.debug(f"[PaperTrade] watchlist 源失败: {e}")
 
     # P1: AI 内部池
     try:
-        ap_codes = await _from_agent_pool(group_id, bot_id)
+        ap_codes = await _from_agent_pool(account_id)
         _add(ap_codes, SOURCE_CAPS["agent_pool"])
     except Exception as e:
         logger.debug(f"[PaperTrade] agent_pool 源失败: {e}")
@@ -621,8 +620,7 @@ async def build_candidate_pool(
 # 决策后更新 AI 内部池
 # ============================================================
 async def post_decision_pool_update(
-    group_id: str,
-    bot_id: str,
+    account_id: int,
     decisions: List[dict],
 ) -> None:
     """根据本次决策结果维护 agent_pool（决策 → 池 的反馈闭环）。
@@ -646,8 +644,7 @@ async def post_decision_pool_update(
         try:
             if action == "buy":
                 await db.PaperAgentPoolRepo.upsert(
-                    group_id,
-                    bot_id,
+                    account_id,
                     stock_code=code,
                     stock_name=d.get("name", ""),
                     secid=secid,
@@ -657,7 +654,7 @@ async def post_decision_pool_update(
                     expires_at=now + timedelta(days=7),
                 )
             elif action == "sell":
-                await db.PaperAgentPoolRepo.remove(group_id, bot_id, code)
+                await db.PaperAgentPoolRepo.remove(account_id, code)
             # hold：不动池（见 docstring）
         except Exception as e:
             logger.debug(f"[PaperTrade] post_decision_pool_update {code} 失败: {e}")
