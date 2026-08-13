@@ -739,7 +739,8 @@ def register_papertrade_agents() -> None:
             ],
         )
     )
-    from SayuStock.stock_papertrade.strategies import decision_profiles
+    # nest 加载下顶级 SayuStock 指向外层空包，包内必须相对导入
+    from ..stock_papertrade.strategies import decision_profiles
 
     for strat in decision_profiles():
         extra = strat.agent_prompt_extra()

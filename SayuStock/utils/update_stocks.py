@@ -29,19 +29,29 @@ from datetime import datetime
 
 import pandas as pd
 
-# 作为脚本直接运行时补齐 import 路径
-# .../plugins/SayuStock/SayuStock/utils/update_stocks.py
-_SCRIPT_DIR = Path(__file__).resolve().parent
-_PLUGIN_ROOT = _SCRIPT_DIR.parents[2]  # .../plugins/SayuStock （import SayuStock）
-_REPO_ROOT = _SCRIPT_DIR.parents[5]  # .../gsuid_core 仓库根（import gsuid_core）
-for _p in (_PLUGIN_ROOT, _REPO_ROOT):
-    _s = str(_p)
-    if _s not in sys.path:
-        sys.path.insert(0, _s)
+# 直跑脚本时补路径并以包身份重入，保证下面只能走相对导入。
+# 本文件：.../plugins/SayuStock/SayuStock/utils/update_stocks.py
+if not __package__:
+    _script_dir = Path(__file__).resolve().parent
+    _plugin_root = _script_dir.parents[1]  # .../plugins/SayuStock（内层 SayuStock 包的父目录）
+    _core_root = next(
+        (p for p in _script_dir.parents if (p / "gsuid_core" / "__init__.py").is_file()),
+        None,
+    )
+    for _p in (_plugin_root, _core_root):
+        if _p is not None:
+            _s = str(_p)
+            if _s not in sys.path:
+                sys.path.insert(0, _s)
+    import runpy
+
+    runpy.run_module("SayuStock.utils.update_stocks", run_name="__main__")
+    raise SystemExit(0)
 
 from gsuid_core.logger import logger  # noqa: E402
-from SayuStock.utils.constant import market_dict  # noqa: E402
-from SayuStock.utils.eastmoney import EASTMONEY_REQUESTER  # noqa: E402
+
+from .constant import market_dict
+from .eastmoney import EASTMONEY_REQUESTER
 
 CLIST_URL = "https://push2.eastmoney.com/api/qt/clist/get"
 # 代码 / 名称 / 市场标记 / 所属行业
