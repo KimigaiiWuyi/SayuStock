@@ -22,6 +22,11 @@ def get_ICON() -> Image.Image:
     return Image.open(Path(__file__).parents[2] / "ICON.png")
 
 
+def is_plotly_html(html: str) -> bool:
+    """plotly.write_html 的页面里有 .plot-container；pytakumi 静态页没有。"""
+    return "plot-container" in html or "Plotly" in html
+
+
 async def render_image_by_pw(html_path: Path, w: int, h: int, _scale: int) -> Union[str, bytes]:
     if isinstance(html_path, str):
         return html_path

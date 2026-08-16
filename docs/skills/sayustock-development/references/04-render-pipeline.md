@@ -131,7 +131,7 @@ ai_return(render_text.kline_text(series, sector))
 - 缓存键：`utils/stock/utils.get_file(market, suffix, sector, special_cache_key)`  
 - 目录：`DATA_PATH`（`{res}/SayuStock/data`）  
 - TTL：`STOCK_CONFIG.mapcloud_refresh_minutes`（默认 3 分钟）  
-- Kronos：`@async_file_cache(minutes=150)` 缓 HTML  
+- Kronos：`@async_file_cache(minutes=150)` 缓 PNG  
 
 **铁律**：`ai_return` / `_emit_ai_text` 必须在 **「缓存命中直接 return 文件」之前**。  
 命中缓存时绘图函数体不执行——若文字写在函数体里，热缓存时 AI 零输入。

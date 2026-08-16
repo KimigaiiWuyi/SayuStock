@@ -201,7 +201,7 @@ def test_emit_ai_text_dispatch_matches_chart_kinds(captured: list[str]) -> None:
 
 
 def test_kronos_ai_text_sent_on_cold_and_warm_cache(monkeypatch: pytest.MonkeyPatch) -> None:
-    import plotly.graph_objects as go
+    from PIL import Image
 
     from SayuStock.stock_ai import draw_ai_map as dm
 
@@ -214,19 +214,15 @@ def test_kronos_ai_text_sent_on_cold_and_warm_cache(monkeypatch: pytest.MonkeyPa
     async def fake_code_id(market):  # noqa: ANN001, ARG001
         return ("1.600000", "预测缓存测试股", "股票")
 
-    async def fake_pw(fig, w, h, s):  # noqa: ANN001, ARG001
-        return b"PNG"
-
     monkeypatch.setattr(dm, "get_market", lambda: FakeMarket())
     monkeypatch.setattr(dm, "get_code_id", fake_code_id)
     monkeypatch.setattr(dm, "get_full_security_code", lambda c: "1.600000")
-    monkeypatch.setattr(dm, "gdf", lambda df, s: go.Figure(data=[go.Scatter(y=[1, 2, 3])]))
-    monkeypatch.setattr(dm, "render_image_by_pw", fake_pw)
+    monkeypatch.setattr(dm, "gdf", lambda df, s: Image.new("RGB", (8, 8), (20, 20, 20)))
 
     got: list[str] = []
     monkeypatch.setattr(dm, "ai_return", lambda t: got.append(t))
 
-    cache = get_file("1.600000", "html", "single-stock-ai", None)
+    cache = get_file("1.600000", "png", "single-stock-ai", None)
     cache.unlink(missing_ok=True)
 
     class FakeBot:

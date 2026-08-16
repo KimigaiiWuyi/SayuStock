@@ -11,8 +11,12 @@ from .chart_base import (
     FG_COLOR,
     UP_COLOR,
     DOWN_COLOR,
+    FONT_W_MED,
     GRID_COLOR,
     MPL_COLORS,
+    FONT_W_BOLD,
+    FONT_W_LIGHT,
+    FONT_W_SEMIBOLD,
     Axes,
     Pane,
     Chart,
@@ -36,6 +40,7 @@ from .chart_base import (
     _axes_top_to_bottom,
     _apply_detail_legend,
     _draw_end_point_labels,
+    _paint_chart_background,
     _apply_intraday_10min_ticks,
     _format_detail_legend_label,
 )
@@ -98,14 +103,13 @@ def _draw_single_stock_bg_watermark(ax: Axes, stock: SingleStockRenderData) -> N
         "transform": ax.transAxes,
         "ha": "center",
         "va": "center",
-        "fontweight": "bold",
         "zorder": 0.15,
         "clip_on": True,
         "path_effects": stroke,
     }
-    # 半透明：名称稍淡，现价+涨跌更醒目但仍透出网格
-    ax.text(0.5, y1, line1, fontsize=40, color=FG_COLOR, alpha=0.42, **base)
-    ax.text(0.5, y2, line2, fontsize=58, color=accent, alpha=0.50, **base)
+    # 半透明水印：名称用细字、现价用半粗，层次更清楚
+    ax.text(0.5, y1, line1, fontsize=40, color=FG_COLOR, alpha=0.42, fontweight=FONT_W_LIGHT, **base)
+    ax.text(0.5, y2, line2, fontsize=58, color=accent, alpha=0.50, fontweight=FONT_W_SEMIBOLD, **base)
 
 
 async def to_single_fig(series: IntradaySeries) -> DrawResult:
@@ -167,6 +171,7 @@ def draw_single_stock_chart(series: IntradaySeries) -> DrawResult:
 
     fig: Figure = chart.figure
     fig.set_facecolor(BG_COLOR)
+    _paint_chart_background(fig)
     axes = _axes_top_to_bottom(fig)
     for index, ax in enumerate(axes):
         _style_axis(ax)
@@ -234,6 +239,7 @@ def draw_single_stock_chart(series: IntradaySeries) -> DrawResult:
             legend.get_frame().set_edgecolor(GRID_COLOR)
             for text in legend.get_texts():
                 text.set_color(FG_COLOR)
+                text.set_fontweight(FONT_W_MED)
 
     if axes:
         # 背景水印：主图区大字标的信息；曲线提到更高 zorder，避免被挡住
@@ -242,8 +248,16 @@ def draw_single_stock_chart(series: IntradaySeries) -> DrawResult:
             line.set_zorder(4)
         for collection in list(axes[0].collections):
             collection.set_zorder(4)
-        axes[0].set_title(stock.title_text, color=title_color, fontsize=24, fontweight="bold", pad=24)
-    fig.text(0.016, 0.005, "数据来源：东方财富 | SayuStock", color=FG_COLOR, fontsize=9, alpha=0.65)
+        axes[0].set_title(stock.title_text, color=title_color, fontsize=24, fontweight=FONT_W_BOLD, pad=24)
+    fig.text(
+        0.016,
+        0.005,
+        "数据来源：东方财富 | SayuStock",
+        color=FG_COLOR,
+        fontsize=9,
+        alpha=0.65,
+        fontweight=FONT_W_LIGHT,
+    )
     fig.subplots_adjust(left=0.045, right=0.988, top=0.88, bottom=0.10, hspace=0.04)
     return _fig_to_image(fig)
 
@@ -366,6 +380,7 @@ def draw_multi_stock_chart(series_list: list[IntradaySeries]) -> DrawResult:
 
     fig: Figure = chart.figure
     fig.set_facecolor(BG_COLOR)
+    _paint_chart_background(fig)
     axes = _axes_top_to_bottom(fig)
     for ax_index, ax in enumerate(axes):
         _style_axis(ax)
@@ -466,15 +481,24 @@ def draw_multi_stock_chart(series_list: list[IntradaySeries]) -> DrawResult:
                 volume_legend.get_frame().set_edgecolor(GRID_COLOR)
                 for text in volume_legend.get_texts():
                     text.set_color(FG_COLOR)
+                    text.set_fontweight(FONT_W_MED)
 
     if axes:
         axes[0].set_title(
             "分时涨跌幅对比",
             color=FG_COLOR,
             fontsize=22,
-            fontweight="bold",
+            fontweight=FONT_W_BOLD,
             pad=24,
         )
-    fig.text(0.016, 0.005, "数据来源：东方财富 | SayuStock", color=FG_COLOR, fontsize=9, alpha=0.65)
+    fig.text(
+        0.016,
+        0.005,
+        "数据来源：东方财富 | SayuStock",
+        color=FG_COLOR,
+        fontsize=9,
+        alpha=0.65,
+        fontweight=FONT_W_LIGHT,
+    )
     fig.subplots_adjust(left=0.045, right=0.965, top=0.855, bottom=0.10, hspace=0.04)
     return _fig_to_image(fig)

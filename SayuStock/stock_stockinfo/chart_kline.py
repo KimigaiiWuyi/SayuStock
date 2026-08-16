@@ -12,8 +12,13 @@ from .chart_base import (
     UP_COLOR,
     AXIS_COLOR,
     DOWN_COLOR,
+    FONT_W_MED,
     GRID_COLOR,
+    FONT_W_BOLD,
+    FONT_W_LIGHT,
+    FONT_W_SEMIBOLD,
     Pane,
+    Bands,
     Chart,
     HLine,
     Figure,
@@ -37,6 +42,7 @@ from .chart_base import (
     _apply_month_ticks,
     _axes_top_to_bottom,
     _format_percent_axis,
+    _paint_chart_background,
     _draw_dodged_text_labels,
     _apply_intraday_kline_ticks,
     _format_precise_percent_axis,
@@ -45,7 +51,7 @@ from .render_data import build_kline_render_data
 from ..utils.constant import ErroText
 from ..utils.market.models import KlineSeries
 
-# BOLL 带的填充色（与 mplchart 自带 BBANDS 的观感一致：短期红、中期紫）
+# BOLL 带：短期淡红、中期淡紫（Bands 填充 alpha=0.2，线色略实才能在暗底上看清）
 BOLL20_COLOR = "#c0392b"
 BOLL60_COLOR = "#8e7cc3"
 
@@ -146,12 +152,14 @@ def draw_single_kline_chart(series: KlineSeries, sp: str | None = None) -> DrawR
             "bgcolor": BG_COLOR,
             "text": FG_COLOR,
             "grid": GRID_COLOR,
-            # 指定两条 BOLL 带的填充色（键为 BOLL.label），否则会走颜色循环、
-            # 随着主图线条增减而漂移
-            "BOLL(20,2.0)": BOLL20_COLOR,
-            "BOLL(60,3.0)": BOLL60_COLOR,
         },
     )
+    # 新版 mplchart 忽略 color_scheme，必须把颜色钉在 Bands(color=) 上。
+    boll20: object = BOLL(20, 2.0)
+    boll60: object = BOLL(60, 3.0)
+    if Bands is not None:
+        boll20 = Bands(boll20, color=BOLL20_COLOR)
+        boll60 = Bands(boll60, color=BOLL60_COLOR)
     chart.plot(
         Candlesticks(width=0.78, alpha=0.95, colorup=UP_COLOR, colordn=DOWN_COLOR),
         Volume(width=0.76, alpha=0.42, colorup=UP_COLOR, colordn=DOWN_COLOR),
@@ -161,8 +169,8 @@ def draw_single_kline_chart(series: KlineSeries, sp: str | None = None) -> DrawR
         # MA20（月线）：AI 的多头排列 / close_above_ma20 判断都基于它，图上必须画出来。
         # 它同时就是 BOLL(20,2) 的中轨，所以 BOLL 带不再重复画中轨。
         SMA(20),
-        BOLL(20, 2.0),
-        BOLL(60, 3.0),
+        boll20,
+        boll60,
         LinePlot(lambda frame: frame["bbi"], label="BBI", color="#ffd700", width=2.2),
         Pane("below", height_ratio=0.22),
         HLine(0, color=GRID_COLOR, linestyle="--"),
@@ -203,6 +211,7 @@ def draw_single_kline_chart(series: KlineSeries, sp: str | None = None) -> DrawR
 
     fig: Figure = chart.figure
     fig.set_facecolor(BG_COLOR)
+    _paint_chart_background(fig)
     axes = _axes_top_to_bottom(fig)
     for index, ax in enumerate(axes):
         _style_axis(ax)
@@ -317,7 +326,7 @@ def draw_single_kline_chart(series: KlineSeries, sp: str | None = None) -> DrawR
                 transform=ax.transAxes,
                 color=UP_COLOR,
                 fontsize=12,
-                fontweight="bold",
+                fontweight=FONT_W_SEMIBOLD,
                 ha="center",
                 va="center",
                 bbox={"facecolor": BG_COLOR, "edgecolor": UP_COLOR, "alpha": 0.70, "pad": 3},
@@ -329,7 +338,7 @@ def draw_single_kline_chart(series: KlineSeries, sp: str | None = None) -> DrawR
                 transform=ax.transAxes,
                 color=DOWN_COLOR,
                 fontsize=12,
-                fontweight="bold",
+                fontweight=FONT_W_SEMIBOLD,
                 ha="center",
                 va="center",
                 bbox={"facecolor": BG_COLOR, "edgecolor": DOWN_COLOR, "alpha": 0.70, "pad": 3},
@@ -399,9 +408,18 @@ def draw_single_kline_chart(series: KlineSeries, sp: str | None = None) -> DrawR
             legend.get_frame().set_edgecolor(GRID_COLOR)
             for text in legend.get_texts():
                 text.set_color(FG_COLOR)
+                text.set_fontweight(FONT_W_MED)
 
     if axes:
-        axes[0].set_title(kline_title, color=FG_COLOR, fontsize=24, fontweight="bold", pad=24)
-    fig.text(0.016, 0.005, "数据来源：东方财富 | SayuStock", color=FG_COLOR, fontsize=9, alpha=0.65)
+        axes[0].set_title(kline_title, color=FG_COLOR, fontsize=24, fontweight=FONT_W_BOLD, pad=24)
+    fig.text(
+        0.016,
+        0.005,
+        "数据来源：东方财富 | SayuStock",
+        color=FG_COLOR,
+        fontsize=9,
+        alpha=0.65,
+        fontweight=FONT_W_LIGHT,
+    )
     fig.subplots_adjust(left=0.045, right=0.988, top=0.885, bottom=0.10, hspace=0.055)
     return _fig_to_image(fig)

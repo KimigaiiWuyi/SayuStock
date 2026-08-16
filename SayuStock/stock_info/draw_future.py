@@ -2,6 +2,7 @@ import random
 import asyncio
 from typing import Callable, Optional
 from pathlib import Path
+from dataclasses import replace
 
 from PIL import Image
 
@@ -20,12 +21,15 @@ TEXT_PATH = Path(__file__).parent / "texture2d"
 ItemMap = dict[str, DisplayItem]
 
 
-async def __get_item(result: ItemMap, stock: str) -> None:
+async def __get_item(result: ItemMap, stock: str, display_name: str) -> None:
     await asyncio.sleep(random.uniform(0.2, 1))
     q = await get_market().quote(stock)
     if is_market_error(q):
         return
     item = from_quote(q)
+    # 全天候格子按配置表的键展示/对齐；API 名可能是「黄金/美元」对不上 XAU
+    if display_name and display_name != item.name:
+        item = replace(item, name=display_name)
     result[item.name] = item
 
 
@@ -36,7 +40,7 @@ async def _get_items(_d: dict[str, str], other_call: Optional[Callable] = None) 
         tasks.append(other_call(result))
     for name, code in _d.items():
         if code:
-            tasks.append(__get_item(result, code))
+            tasks.append(__get_item(result, code, name))
     await asyncio.gather(*tasks)
     return result
 

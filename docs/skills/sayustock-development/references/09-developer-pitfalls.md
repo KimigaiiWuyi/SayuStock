@@ -101,6 +101,26 @@ async def bar(...):
 - 未 `playwright install` → 云图截图卡住  
 - matplotlib 必须 `Agg`（`chart_base` 已设）；勿在其它入口改 interactive backend  
 - 重 CPU 绘图放 `asyncio.to_thread`，勿堵事件循环  
+- 新版 mplchart（无 `bgcolor`）：默认浅色；数据 pane 透明，底色在 `label=root`。`Chart(bgcolor=)` 由 `mplchart_compat` 转成暗色 `style`，出图前再刷 root。  
+- 新版忽略 `color_scheme`：BOLL 颜色必须 `Bands(..., color=)`，不能再靠 scheme 键。  
+- matplotlib 不要把 `MiSans VF` 放 `font.sans-serif` 第一位：VF 只注册 Regular，`fontweight` 不会换档。优先系统静态 `MiSans`（Thin–Heavy）。  
+
+Now write a test and run a quick smoke if possible. pandas might be missing from venv still.
+
+I'll write a test that:
+1. Imports Chart from compat
+2. Creates a tiny prices df
+3. Checks root facecolor is dark
+
+If mplchart/pandas missing, skip.
+
+Also verify kline import order after adding _paint_chart_background - ruff isort.
+
+And verify chart_kline has _paint_chart_background imported - I added it.
+
+Check if kline Chart() now gets style from bgcolor via compat - yes automatically.
+
+Write test/test_mplchart_background.py
 
 ## 9.11 板块 vs 个股（S-10）
 

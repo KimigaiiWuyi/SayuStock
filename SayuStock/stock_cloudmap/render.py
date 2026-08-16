@@ -26,7 +26,7 @@ from ..utils import render_text
 from .render_data import (
     build_cloudmap_render_data,
 )
-from ..utils.image import render_image_by_pw
+from ..utils.image import is_plotly_html, render_image_by_pw
 from ..utils.constant import ErroText
 from ..utils.stock.utils import get_file
 from ..utils.market.models import BoardSnapshot
@@ -110,8 +110,14 @@ async def render_html(
         minutes = int(STOCK_CONFIG.get_config("mapcloud_refresh_minutes").data)
         file_mod_time = datetime.fromtimestamp(file.stat().st_mtime)
         if datetime.now() - file_mod_time < timedelta(minutes=minutes):
-            logger.info(f"[SayuStock] html文件在{minutes}分钟内，直接返回文件数据。")
-            return file
+            try:
+                cached = file.read_text(encoding="utf-8")
+            except OSError:
+                cached = ""
+            if is_plotly_html(cached):
+                logger.info(f"[SayuStock] html文件在{minutes}分钟内，直接返回文件数据。")
+                return file
+            logger.info("[SayuStock] 缓存不是 plotly HTML，忽略并重渲。")
 
     fig = await to_fig(raw_data, market, sector, 2 if market == "大盘云图" else 1)
     if isinstance(fig, str):

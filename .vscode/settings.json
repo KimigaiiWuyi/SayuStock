@@ -9,6 +9,14 @@
       "source.fixAll.ruff": "explicit"
     }
   },
+  "[toml]": {
+    "editor.defaultFormatter": null,
+    "editor.formatOnSave": false
+  },
+  "ruff.exclude": ["**/pyproject.toml", "**/*.toml"],
+  "files.associations": {
+    "pyproject.toml": "toml"
+  },
   "python.autoComplete.extraPaths": [
     "${workspaceFolder}/../../../"
   ],

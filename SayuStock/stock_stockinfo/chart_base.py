@@ -44,6 +44,7 @@ from gsuid_core.utils.fonts.fonts import FONT_ORIGIN_PATH
 from ..utils.mplchart_compat import (  # noqa: E402
     SMA,
     Pane,
+    Bands,
     Chart,
     HLine,
     Price,
@@ -58,6 +59,7 @@ __all__ = [
     # 绘图栈（各 chart_* 从这里取，保证 Agg 后端先设好）
     "AnnotationBbox",
     "Axes",
+    "Bands",
     "BarPlot",
     "Candlesticks",
     "Chart",
@@ -90,6 +92,14 @@ __all__ = [
     "DOWN_COLOR",
     "FG_COLOR",
     "FLAT_COLOR",
+    "FONT_W_BOLD",
+    "FONT_W_DEMIBOLD",
+    "FONT_W_HEAVY",
+    "FONT_W_LIGHT",
+    "FONT_W_MED",
+    "FONT_W_REG",
+    "FONT_W_SEMIBOLD",
+    "FONT_W_THIN",
     "GRID_COLOR",
     "MPL_COLORS",
     "UP_COLOR",
@@ -116,6 +126,7 @@ __all__ = [
     "_leader_arrowprops",
     "_draw_in_thread",
     "_fig_to_image",
+    "_paint_chart_background",
     "_format_detail_legend_label",
     "_format_metric_value",
     "_format_money_axis",
@@ -147,21 +158,53 @@ FG_COLOR = "#f5f5f5"
 AXIS_COLOR = "#d8d8d8"
 GRID_COLOR = "#777777"
 FONT_CANDIDATES = ["Microsoft YaHei", "SimHei", "Arial Unicode MS", "DejaVu Sans"]
+# 对齐系统 MiSans 静态字族的 wght 档（VF 在 matplotlib 里只有 Regular 一档）
+FONT_W_THIN = 150
+FONT_W_LIGHT = 250
+FONT_W_REG = 330
+FONT_W_MED = 380
+FONT_W_DEMIBOLD = 450
+FONT_W_SEMIBOLD = 520
+FONT_W_BOLD = 630
+FONT_W_HEAVY = 700
 MPL_COLORS = ["#1f77b4", "#ff7f0e", "#2ca02c", "#d62728", "#9467bd", "#17becf", "#e377c2"]
 
 
 def _setup_mpl() -> None:
-    font_candidates = FONT_CANDIDATES
+    """注册字体：优先静态 MiSans（Thin…Heavy），勿把 VF 放第一否则字重失效。"""
     if FONT_ORIGIN_PATH.exists():
         font_manager.fontManager.addfont(str(FONT_ORIGIN_PATH))
-        core_font_name = font_manager.FontProperties(fname=str(FONT_ORIGIN_PATH)).get_name()
-        font_candidates = [core_font_name, *FONT_CANDIDATES]
-    plt.rcParams["font.sans-serif"] = font_candidates
+    families: list[str] = []
+    if any(entry.name == "MiSans" for entry in font_manager.fontManager.ttflist):
+        families.append("MiSans")
+    vf_name = None
+    if FONT_ORIGIN_PATH.exists():
+        vf_name = font_manager.FontProperties(fname=str(FONT_ORIGIN_PATH)).get_name()
+        if vf_name and vf_name not in families:
+            families.append(vf_name)
+    families.extend(FONT_CANDIDATES)
+    plt.rcParams["font.sans-serif"] = families
     plt.rcParams["font.family"] = "sans-serif"
+    plt.rcParams["font.weight"] = FONT_W_REG
     plt.rcParams["axes.unicode_minus"] = False
     plt.rcParams["figure.facecolor"] = BG_COLOR
     plt.rcParams["axes.facecolor"] = BG_COLOR
     plt.rcParams["savefig.facecolor"] = BG_COLOR
+
+
+def _paint_chart_background(fig: Figure) -> None:
+    """把 mplchart 图的可见底色刷成暗色。
+
+    新版 Canvas 里数据 pane 的 patch 是透明的，真正露出来的是 ``label=root``
+    那根轴。只 ``fig.set_facecolor`` / 只刷 pane 都会仍看到默认浅色 root。
+    """
+    fig.set_facecolor(BG_COLOR)
+    fig.patch.set_alpha(1.0)
+    for ax in fig.axes:
+        if ax.get_label() == "root":
+            ax.set_facecolor(BG_COLOR)
+            ax.patch.set_visible(True)
+            ax.patch.set_alpha(1.0)
 
 
 def _fig_to_image(fig: Figure, *, dpi: int = 180) -> Image.Image:
@@ -292,8 +335,13 @@ def _style_axis(ax: Axes, *, grid: bool = True) -> None:
     ax.set_facecolor(BG_COLOR)
     ax.tick_params(colors=AXIS_COLOR, labelsize=12)
     ax.xaxis.label.set_color(AXIS_COLOR)
+    ax.xaxis.label.set_fontweight(FONT_W_DEMIBOLD)
     ax.yaxis.label.set_color(AXIS_COLOR)
+    ax.yaxis.label.set_fontweight(FONT_W_DEMIBOLD)
     ax.title.set_color(FG_COLOR)
+    ax.title.set_fontweight(FONT_W_BOLD)
+    for lab in list(ax.get_xticklabels()) + list(ax.get_yticklabels()):
+        lab.set_fontweight(FONT_W_REG)
     for spine in ax.spines.values():
         spine.set_color(AXIS_COLOR)
         spine.set_linewidth(1.1)
@@ -377,6 +425,7 @@ def _apply_detail_legend(
             break
         text.set_text(labels[index])
         text.set_fontsize(fontsize)
+        text.set_fontweight(FONT_W_MED)
         if text_colors is not None and index < len(text_colors):
             text.set_color(text_colors[index])
         else:
@@ -776,11 +825,11 @@ def _draw_end_point_labels(
         value_color = value_color_fn(value_text) if value_color_fn is not None else FG_COLOR
         name_area = TextArea(
             name,
-            textprops={"color": color, "fontsize": fontsize, "fontweight": "bold"},
+            textprops={"color": color, "fontsize": fontsize, "fontweight": FONT_W_SEMIBOLD},
         )
         value_area = TextArea(
             value_text,
-            textprops={"color": value_color, "fontsize": fontsize, "fontweight": "bold"},
+            textprops={"color": value_color, "fontsize": fontsize, "fontweight": FONT_W_MED},
         )
         label_box = HPacker(children=[name_area, value_area], align="center", pad=0, sep=1)
         artist = AnnotationBbox(
@@ -855,7 +904,7 @@ def _draw_dodged_text_labels(
             textcoords="offset points",
             color=color,
             fontsize=fontsize,
-            fontweight="bold",
+            fontweight=FONT_W_SEMIBOLD,
             ha=ha,
             va=va,
             bbox={

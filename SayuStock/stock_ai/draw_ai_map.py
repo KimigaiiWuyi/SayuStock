@@ -1,41 +1,37 @@
 """Kronos AI 预测出图。
 
 惰性加载 Kronos（依赖 torch / HF），避免插件 import 期拖垮无 torch 的环境。
-出图结果经 ``@async_file_cache`` 写成 HTML；``ai_return`` 必须在缓存函数外调用。
+出图结果经 ``@async_file_cache`` 写成 PNG；``ai_return`` 必须在缓存函数外调用。
 """
 
 from __future__ import annotations
 
 import sys
 import asyncio
-from typing import TYPE_CHECKING, Any, Union, cast
+from typing import Any, Union, cast
 from pathlib import Path
 from contextlib import contextmanager
 from collections.abc import Iterator
 
 import numpy as np
 import pandas as pd
-import plotly.graph_objects as go
+from PIL import Image
 from tqdm import trange
 from numpy.typing import NDArray
 
 from gsuid_core.bot import Bot
 from gsuid_core.logger import logger
+from gsuid_core.utils.image.convert import convert_img
 from gsuid_core.ai_core.trigger_bridge import ai_return
 
-from ..utils.image import render_image_by_pw
 from ..utils.market import KlinePeriod, get_market, is_market_error
+from .forecast_chart import draw_forecast_chart
 from ..utils.constant import ErroText
 from ..utils.load_data import get_full_security_code
 from ..utils.stock.utils import async_file_cache
 from ..utils.market.models import KlineSeries
 from ..utils.stock.request_utils import get_code_id
 from ..utils.market.convert.dataframe import kline_to_df
-
-if TYPE_CHECKING:
-    from plotly.graph_objs import Figure as PlotlyFigure
-else:
-    PlotlyFigure = go.Figure
 
 NOW_QUEUE: list[str] = []
 
@@ -123,29 +119,23 @@ async def draw_ai_kline_with_forecast(market: str, bot: Bot) -> str | bytes:
     if isinstance(fig_or_path, str):
         return fig_or_path
     if isinstance(fig_or_path, Path):
-        return await render_image_by_pw(fig_or_path, 4000, 2000, 0)
-    # 正常路径下 @async_file_cache 会把 Figure 落成 Path；此处仅兜底
-    if isinstance(fig_or_path, go.Figure):
-        from ..utils.stock.utils import get_file
-
-        html_path_obj = get_file(sec_id, "html", "single-stock-ai", None)
-        html_path = html_path_obj if isinstance(html_path_obj, Path) else Path(str(html_path_obj))
-        fig_or_path.write_html(html_path)
-        return await render_image_by_pw(html_path, 4000, 2000, 0)
+        return await convert_img(fig_or_path)
+    if isinstance(fig_or_path, Image.Image):
+        return await convert_img(fig_or_path)
     return "出现了未知错误。"
 
 
 @async_file_cache(
     market="{sec_id}",
     sector="single-stock-ai",
-    suffix="html",
+    suffix="png",
     minutes=150,
 )
 async def _draw_ai_kline_with_forecast(
     sec_id: str,
     df: pd.DataFrame,
     series: KlineSeries,
-) -> str | Path | PlotlyFigure:
+) -> str | Path | Image.Image:
     """只负责出图（Kronos 预测约 3 分钟，故缓存 150 分钟）。
 
     **不要在这里调 ai_return**：命中缓存时装饰器直接返回文件、本函数根本不执行，
@@ -239,8 +229,8 @@ def _as_float_array(values: Any) -> NDArray[np.floating[Any]]:
     return arr
 
 
-def gdf(df: pd.DataFrame, series: KlineSeries) -> str | PlotlyFigure:
-    """运行 Kronos 回测+未来预测并返回 plotly Figure（或错误文本）。"""
+def gdf(df: pd.DataFrame, series: KlineSeries) -> str | Image.Image:
+    """运行 Kronos 回测+未来预测并返回预测图（或错误文本）。"""
     # Kronos 是 git submodule 且顶层 import torch —— 惰性导入
     with temp_sys_path(str(kronos_dir)):
         from ..Kronos.model import Kronos, KronosPredictor, KronosTokenizer
@@ -369,128 +359,26 @@ def gdf(df: pd.DataFrame, series: KlineSeries) -> str | PlotlyFigure:
     min_future = preds_future.min(axis=0)
     max_future = preds_future.max(axis=0)
 
-    fig = go.Figure()
     hist_t = work["timestamps"]
     hist_close = work["close"]
-    fig.add_trace(
-        go.Scatter(
-            x=hist_t,
-            y=hist_close,
-            mode="lines",
-            name="历史实际走势",
-            line={"color": "blue", "width": 2},
-        )
-    )
-
     backtest_t_plotting = work.iloc[backtest_start_index:]["timestamps"]
-    fig.add_trace(
-        go.Scatter(
-            x=backtest_t_plotting,
-            y=mean_backtest,
-            mode="lines",
-            name="回测-预测均值",
-            line={"color": "green", "width": 2, "dash": "dot"},
-        )
-    )
-    fig.add_trace(
-        go.Scatter(
-            x=list(backtest_t_plotting) + list(backtest_t_plotting[::-1]),
-            y=list(max_backtest) + list(min_backtest[::-1]),
-            fill="toself",
-            fillcolor="rgba(0,255,0,0.2)",
-            line={"color": "rgba(255,255,255,0)"},
-            hoverinfo="skip",
-            name="回测范围 (Min–Max)",
-        )
-    )
-
-    connected_future_t = pd.concat([hist_t.iloc[-1:], pd.Series(pred_times)])
     last_close = float(hist_close.iloc[-1])
-    connected_future_close = np.concatenate([[last_close], mean_future])
-    fig.add_trace(
-        go.Scatter(
-            x=connected_future_t,
-            y=connected_future_close,
-            mode="lines",
-            name="未来-预测均值",
-            line={"color": "orange", "width": 2},
-        )
-    )
-    fig.add_trace(
-        go.Scatter(
-            x=list(pred_times) + list(pred_times[::-1]),
-            y=list(max_future) + list(min_future[::-1]),
-            fill="toself",
-            fillcolor="rgba(255,165,0,0.3)",
-            line={"color": "rgba(255,255,255,0)"},
-            hoverinfo="skip",
-            name="未来范围 (Min–Max)",
-        )
-    )
-
     backtest_start_time = work["timestamps"].iloc[backtest_start_index]
-    fig.add_shape(
-        type="line",
-        x0=backtest_start_time,
-        x1=backtest_start_time,
-        xref="x",
-        y0=0,
-        y1=1,
-        yref="paper",
-        line={"color": "grey", "dash": "dash", "width": 2},
-    )
-    fig.add_annotation(
-        x=backtest_start_time,
-        y=1.02,
-        xref="x",
-        yref="paper",
-        text="回测开始",
-        showarrow=False,
-        align="right",
-        font={"color": "grey"},
-    )
-
     future_start_time = last_timestamp.to_pydatetime()
-    fig.add_shape(
-        type="line",
-        x0=future_start_time,
-        x1=future_start_time,
-        xref="x",
-        y0=0,
-        y1=1,
-        yref="paper",
-        line={"color": "red", "dash": "dash", "width": 2},
-    )
-    fig.add_annotation(
-        x=future_start_time,
-        y=1.02,
-        xref="x",
-        yref="paper",
-        text="预测开始",
-        showarrow=False,
-        align="left",
-        font={"color": "red"},
-    )
-
     title_name = series.symbol.name or "Price Forecast"
-    fig.update_layout(
-        title={
-            "text": f"{title_name} (含回测与预测)",
-            "font": {"size": 24},
-            "x": 0.5,
-            "xanchor": "center",
-        },
-        xaxis={"title": "时间", "title_font": {"size": 18}},
-        yaxis={"title": "价格", "title_font": {"size": 18}},
-        legend={"font": {"size": 14}},
-        template="plotly_white",
+    return draw_forecast_chart(
+        title=f"{title_name} (含回测与预测)",
+        hist_t=list(hist_t),
+        hist_y=hist_close.to_numpy(),
+        backtest_t=list(backtest_t_plotting),
+        backtest_mean=mean_backtest,
+        backtest_min=min_backtest,
+        backtest_max=max_backtest,
+        future_t=list(pred_times),
+        future_mean=mean_future,
+        future_min=min_future,
+        future_max=max_future,
+        last_close=last_close,
+        backtest_start=backtest_start_time,
+        future_start=future_start_time,
     )
-    fig.update_xaxes(
-        rangeslider_visible=False,
-        tickformat="%Y-%m-%d %H:%M",
-        rangebreaks=[
-            {"bounds": ["sat", "mon"]},
-            {"bounds": [15.0, 9.5], "pattern": "hour"},
-        ],
-    )
-    return fig

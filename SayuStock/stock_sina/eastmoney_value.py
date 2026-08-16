@@ -11,12 +11,10 @@ from PIL import Image
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt  # noqa: E402
-from matplotlib import font_manager  # noqa: E402
 from matplotlib.axes import Axes  # noqa: E402
 from matplotlib.figure import Figure  # noqa: E402
 
 from gsuid_core.logger import logger
-from gsuid_core.utils.fonts.fonts import FONT_ORIGIN_PATH
 from gsuid_core.utils.image.convert import convert_img
 from gsuid_core.ai_core.trigger_bridge import ai_return
 
@@ -27,9 +25,13 @@ from ..utils.eastmoney import (
 )
 from ..utils.mplchart_compat import Chart, Price  # noqa: E402
 from ..stock_stockinfo.chart_base import (  # noqa: E402
+    FONT_W_REG,
+    FONT_W_DEMIBOLD,
+    _setup_mpl,
     _pct_change,
     _apply_detail_legend,
     _draw_end_point_labels,
+    _paint_chart_background,
     _draw_dodged_text_labels,
     _format_detail_legend_label,
 )
@@ -50,30 +52,19 @@ AXIS_COLOR = "#d8d8d8"
 GRID_COLOR = "#777777"
 UP_COLOR = "#e74c3c"
 DOWN_COLOR = "#00b050"
-FONT_CANDIDATES = ["Microsoft YaHei", "SimHei", "Arial Unicode MS", "DejaVu Sans"]
 MPL_COLORS = ["#1f77b4", "#ff7f0e", "#2ca02c", "#d62728", "#9467bd", "#17becf", "#e377c2"]
-
-
-def _setup_mpl() -> None:
-    font_candidates = FONT_CANDIDATES
-    if FONT_ORIGIN_PATH.exists():
-        font_manager.fontManager.addfont(str(FONT_ORIGIN_PATH))
-        core_font_name = font_manager.FontProperties(fname=str(FONT_ORIGIN_PATH)).get_name()
-        font_candidates = [core_font_name, *FONT_CANDIDATES]
-    plt.rcParams["font.sans-serif"] = font_candidates
-    plt.rcParams["font.family"] = "sans-serif"
-    plt.rcParams["axes.unicode_minus"] = False
-    plt.rcParams["figure.facecolor"] = BG_COLOR
-    plt.rcParams["axes.facecolor"] = BG_COLOR
-    plt.rcParams["savefig.facecolor"] = BG_COLOR
 
 
 def _style_axis(ax: Axes) -> None:
     ax.set_facecolor(BG_COLOR)
     ax.tick_params(colors=AXIS_COLOR, labelsize=12)
     ax.xaxis.label.set_color(AXIS_COLOR)
+    ax.xaxis.label.set_fontweight(FONT_W_DEMIBOLD)
     ax.yaxis.label.set_color(AXIS_COLOR)
+    ax.yaxis.label.set_fontweight(FONT_W_DEMIBOLD)
     ax.title.set_color(FG_COLOR)
+    for lab in list(ax.get_xticklabels()) + list(ax.get_yticklabels()):
+        lab.set_fontweight(FONT_W_REG)
     for spine in ax.spines.values():
         spine.set_color(AXIS_COLOR)
         spine.set_linewidth(1.1)
@@ -363,6 +354,7 @@ def draw_value_compare_chart(
 
     fig: Figure = chart.figure
     fig.set_facecolor(BG_COLOR)
+    _paint_chart_background(fig)
     fig.subplots_adjust(left=0.06, right=0.965, top=0.9, bottom=0.16)
     ax: Axes = chart.main_axes()
     _style_axis(ax)

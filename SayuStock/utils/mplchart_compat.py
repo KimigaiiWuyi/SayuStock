@@ -3,7 +3,9 @@
 旧版（如 0.0.37）与新版（如 0.0.46+）有多处 API 差异：
 
 - ``Price``：旧版在 ``mplchart.primitives`` 中；新版已移除，改用 ``LinePlot`` 画单列。
-- ``Chart(bgcolor=...)``：新版构造器不再接受 ``bgcolor``（背景色改走 matplotlib rc / style）。
+- ``Chart(bgcolor=...)``：新版构造器不再接受 ``bgcolor``，且 ``color_scheme`` 被忽略。
+  新版默认 ``style="mplchart"`` 是浅色；数据 pane 的 patch 透明，真正底色在
+  ``label="root"`` 的轴上。兼容层把 ``bgcolor`` 转成暗色 ``style`` spec。
 - ``chart.add_legends()`` / ``chart.main_axes()``：新版迁到 ``chart.canvas`` 上。
 
 业务代码统一从本模块导入 ``Chart`` / ``Price`` 等符号，即可同时跑通两套版本。
@@ -26,11 +28,15 @@ from mplchart.primitives import (
     Candlesticks,
 )
 
+# 新版才有 Bands；旧版靠 autoplot + color_scheme
+Bands = cast("type[Any] | None", getattr(_mpl_primitives, "Bands", None))
+
 # getattr：新版 stubs/包里可能没有 Price，避免 reportAttributeAccessIssue
 _NativePrice = cast("type[LinePlot] | None", getattr(_mpl_primitives, "Price", None))
 
 
 __all__ = [
+    "Bands",
     "BarPlot",
     "Candlesticks",
     "Chart",
@@ -41,6 +47,7 @@ __all__ = [
     "Price",
     "SMA",
     "Volume",
+    "dark_style",
 ]
 
 
@@ -66,6 +73,30 @@ Price: type[LinePlot] = _NativePrice if _NativePrice is not None else _PriceComp
 _CHART_INIT_PARAMS = inspect.signature(_MplChart.__init__).parameters
 
 
+def dark_style(bgcolor: str) -> dict[str, Any]:
+    """新版 ``Chart(style=...)`` 用的暗色 spec，对齐旧 ``bgcolor``。"""
+    return {
+        "stylesheet": "dark_background",
+        "rc": {
+            "figure.facecolor": bgcolor,
+            "axes.facecolor": bgcolor,
+            "savefig.facecolor": bgcolor,
+            "savefig.edgecolor": bgcolor,
+            "text.color": "#f5f5f5",
+            "axes.labelcolor": "#d8d8d8",
+            "xtick.color": "#d8d8d8",
+            "ytick.color": "#d8d8d8",
+            "axes.edgecolor": "#d8d8d8",
+            "grid.color": "#777777",
+            "axes.grid": True,
+            "grid.alpha": 0.36,
+        },
+        "settings": {
+            "yaxis.right": True,
+        },
+    }
+
+
 class Chart(_MplChart):
     """兼容包装：屏蔽新旧 Chart 构造参数与辅助方法差异。"""
 
@@ -87,6 +118,10 @@ class Chart(_MplChart):
         color_scheme: Any = (),
         **extra: Any,
     ) -> None:
+        # 新版没有 bgcolor，且默认浅色主题。调用方仍传 bgcolor= 时转成 style。
+        if bgcolor is not None and "bgcolor" not in _CHART_INIT_PARAMS and style is None:
+            style = dark_style(str(bgcolor))
+
         init_kwargs: dict[str, Any] = {
             "title": title,
             "max_bars": max_bars,
