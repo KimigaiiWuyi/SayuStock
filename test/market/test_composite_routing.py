@@ -79,7 +79,10 @@ class _TagPort:
         start: date | None = None,
         end: date | None = None,
     ) -> KlineSeries | MarketError:
-        return unsupported("x", provider=self.tag)
+        _ = start, end
+        sym = await self.resolve(query)
+        assert sym is not None
+        return KlineSeries(symbol=sym, period=period, bars=(), adjusted=False)
 
     async def board(
         self,
@@ -124,6 +127,9 @@ class _TagPort:
 
 def test_is_crypto_and_vix() -> None:
     assert is_crypto_query("BTC")
+    assert is_crypto_query("btc")
+    assert not is_crypto_query("510300")
+    assert not is_crypto_query("btc 510300")
     assert is_vix_query("300VIX")
     assert not is_vix_query("600519")
 
@@ -140,6 +146,13 @@ def test_composite_routes_by_query() -> None:
         q3 = await port.quote("300VIX")
         assert not is_market_error(q3)
         assert q3.symbol.name == "vix"
+        mixed = await port.quotes(["btc", "510300"])
+        assert not is_market_error(mixed[0]) and mixed[0].symbol.name == "crypto"
+        assert not is_market_error(mixed[1]) and mixed[1].symbol.name == "equity"
+        k_btc = await port.kline("btc", KlinePeriod.D1_YEAR)
+        k_etf = await port.kline("510300", KlinePeriod.D1_YEAR)
+        assert not is_market_error(k_btc) and k_btc.symbol.exchange == "crypto"
+        assert not is_market_error(k_etf) and k_etf.symbol.exchange == "equity"
 
     asyncio.run(_run())
 

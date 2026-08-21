@@ -2,17 +2,37 @@
 
 from __future__ import annotations
 
+from datetime import datetime
+
 import pandas as pd
 
+from ..enums import KlinePeriod
 from ..models import Quote, KlineSeries, BoardSnapshot, IntradaySeries
 from ...indicators import ma, normalize_pct
+
+# 分钟/小时 K 才保留钟点；日/周/月等一律落到日历日，
+# 这样 OKX 日线（常为 UTC 0 点 = 北京 08:00）才能和 A 股日线对齐。
+_INTRADAY_KLINE_PERIODS = frozenset(
+    {
+        KlinePeriod.M5,
+        KlinePeriod.M15,
+        KlinePeriod.M30,
+        KlinePeriod.M60,
+    }
+)
+
+
+def _bar_date_label(ts: datetime, period: KlinePeriod) -> str:
+    if period in _INTRADAY_KLINE_PERIODS:
+        return ts.strftime("%Y-%m-%d %H:%M")
+    return ts.strftime("%Y-%m-%d")
 
 
 def kline_to_df(series: KlineSeries) -> pd.DataFrame:
     """英文列：date/open/high/low/close/volume/... 与 utils.kline.KLINE_COLUMNS 对齐。"""
     rows: list[dict[str, float | str]] = []
     for bar in series.bars:
-        date_s = bar.ts.strftime("%Y-%m-%d %H:%M") if (bar.ts.hour or bar.ts.minute) else bar.ts.strftime("%Y-%m-%d")
+        date_s = _bar_date_label(bar.ts, series.period)
         rows.append(
             {
                 "date": date_s,

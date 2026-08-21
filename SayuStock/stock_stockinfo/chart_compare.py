@@ -60,16 +60,16 @@ def draw_compare_chart(series_list: list[KlineSeries]) -> DrawResult:
         column_name = f"compare_{index}"
         compare_columns.append(column_name)
         compare_labels.append(item.name)
-        dates = _datetime_series(item.df["日期"])
+        dates = _datetime_series(item.df["日期"]).dt.normalize()
         values = _numeric_series(item.df["归一化"]) * 100
         closes = _numeric_series(item.df["收盘"])
         valid_mask = dates.notna() & values.notna() & closes.notna()
-        price_frames.append(
-            pd.DataFrame(
-                {column_name: np.asarray(values[valid_mask])},
-                index=pd.DatetimeIndex(np.asarray(dates[valid_mask]), name="date"),
-            )
+        frame = pd.DataFrame(
+            {column_name: np.asarray(values[valid_mask])},
+            index=pd.DatetimeIndex(np.asarray(dates[valid_mask]), name="date"),
         )
+        frame = frame.groupby(level=0).last()
+        price_frames.append(frame)
         close_vals = np.asarray(closes[valid_mask], dtype=float)
         if close_vals.size > 0:
             start_price = float(close_vals[0])
@@ -88,6 +88,8 @@ def draw_compare_chart(series_list: list[KlineSeries]) -> DrawResult:
     merged = pd.concat(price_frames, axis=1).sort_index().dropna(how="all")
     if merged.empty:
         return ErroText["notData"]
+    # 日历日对齐后，A 股周末/休市相对加密货币仍是空洞；前向填充才能连成线。
+    merged = merged.ffill()
     first_series: pd.Series = merged.iloc[:, 0].ffill().bfill()
     prices = merged.copy()
     prices["open"] = first_series

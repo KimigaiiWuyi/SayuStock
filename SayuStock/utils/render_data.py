@@ -693,8 +693,11 @@ def build_compare_render_data(series_list: List[KlineSeries]) -> CompareRenderDa
         if df.empty:
             continue
         df = df.copy()
-        df["日期"] = pd.to_datetime(df["日期"], errors="coerce")
-        df = df.dropna(subset=["日期"])
+        df["日期"] = pd.to_datetime(df["日期"], errors="coerce").dt.normalize()
+        df = df.dropna(subset=["日期"]).sort_values("日期")
+        df = df.drop_duplicates(subset=["日期"], keep="last").reset_index(drop=True)
+        if df.empty:
+            continue
         trace_name = series.symbol.display_name or f"Trace {index}"
         items.append(CompareStockItem(name=trace_name, df=df))
     if not items:
