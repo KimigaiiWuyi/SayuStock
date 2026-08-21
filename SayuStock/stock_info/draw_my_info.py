@@ -19,6 +19,17 @@ from ..utils.database.models import SsBind
 TEXT_PATH = Path(__file__).parent / "texture2d"
 
 
+def bar_labels_from_quote(q: Quote, fallback_code: str = "") -> tuple[str, str]:
+    """列表条主标题 / 小字代码。
+
+    名称走 ``SymbolRef.display_name``（带 沪深A / 港股 等后缀）；
+    代码必须用该票自己的 ``symbol.code``，不能沿用调用方误传的基金代码。
+    """
+    name = q.symbol.display_name or (q.symbol.name or "").strip()
+    code = (q.symbol.code or "").strip() or fallback_code
+    return name, code
+
+
 def draw_bar_from_quote(
     q: Quote,
     u: str,
@@ -28,8 +39,8 @@ def draw_bar_from_quote(
     hs = q.turnover_rate if q.turnover_rate is not None else 0
     p = float(q.change_pct) if q.change_pct is not None else 0.0
     now_price = q.price
-    b_title = q.symbol.name.split(" (")[0]
-    s_title = f"({u}) 换: {hs}% 额: {e_money} 价: {now_price}"
+    b_title, code = bar_labels_from_quote(q, u)
+    s_title = f"({code}) 换: {hs}% 额: {e_money} 价: {now_price}"
     if p > 0:
         bar = Image.open(TEXT_PATH / "myup.png")
         p_color = (213, 102, 102)

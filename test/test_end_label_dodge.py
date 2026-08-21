@@ -69,6 +69,7 @@ def _ensure_pkg() -> None:
     for name in (
         "SMA",
         "Pane",
+        "Bands",
         "Chart",
         "HLine",
         "Price",

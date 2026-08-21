@@ -49,7 +49,7 @@ async def draw_fund_info(fcode: Union[str, int]) -> str | bytes:
         percent = f"{d.get('ShareProportion', '')}%"
         if is_market_error(q):
             continue
-        bar = draw_bar_from_quote(q, _code[0], percent=percent)
+        bar = draw_bar_from_quote(q, q.symbol.code or share_code, percent=percent)
         all_p += float(q.change_pct) if q.change_pct is not None else 0.0
         img.paste(bar, (0, 400 + index * 110), bar)
 

@@ -109,6 +109,7 @@ __all__ = [
     "_apply_intraday_axis",
     "_apply_intraday_kline_ticks",
     "_apply_month_ticks",
+    "_hide_root_x_tick_labels",
     "_as_dict",
     "_as_dict_list",
     "_as_float",
@@ -969,6 +970,25 @@ def _intraday_tick_step_minutes(dates: pd.DatetimeIndex) -> int:
     return 30 if trading_minutes >= 12 * 60 else 10
 
 
+def _hide_root_x_tick_labels(fig: Figure) -> None:
+    """关掉 mplchart root 轴底部日期字。
+
+    root 铺满整张图，自带一套日期刻度；最下 pane 再画 HH:MM / 年月后，
+    底边会出现一行横字叠一行斜字。时间只留 pane 上那一套。
+    """
+    for ax in fig.axes:
+        if ax.get_label() == "root":
+            ax.tick_params(axis="x", which="both", labelbottom=False, labeltop=False)
+
+
+def _apply_pane_x_tick_labels(ax: Axes, positions: list[int], labels: list[str]) -> None:
+    ax.set_xticks(positions)
+    ax.set_xticklabels(labels)
+    fig = ax.figure
+    if isinstance(fig, Figure):
+        _hide_root_x_tick_labels(fig)
+
+
 def _apply_intraday_10min_ticks(ax: Axes, index: pd.Index) -> None:
     dates = _date_index_positions(index)
     if dates.empty:
@@ -990,8 +1010,9 @@ def _apply_intraday_10min_ticks(ax: Axes, index: pd.Index) -> None:
         for position in tick_positions:
             timestamp = _timestamp_from_value(dates[position])
             tick_labels.append(_format_intraday_tick_label(timestamp, base_day) if timestamp is not None else "")
-    ax.set_xticks(tick_positions)
-    ax.set_xticklabels(tick_labels)
+    _apply_pane_x_tick_labels(ax, tick_positions, tick_labels)
+    # 分时 HH:MM 很短，保持水平，避免和已关掉的 root 斜标签「看起来还在」
+    ax.tick_params(axis="x", rotation=0)
     _add_cross_midnight_marker(ax, index)
 
 
@@ -1015,8 +1036,7 @@ def _apply_month_ticks(ax: Axes, index: pd.Index) -> None:
         selected = np.linspace(0, len(tick_positions) - 1, max_ticks, dtype=int)
         tick_positions = [tick_positions[index] for index in selected]
         tick_labels = [tick_labels[index] for index in selected]
-    ax.set_xticks(tick_positions)
-    ax.set_xticklabels(tick_labels)
+    _apply_pane_x_tick_labels(ax, tick_positions, tick_labels)
 
 
 def _apply_intraday_kline_ticks(ax: Axes, index: pd.Index) -> None:
@@ -1039,8 +1059,7 @@ def _apply_intraday_kline_ticks(ax: Axes, index: pd.Index) -> None:
         selected = np.linspace(0, len(tick_positions) - 1, max_ticks, dtype=int)
         tick_positions = [tick_positions[i] for i in selected]
         tick_labels = [tick_labels[i] for i in selected]
-    ax.set_xticks(tick_positions)
-    ax.set_xticklabels(tick_labels)
+    _apply_pane_x_tick_labels(ax, tick_positions, tick_labels)
 
 
 def _axes_top_to_bottom(fig: Figure) -> list[Axes]:

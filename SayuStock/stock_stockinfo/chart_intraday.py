@@ -41,6 +41,7 @@ from .chart_base import (
     _apply_detail_legend,
     _draw_end_point_labels,
     _paint_chart_background,
+    _hide_root_x_tick_labels,
     _apply_intraday_10min_ticks,
     _format_detail_legend_label,
 )
@@ -259,6 +260,7 @@ def draw_single_stock_chart(series: IntradaySeries) -> DrawResult:
         fontweight=FONT_W_LIGHT,
     )
     fig.subplots_adjust(left=0.045, right=0.988, top=0.88, bottom=0.10, hspace=0.04)
+    _hide_root_x_tick_labels(fig)
     return _fig_to_image(fig)
 
 
@@ -501,4 +503,5 @@ def draw_multi_stock_chart(series_list: list[IntradaySeries]) -> DrawResult:
         fontweight=FONT_W_LIGHT,
     )
     fig.subplots_adjust(left=0.045, right=0.965, top=0.855, bottom=0.10, hspace=0.04)
+    _hide_root_x_tick_labels(fig)
     return _fig_to_image(fig)

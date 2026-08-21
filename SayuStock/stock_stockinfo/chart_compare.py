@@ -33,6 +33,7 @@ from .chart_base import (
     _draw_end_point_labels,
     _paint_chart_background,
     _draw_dodged_text_labels,
+    _hide_root_x_tick_labels,
     _format_detail_legend_label,
 )
 from .render_data import build_compare_render_data
@@ -313,4 +314,5 @@ def draw_compare_chart(series_list: list[KlineSeries]) -> DrawResult:
         alpha=0.65,
         fontweight=FONT_W_LIGHT,
     )
+    _hide_root_x_tick_labels(fig)
     return _fig_to_image(fig)

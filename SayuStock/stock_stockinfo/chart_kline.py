@@ -44,6 +44,7 @@ from .chart_base import (
     _format_percent_axis,
     _paint_chart_background,
     _draw_dodged_text_labels,
+    _hide_root_x_tick_labels,
     _apply_intraday_kline_ticks,
     _format_precise_percent_axis,
 )
@@ -422,4 +423,5 @@ def draw_single_kline_chart(series: KlineSeries, sp: str | None = None) -> DrawR
         fontweight=FONT_W_LIGHT,
     )
     fig.subplots_adjust(left=0.045, right=0.988, top=0.885, bottom=0.10, hspace=0.055)
+    _hide_root_x_tick_labels(fig)
     return _fig_to_image(fig)

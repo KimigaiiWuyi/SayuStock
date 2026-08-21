@@ -57,3 +57,51 @@ def test_chart_bgcolor_paints_root_dark() -> None:
     import matplotlib.pyplot as plt
 
     plt.close(fig)
+
+
+def _visible_tick_texts(ax: object) -> list[str]:
+    labels = getattr(ax, "get_xticklabels", lambda: [])()
+    texts: list[str] = []
+    for lab in labels:
+        text = str(lab.get_text() or "").strip()
+        if text and bool(lab.get_visible()):
+            texts.append(text)
+    return texts
+
+
+def test_intraday_ticks_keep_one_time_label_layer() -> None:
+    """pane 上有时间；root 上不再叠一套斜着的日期。"""
+    import matplotlib.pyplot as plt
+
+    from SayuStock.utils.mplchart_compat import Pane, Price
+    from SayuStock.stock_stockinfo.chart_base import (
+        _axes_top_to_bottom,
+        _hide_root_x_tick_labels,
+        _apply_intraday_10min_ticks,
+    )
+
+    idx = pd.date_range("2026-08-21 09:30", periods=60, freq="min")
+    close = pd.Series([10.0 + i * 0.01 for i in range(len(idx))], index=idx)
+    prices = pd.DataFrame(
+        {"open": close, "high": close + 0.1, "low": close - 0.1, "close": close, "volume": 1.0},
+        index=idx,
+    )
+    chart = Chart(prices, bgcolor=BG_COLOR, figsize=(8, 6), raw_dates=False)
+    chart.plot(Price("close"), Pane("below", height_ratio=0.28))
+    fig = chart.figure
+    _paint_chart_background(fig)
+    axes = _axes_top_to_bottom(fig)
+    assert len(axes) >= 2
+    bottom = axes[-1]
+    bottom.tick_params(labelbottom=True)
+    _apply_intraday_10min_ticks(bottom, prices.index)
+    _hide_root_x_tick_labels(fig)
+    fig.canvas.draw()
+
+    roots = [ax for ax in fig.axes if ax.get_label() == "root"]
+    assert roots
+    assert _visible_tick_texts(roots[0]) == []
+    pane_texts = _visible_tick_texts(bottom)
+    assert pane_texts
+    assert all(":" in text or "次日" in text for text in pane_texts)
+    plt.close(fig)
