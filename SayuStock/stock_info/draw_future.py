@@ -13,9 +13,8 @@ from gsuid_core.ai_core.trigger_bridge import ai_return
 from .draw_info import draw_block
 from .get_jp_data import get_jpy
 from ..utils.image import get_footer
-from ..utils.market import DisplayItem, from_quote, get_market, is_market_error
-from ..utils.get_OKX import CRYPTO_MAP
-from ..utils.constant import bond, whsc, i_code, commodity
+from ..utils.market import DisplayItem, from_quote, get_market, is_market_error, pick_display_items
+from ..utils.constant import bond, whsc, crypto, i_code, commodity
 
 TEXT_PATH = Path(__file__).parent / "texture2d"
 ItemMap = dict[str, DisplayItem]
@@ -74,7 +73,7 @@ async def draw_future_img() -> str | bytes:
         _get_items(commodity),
         _get_items(bond, append_jpy),
         _get_items(whsc),
-        _get_items({k: k for k in ("BTC", "ETH", "SOL", "DOGE", "BNB") if k in CRYPTO_MAP or True}),
+        _get_items(crypto),
         return_exceptions=True,
     )
 
@@ -93,23 +92,15 @@ async def draw_future_img() -> str | bytes:
     oy = 140
 
     async def paste_blocks(items: list[DisplayItem] | ItemMap, keys: dict[str, str] | list[str], y_base: int) -> None:
-        index = 0
-        key_list = list(keys.keys()) if isinstance(keys, dict) else list(keys)
-        pool: list[DisplayItem] = list(items.values()) if isinstance(items, dict) else list(items)
-        for d in key_list:
-            for item in pool:
-                if item.name != d and d not in item.name and item.name not in d:
-                    continue
-                block = await draw_block(item)
-                img.paste(block, (62 + ox * (index % 4), y_base + oy * (index // 4)), block)
-                index += 1
-                break
+        for index, item in enumerate(pick_display_items(items, keys)):
+            block = await draw_block(item)
+            img.paste(block, (62 + ox * (index % 4), y_base + oy * (index // 4)), block)
 
     await paste_blocks(data_gz, i_code, 487)
     await paste_blocks(data2, commodity, 1007)
     await paste_blocks(data3, bond, 1395)
     await paste_blocks(data4, whsc, 1773)
-    await paste_blocks(data5, list(CRYPTO_MAP.keys())[:8], 1988)
+    await paste_blocks(data5, crypto, 1988)
 
     footer = get_footer()
     img.paste(footer, (75, 2135), footer)
@@ -133,14 +124,14 @@ def _ai_return_all_weather(
                 if name in item.name or item.name in name:
                     result += f"  {item.name}: {item.price} ({item.change_pct}%)\n"
                     break
-        for title, pool in (
-            ("大宗商品", data_commodity),
-            ("债券", data_bond),
-            ("外汇", data_whsc),
-            ("加密货币", data_crypto),
+        for title, pool, keys in (
+            ("大宗商品", data_commodity, commodity),
+            ("债券", data_bond, bond),
+            ("外汇", data_whsc, whsc),
+            ("加密货币", data_crypto, crypto),
         ):
             result += f"\n【{title}】\n"
-            for item in pool.values():
+            for item in pick_display_items(pool, keys):
                 result += f"  {item.name}: {item.price} ({item.change_pct}%)\n"
         ai_return(result)
     except (TypeError, ValueError, KeyError) as e:

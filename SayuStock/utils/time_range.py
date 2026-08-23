@@ -29,7 +29,7 @@ class Market(Enum):
     JP_INDEX = auto()  # 日本交易所指数（日经225 等）
     CA_INDEX = auto()  # 加拿大 S&P/TSX
     LATAM_INDEX = auto()  # 拉美指数（巴西/墨西哥/俄罗斯等）
-    EU_INDEX = auto()  # 欧洲指数（SX5E/FTSE/CAC/DAX）
+    EU_INDEX = auto()  # 欧洲指数（SXXP/SX5E/FTSE/CAC/DAX）
 
 
 def is_us_daylight_saving() -> bool:
@@ -221,7 +221,7 @@ def _parse_em_code(code: str) -> Market:
             if mc in {"BVSP", "MXX", "RTS", "MERVAL", "IPSA"}:
                 return Market.LATAM_INDEX
             # 欧洲
-            if mc in {"SX5E", "FTSE", "FCHI", "GDAXI", "CAC40", "DAX30", "STOXX50E"}:
+            if mc in {"SXXP", "SX5E", "FTSE", "FCHI", "GDAXI", "CAC40", "DAX30", "STOXX50E", "STOXX600"}:
                 return Market.EU_INDEX
             # 未识别的 100.* 指数默认按美股时段处理（可能是个别未列出代码）
             return Market.US_STOCK

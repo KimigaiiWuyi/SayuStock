@@ -437,6 +437,10 @@ code_id_dict = {
     "RTS": "100.RTS",
     "sx5e": "100.SX5E",
     "SX5E": "100.SX5E",
+    "sxxp": "100.SXXP",
+    "SXXP": "100.SXXP",
+    "斯托克600": "100.SXXP",
+    "欧洲斯托克600": "100.SXXP",
     "ftse": "100.FTSE",
     "FTSE": "100.FTSE",
     "fchi": "100.FCHI",
@@ -456,7 +460,7 @@ i_code = {
     "道琼斯": "i:100.DJIA",
     "标普500": "i:100.SPX",
     "罗素2000价值股ETF-iShares": "i:107.IWN",
-    "欧洲斯托克50": "i:100.SX5E",
+    "欧洲斯托克600": "i:100.SXXP",
     "英国富时100": "i:100.FTSE",
     "法国CAC40": "i:100.FCHI",
     "德国DAX30": "i:100.GDAXI",
@@ -510,4 +514,12 @@ whsc = {
     # '英镑兑美元': '119.GBPUSD',
     # '澳元兑美元': '119.AUDUSD',
     # '美元兑泰铢': '119.USDTHB',
+}
+
+# 加密货币（全天候底栏一排 4 格；勿用 CRYPTO_MAP 别名表当展示键）
+crypto = {
+    "BTC": "BTC",
+    "ETH": "ETH",
+    "SOL": "SOL",
+    "XRP": "XRP",
 }

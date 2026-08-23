@@ -121,3 +121,7 @@ def test_kr_suffix_sets_priority_and_matches() -> None:
 
 def test_parse_em_code_korean_stock() -> None:
     assert _parse_em_code("177.005930") == Market.KR_STOCK
+
+
+def test_parse_em_code_stoxx600() -> None:
+    assert _parse_em_code("100.SXXP") == Market.EU_INDEX

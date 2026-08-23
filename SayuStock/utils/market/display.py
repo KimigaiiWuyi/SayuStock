@@ -51,3 +51,25 @@ def from_quote(q: Quote) -> DisplayItem:
 
 def board_rows_to_items(rows: tuple[BoardRow, ...] | list[BoardRow]) -> list[DisplayItem]:
     return [from_board_row(r) for r in rows]
+
+
+def pick_display_items(
+    items: list[DisplayItem] | dict[str, DisplayItem],
+    keys: dict[str, str] | list[str],
+) -> list[DisplayItem]:
+    """按配置键顺序挑选格子；每条数据只用一次，避免别名键重复贴同一标的。"""
+    key_list = list(keys.keys()) if isinstance(keys, dict) else list(keys)
+    pool = list(items.values()) if isinstance(items, dict) else list(items)
+    picked: list[DisplayItem] = []
+    used: set[int] = set()
+    for key in key_list:
+        for i, item in enumerate(pool):
+            if i in used:
+                continue
+            name = item.name
+            if name != key and key not in name and name not in key:
+                continue
+            picked.append(item)
+            used.add(i)
+            break
+    return picked

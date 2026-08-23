@@ -24,7 +24,7 @@ from .models import (
     FinancialSnapshot,
 )
 from .convert import board_to_df, kline_to_df, quote_fields, kline_to_cn_df
-from .display import DisplayItem, from_quote, from_board_row, board_rows_to_items
+from .display import DisplayItem, from_quote, from_board_row, pick_display_items, board_rows_to_items
 from .registry import get_market, set_market
 
 __all__ = [
@@ -58,6 +58,7 @@ __all__ = [
     "board_to_df",
     "from_board_row",
     "from_quote",
+    "pick_display_items",
     "get_market",
     "is_market_error",
     "kline_to_cn_df",
