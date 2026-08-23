@@ -166,9 +166,11 @@ def test_sunday_all_regular_markets_are_closed() -> None:
         "113.rbm",
         "171.CN10Y",
         "171.US10Y",
-        "119.USDJPY",
-        "BTC",
     ):
+        assert has_session_started_today(code, sunday) is False, code
+    for code in ("BTC", "ETH"):
+        assert has_session_started_today(code, sunday) is True, code
+    for code in ("119.USDJPY", "133.USDCNH", "100.UDI"):
         assert has_session_started_today(code, sunday) is False, code
 
     html = build_all_weather_html(
@@ -181,7 +183,25 @@ def test_sunday_all_regular_markets_are_closed() -> None:
         ],
         now=sunday,
     )
-    assert html.count("[休]") == (len(i_code) + len(commodity) + len([k for k in bond if k]) + len(whsc) + len(crypto))
+    assert html.count("[休]") == len(i_code) + len(commodity) + len(bond) + len(whsc)
+
+
+def test_cn_and_us_holidays_close_session() -> None:
+    pytest.importorskip("holidays")
+    assert has_session_started_today("1.000001", datetime(2026, 10, 1, 10, 0)) is False
+    assert has_session_started_today("100.NDX", datetime(2026, 5, 25, 23, 0)) is False
+    assert has_session_started_today("1.000001", datetime(2026, 8, 24, 10, 0)) is True
+    assert has_session_started_today("119.USDJPY", datetime(2026, 8, 24, 10, 0)) is True
+    assert has_session_started_today("119.USDJPY", datetime(2026, 1, 1, 20, 0)) is False
+
+
+def test_holidays_generated_for_future_years() -> None:
+    pytest.importorskip("holidays")
+    """不靠手写年份表：2027 元旦、美股马丁·路德·金日也应休市。"""
+    assert has_session_started_today("1.000001", datetime(2027, 1, 1, 10, 0)) is False
+    assert has_session_started_today("100.NDX", datetime(2027, 1, 18, 23, 0)) is False
+    assert has_session_started_today("1.000001", datetime(2027, 8, 23, 10, 0)) is True
+    assert has_session_started_today("BTC", datetime(2027, 1, 1, 10, 0)) is True
 
 
 def test_preopen_us_price_is_gray_asia_is_live() -> None:

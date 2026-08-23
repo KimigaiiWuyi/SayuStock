@@ -10,6 +10,7 @@ dependencies = [
   "plotly>=5.24.1",
   "pandas>=2.2.3",
   "mplchart>=0.0.37",
+  "holidays>=0.50",
 ]
 requires-python = "==3.12.*"
 readme = "README.md"

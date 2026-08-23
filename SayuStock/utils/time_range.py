@@ -22,6 +22,7 @@ class Market(Enum):
     TLM = auto()  # TLM
     COMMODITY_SPOT = auto()  # 商品现货
     CRYPTO = auto()  # 加密货币
+    FX = auto()  # 外汇 24×5（周日美东 17:00 开，周五美东 17:00 收）
     # —— 东方财富 PREFIX 100 开头的全球指数（按各自主市场时段）——
     # 备注：美股指数（道琼/纳指/标普）复用 US_STOCK；恒生指数复用 HK_STOCK
     KR_STOCK = auto()  # 韩股个股（东财 PREFIX 177，如 177.005930 三星电子）
@@ -94,9 +95,12 @@ MARKET_SESSIONS: Dict[Market, List[Tuple[str, str]]] = {
     Market.COMMODITY_SPOT: [  # 商品现货
         ("06:00", "05:15") if is_us_daylight_saving() else ("07:00", "06:15"),
     ],
-    Market.CRYPTO: [  # 加密货币
+    Market.CRYPTO: [  # 加密货币 7×24
         ("00:00", "23:59"),
     ],
+    # 外汇：周日 17:00 ET 开 → BJT 周一 05:00(夏)/06:00(冬)
+    # 周五 17:00 ET 收 → BJT 周六 05:00(夏)/06:00(冬)
+    Market.FX: [("05:00", "04:59") if is_us_daylight_saving() else ("06:00", "05:59")],
     # 韩股个股（PREFIX 177）：与 KOSPI 同时段 09:00-15:30 KST = 08:00-14:30 BJT
     Market.KR_STOCK: [
         ("08:00", "14:30"),
@@ -198,7 +202,7 @@ def _parse_em_code(code: str) -> Market:
         if prefix in ["109", "113", "114", "115"]:
             return Market.CN_FUTURE_DAY
         if prefix in ["119", "133"]:
-            return Market.CRYPTO
+            return Market.FX
         if prefix in ["220"]:
             return Market.TLM
         if prefix in ["0", "1"]:
@@ -228,6 +232,8 @@ def _parse_em_code(code: str) -> Market:
             # 美国指数：DJIA / NDX / SPX / RUT / VIX，复用美股时段
             if mc in {"DJIA", "NDX", "SPX", "RUT", "VIX"}:
                 return Market.US_STOCK
+            if mc == "UDI":
+                return Market.FX
             # 加拿大
             if mc in {"TSX", "TSXCOMP"}:
                 return Market.CA_INDEX
@@ -472,8 +478,9 @@ def has_session_started_today(
     """今日该市场是否已经开过盘（含盘中 / 已收盘）。
 
     还没到今日开盘、或周末休市时返回 False，此时行情仍是上一交易日。
-    周日全市场休市。周六仅周五夜盘跨到凌晨的时段仍算开盘。
-    加密/外汇仅在周一至周五视为开盘。
+    加密货币 7×24，周末不休。
+    外汇 24×5：周日全天休，周六仅周五夜盘收到凌晨；节假日见 market_holidays。
+    其余市场周日休市；周六仅周五夜盘跨到凌晨的时段仍算开盘。
     """
     if now_bjt is None:
         now_bjt = datetime.datetime.now()
@@ -482,6 +489,12 @@ def has_session_started_today(
     market = _parse_em_code(code) if code else Market.A_SHARE
     if market == Market.UNKNOWN:
         market = Market.A_SHARE
+    if market == Market.CRYPTO:
+        return True
+    from .market_holidays import is_market_holiday
+
+    if is_market_holiday(market, now_bjt):
+        return False
     sessions = MARKET_SESSIONS.get(market, MARKET_SESSIONS[Market.A_SHARE])
 
     def _in_overnight_tail() -> bool:
@@ -496,8 +509,6 @@ def has_session_started_today(
         return False
     if weekday == 5:
         return _in_overnight_tail()
-    if market == Market.CRYPTO:
-        return True
     if _time_in_sessions(current, sessions):
         if _in_overnight_tail():
             return weekday in {1, 2, 3, 4, 5}
