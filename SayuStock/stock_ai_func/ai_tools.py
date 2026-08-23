@@ -322,7 +322,7 @@ async def get_market_ranking(
     n: int = 20,
     high_first: bool | None = None,
 ) -> str:
-    """沪深 A **通用排行榜**（东财 clist）：资金流 / 换手 / ROE / 量额 / 净利增速等。
+    """查询沪深 A 股通用排行榜（东财 clist）：资金流 / 换手 / ROE / 量额 / 净利增速等。
 
     Args:
         rank_by: 排行类型（英文键或中文别名均可），支持：
@@ -406,7 +406,7 @@ async def get_crypto_prices(
     ctx: RunContext[ToolContext],
 ) -> str:
     """
-    获取加密货币价格
+    查询主流加密货币实时价格与涨跌幅
 
     获取主流加密货币（BTC、ETH、SOL等）的实时价格和涨跌幅。
     数据来源：OKX交易所。
@@ -609,7 +609,11 @@ async def get_stock_change_rate(
     )
 
 
-@ai_tools(category="common", capability_domain="股票研报出图")
+@ai_tools(
+    covers=["把 markdown 股票研报渲染成图片并发送（兼容入口，非研报主路径）"],
+    category="common",
+    capability_domain="股票研报出图",
+)
 async def send_stock_report_image(
     ctx: RunContext[ToolContext],
     markdown_content: str,

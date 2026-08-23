@@ -439,6 +439,7 @@ def _aggregate_enriched(
 
 
 @ai_tools(
+    covers=["列出全部 AI 模拟盘：盘名/策略/总资产/状态"],
     category="common",
     capability_domain="AI模拟盘",
     context_tags=_PAPERTRADE_CTX_TAGS,
@@ -486,6 +487,7 @@ async def papertrade_account_list(ctx: RunContext[ToolContext]) -> str:
 
 
 @ai_tools(
+    covers=["查询指定模拟盘现金/总资产/浮盈/已实现盈亏"],
     category="common",
     capability_domain="AI模拟盘",
     context_tags=_PAPERTRADE_CTX_TAGS,
@@ -560,6 +562,7 @@ async def papertrade_account_query(
 
 
 @ai_tools(
+    covers=["查询模拟盘当前持仓：代码/现价/市值/浮盈"],
     category="common",
     capability_domain="AI模拟盘",
     context_tags=_PAPERTRADE_CTX_TAGS,
@@ -623,6 +626,7 @@ async def papertrade_position_list(
 
 
 @ai_tools(
+    covers=["渲染并发送模拟盘持仓简图（含今日涨跌+浮盈）"],
     category="common",
     capability_domain="AI模拟盘",
     context_tags=_PAPERTRADE_CTX_TAGS,
@@ -688,6 +692,7 @@ async def papertrade_holdings_image(
 
 
 @ai_tools(
+    covers=["查询模拟盘历史买卖流水与已实现盈亏"],
     category="common",
     capability_domain="AI模拟盘",
     context_tags=_PAPERTRADE_CTX_TAGS,
@@ -749,6 +754,7 @@ async def papertrade_trade_list(
 
 
 @ai_tools(
+    covers=["查询模拟盘决策日志：买卖持有理由/评分/风控"],
     category="common",
     capability_domain="AI模拟盘",
     context_tags=_PAPERTRADE_CTX_TAGS,
@@ -810,7 +816,7 @@ async def papertrade_decision_list(
     return json.dumps(items, ensure_ascii=False)
 
 
-@ai_tools(category="common", capability_domain="AI模拟盘")
+@ai_tools(covers=["查询模拟盘群友关注列表"], category="common", capability_domain="AI模拟盘")
 async def papertrade_watchlist_list(
     ctx: RunContext[ToolContext],
     account_name: str = "",
@@ -842,7 +848,7 @@ async def papertrade_watchlist_list(
     return json.dumps(items, ensure_ascii=False)
 
 
-@ai_tools(category="common", capability_domain="AI模拟盘")
+@ai_tools(covers=["查询模拟盘内部候选池标的与优先级"], category="common", capability_domain="AI模拟盘")
 async def papertrade_agent_pool_list(
     ctx: RunContext[ToolContext],
     account_name: str = "",
@@ -881,6 +887,7 @@ async def papertrade_agent_pool_list(
 
 
 @ai_tools(
+    covers=["写入模拟盘决策日志一条记录"],
     category="default",
     capability_domain="AI模拟盘",
     visible_when=_visible_to_papertrade_agent,
@@ -896,7 +903,7 @@ async def papertrade_decision_insert(
     trade_id: int = 0,
     blocked_by: str = "",
 ) -> str:
-    """向决策日志表插入一条记录（仅 papertrade_*_agent 调用）。
+    """写入模拟盘决策日志一条记录（仅 papertrade_*_agent 调用）。
 
     字段使用规约（**违反规约会导致群播报糊成一坨**）：
 
@@ -1003,6 +1010,7 @@ async def papertrade_decision_insert(
 
 
 @ai_tools(
+    covers=["写入模拟盘交易流水并维护账户现金"],
     category="default",
     capability_domain="AI模拟盘",
     visible_when=_visible_to_papertrade_agent,
@@ -1023,7 +1031,7 @@ async def papertrade_trade_insert(
     decision_id: int = 0,
     mode: str = "balanced",
 ) -> str:
-    """向交易流水表插入一条记录（仅 papertrade_*_agent 调用）。
+    """写入模拟盘交易流水一条记录（仅 papertrade_*_agent 调用）。
 
     **本工具会自动维护账户现金**，**不要**再单独调
     ``PaperAccountRepo.update_cash``。后端走
@@ -1122,6 +1130,7 @@ async def papertrade_trade_insert(
 
 
 @ai_tools(
+    covers=["写入或删除模拟盘持仓记录"],
     category="default",
     capability_domain="AI模拟盘",
     visible_when=_visible_to_papertrade_agent,
@@ -1174,6 +1183,7 @@ async def papertrade_position_upsert(
 
 
 @ai_tools(
+    covers=["查询并刷新模拟盘内部候选池（轮换旧标的）"],
     category="default",
     capability_domain="AI模拟盘",
     visible_when=_visible_to_papertrade_agent,
@@ -1184,7 +1194,7 @@ async def papertrade_candidate_refresh(
     rotate_out: int = 0,
     batch_size: int = 0,
 ) -> str:
-    """**轮换**内部候选池（agent_pool）：淘汰旧标的 + 补充新鲜标的，防"锚定陷阱"。
+    """查询并刷新内部候选池（agent_pool）：淘汰旧标的 + 加载新鲜标的，防"锚定陷阱"。
 
     仅 papertrade_*_agent 可见。**每轮都应调一次**（不要再用"池 <3 才刷"的旧门槛——
     那会让池子一旦填满就永远冻结、每轮嚼同一批）。本工具一次做完 4 件事：
@@ -1474,6 +1484,7 @@ async def papertrade_candidate_refresh(
 
 
 @ai_tools(
+    covers=["按实时行情撮合模拟盘买卖委托"],
     category="default",
     capability_domain="AI模拟盘",
     visible_when=_visible_to_papertrade_agent,
@@ -1544,6 +1555,7 @@ async def papertrade_match_order(
 
 
 @ai_tools(
+    covers=["写入模拟盘当日收盘净值快照"],
     category="default",
     capability_domain="AI模拟盘",
     visible_when=_visible_to_papertrade_agent,
@@ -1811,7 +1823,7 @@ async def stock_indicators(
     return json.dumps(result, ensure_ascii=False, default=str)
 
 
-@ai_tools(category="common", capability_domain="AI模拟盘")
+@ai_tools(covers=["查询个股底部/顶部放量结构（日 K）"], category="common", capability_domain="AI模拟盘")
 async def papertrade_volume_scan(
     ctx: RunContext[ToolContext],
     stock_code: str,
@@ -1852,9 +1864,9 @@ async def papertrade_volume_scan(
     )
 
 
-@ai_tools(category="common", capability_domain="AI模拟盘")
+@ai_tools(covers=["查询当前是否 A 股交易日以及是否在交易时段"], category="common", capability_domain="AI模拟盘")
 async def stock_is_trading_day(ctx: RunContext[ToolContext]) -> str:
-    """判断当前是否 A 股交易日 + 是否在交易时段。"""
+    """查询当前是否 A 股交易日以及是否在交易时段。"""
     td: bool = is_a_share_trading_day()
     tt: bool = is_trading_time()
     _, _, desc = trading_day_summary()

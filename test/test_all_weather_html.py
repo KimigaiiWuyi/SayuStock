@@ -78,7 +78,7 @@ def test_crypto_section_stays_four_unique() -> None:
     html = build_all_weather_html([("加密货币", items)])
     for name in ("BTC", "ETH", "SOL", "XRP"):
         assert name in html
-    assert html.count('class="tile"') == 4
+    assert html.count('class="tile') == 4
 
 
 def test_long_names_are_shortened() -> None:
@@ -150,6 +150,38 @@ def test_has_session_started_today_asia_vs_us() -> None:
     assert has_session_started_today("BTC", morning) is True
     evening = datetime(2026, 8, 24, 23, 0)
     assert has_session_started_today("100.NDX", evening) is True
+
+
+def test_sunday_all_regular_markets_are_closed() -> None:
+    sunday = datetime(2026, 8, 23, 15, 0)
+    for code in (
+        "1.000001",
+        "100.HSI",
+        "100.N225",
+        "100.KOSPI200",
+        "100.NDX",
+        "100.SXXP",
+        "122.XAU",
+        "102.CL00Y",
+        "113.rbm",
+        "171.CN10Y",
+        "171.US10Y",
+        "119.USDJPY",
+        "BTC",
+    ):
+        assert has_session_started_today(code, sunday) is False, code
+
+    html = build_all_weather_html(
+        [
+            ("国际市场", _sample_items(i_code)),
+            ("大宗商品", _sample_items(commodity)),
+            ("债券市场", _sample_items(bond)),
+            ("外汇市场", _sample_items(whsc)),
+            ("加密货币", _sample_items(crypto)),
+        ],
+        now=sunday,
+    )
+    assert html.count("[休]") == (len(i_code) + len(commodity) + len([k for k in bond if k]) + len(whsc) + len(crypto))
 
 
 def test_preopen_us_price_is_gray_asia_is_live() -> None:

@@ -178,20 +178,18 @@ def _tile_colors(change_pct: float) -> tuple[str, str]:
 
 
 def resolve_item_code(item: DisplayItem) -> str:
-    if item.code:
-        return item.code
     if item.name in _CODE_BY_NAME:
         return _CODE_BY_NAME[item.name]
     for key, code in _CODE_BY_NAME.items():
-        if key in item.name or item.name in key:
+        if key and (key in item.name or item.name in key):
             return code
-    return ""
+    return item.code or ""
 
 
 def is_stale_quote(item: DisplayItem, now: datetime) -> bool:
     code = resolve_item_code(item)
     if not code:
-        return False
+        return now.weekday() >= 5
     return not has_session_started_today(code, now_bjt=now)
 
 

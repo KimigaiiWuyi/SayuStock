@@ -472,29 +472,36 @@ def has_session_started_today(
     """今日该市场是否已经开过盘（含盘中 / 已收盘）。
 
     还没到今日开盘、或周末休市时返回 False，此时行情仍是上一交易日。
-    加密货币视为一直开盘。
+    周日全市场休市。周六仅周五夜盘跨到凌晨的时段仍算开盘。
+    加密/外汇仅在周一至周五视为开盘。
     """
     if now_bjt is None:
         now_bjt = datetime.datetime.now()
-    market = _parse_em_code(code) if code else Market.A_SHARE
-    if market in {Market.UNKNOWN, Market.CRYPTO}:
-        return True
-    sessions = MARKET_SESSIONS.get(market, MARKET_SESSIONS[Market.A_SHARE])
-    current = now_bjt.time()
     weekday = now_bjt.weekday()
+    current = now_bjt.time()
+    market = _parse_em_code(code) if code else Market.A_SHARE
+    if market == Market.UNKNOWN:
+        market = Market.A_SHARE
+    sessions = MARKET_SESSIONS.get(market, MARKET_SESSIONS[Market.A_SHARE])
 
-    if _time_in_sessions(current, sessions):
+    def _in_overnight_tail() -> bool:
         for start_str, end_str in sessions:
             start = datetime.datetime.strptime(start_str, "%H:%M").time()
             end = datetime.datetime.strptime(end_str, "%H:%M").time()
-            if start <= end:
-                continue
-            if current <= end:
-                return weekday in {1, 2, 3, 4, 5}
-        return weekday < 5
-
-    if weekday >= 5:
+            if start > end and current <= end:
+                return True
         return False
+
+    if weekday == 6:
+        return False
+    if weekday == 5:
+        return _in_overnight_tail()
+    if market == Market.CRYPTO:
+        return True
+    if _time_in_sessions(current, sessions):
+        if _in_overnight_tail():
+            return weekday in {1, 2, 3, 4, 5}
+        return True
     starts = [datetime.datetime.strptime(item[0], "%H:%M").time() for item in sessions]
     if not starts:
         return True
