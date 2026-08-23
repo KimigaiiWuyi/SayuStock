@@ -677,3 +677,6 @@ em_data
 
 examples
 uv.lock
+
+### Local render previews ###
+test_output/

@@ -10,6 +10,7 @@
 |------|-----|------|------|
 | 大盘/行业/概念云图（主路径） | `stock_cloudmap/` | plotly → HTML → playwright | HTML + PNG/bytes |
 | 个股分时 / K 线 / 对比 / 备用云图 | `stock_stockinfo/` | matplotlib + mplchart | PNG |
+| 全天候板块 | `stock_info/draw_future.py` | pytakumi `render_html_to_bytes`（`utils/all_weather_html.py`） | PNG bytes |
 
 两者 **共享**：
 

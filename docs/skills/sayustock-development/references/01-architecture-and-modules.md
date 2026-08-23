@@ -41,7 +41,7 @@ plugins/SayuStock/
 |------|------|
 | `stock_cloudmap/` | **大盘/行业/概念云图**（plotly + playwright 截图）；定时清缓存 |
 | `stock_stockinfo/` | **个股分时 / K 线 / 对比 / mpl 云图入口**（matplotlib + mplchart） |
-| `stock_info/` | 大盘概览、我的自选列表图、基金/期货等 PIL 卡片 |
+| `stock_info/` | 大盘概览、我的自选列表图、基金（PIL）；**全天候**走 pytakumi HTML |
 | `stock_user/` | 添加/删除自选（`SsBind`） |
 | `stock_sina/` | 市盈/市净/股息等估值对比图 |
 | `stock_analysis/` | 技术分析、股票卡片、自动选股、组合体检 |
@@ -93,6 +93,7 @@ utils/
 ├── constant.py             # ErroText / market_dict / VIX_LIST …
 ├── time_range.py           # 交易时段、分时轴
 ├── image.py                # playwright 截图等
+├── all_weather_html.py     # 全天候 pytakumi HTML
 ├── load_data.py            # 证券代码表
 └── resource_path.py        # MAIN_PATH / DATA_PATH / CONFIG_PATH
 ```

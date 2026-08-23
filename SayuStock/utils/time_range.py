@@ -133,9 +133,15 @@ def _parse_em_code(code: str) -> Market:
         return Market.CRYPTO
 
     code = code.split("_")[0]
+    if code.lower().startswith("i:"):
+        code = code[2:]
 
     if not isinstance(code, str) or not code:
         return Market.UNKNOWN
+
+    up = code.upper()
+    if up in {"BTC", "ETH", "SOL", "XRP", "DOGE", "BNB", "PEPE"} or "-USD" in up:
+        return Market.CRYPTO
 
     # 优先匹配期货代码（通常是字母+数字）
     # e.g., 'rb2510', 'ag2512', 'IF2508'
@@ -183,8 +189,16 @@ def _parse_em_code(code: str) -> Market:
             return Market.US_FUTURE
         if prefix in ["122"]:
             return Market.COMMODITY_SPOT
-        if prefix in ["101", "102", "171"]:
+        if prefix in ["101", "102"]:
             return Market.COMMODITY
+        if prefix == "171":
+            if main_code.upper().startswith("US"):
+                return Market.US_STOCK
+            return Market.BOND
+        if prefix in ["109", "113", "114", "115"]:
+            return Market.CN_FUTURE_DAY
+        if prefix in ["119", "133"]:
+            return Market.CRYPTO
         if prefix in ["220"]:
             return Market.TLM
         if prefix in ["0", "1"]:
@@ -437,6 +451,54 @@ def is_market_active_now(
             if current_time >= start or current_time <= end:
                 return True
     return False
+
+
+def _time_in_sessions(current: datetime.time, sessions: List[Tuple[str, str]]) -> bool:
+    for start_str, end_str in sessions:
+        start = datetime.datetime.strptime(start_str, "%H:%M").time()
+        end = datetime.datetime.strptime(end_str, "%H:%M").time()
+        if start <= end:
+            if start <= current <= end:
+                return True
+        elif current >= start or current <= end:
+            return True
+    return False
+
+
+def has_session_started_today(
+    code: Optional[str] = None,
+    now_bjt: Optional[datetime.datetime] = None,
+) -> bool:
+    """今日该市场是否已经开过盘（含盘中 / 已收盘）。
+
+    还没到今日开盘、或周末休市时返回 False，此时行情仍是上一交易日。
+    加密货币视为一直开盘。
+    """
+    if now_bjt is None:
+        now_bjt = datetime.datetime.now()
+    market = _parse_em_code(code) if code else Market.A_SHARE
+    if market in {Market.UNKNOWN, Market.CRYPTO}:
+        return True
+    sessions = MARKET_SESSIONS.get(market, MARKET_SESSIONS[Market.A_SHARE])
+    current = now_bjt.time()
+    weekday = now_bjt.weekday()
+
+    if _time_in_sessions(current, sessions):
+        for start_str, end_str in sessions:
+            start = datetime.datetime.strptime(start_str, "%H:%M").time()
+            end = datetime.datetime.strptime(end_str, "%H:%M").time()
+            if start <= end:
+                continue
+            if current <= end:
+                return weekday in {1, 2, 3, 4, 5}
+        return weekday < 5
+
+    if weekday >= 5:
+        return False
+    starts = [datetime.datetime.strptime(item[0], "%H:%M").time() for item in sessions]
+    if not starts:
+        return True
+    return current >= min(starts)
 
 
 def is_within_trading_day_window(

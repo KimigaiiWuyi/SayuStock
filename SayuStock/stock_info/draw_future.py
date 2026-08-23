@@ -1,22 +1,17 @@
 import random
 import asyncio
 from typing import Callable, Optional
-from pathlib import Path
 from dataclasses import replace
 
-from PIL import Image
-
 from gsuid_core.logger import logger
-from gsuid_core.utils.image.convert import convert_img
+from gsuid_core.utils.html_render import render_html_to_bytes
 from gsuid_core.ai_core.trigger_bridge import ai_return
 
-from .draw_info import draw_block
 from .get_jp_data import get_jpy
-from ..utils.image import get_footer
 from ..utils.market import DisplayItem, from_quote, get_market, is_market_error, pick_display_items
 from ..utils.constant import bond, whsc, crypto, i_code, commodity
+from ..utils.all_weather_html import CSS_WIDTH, CSS_HEIGHT, build_all_weather_html
 
-TEXT_PATH = Path(__file__).parent / "texture2d"
 ItemMap = dict[str, DisplayItem]
 
 
@@ -87,26 +82,30 @@ async def draw_future_img() -> str | bytes:
     data4 = safe_map(results[2])
     data5 = safe_map(results[3])
 
-    img = Image.open(TEXT_PATH / "bg1.jpg").convert("RGBA")
-    ox = 223
-    oy = 140
-
-    async def paste_blocks(items: list[DisplayItem] | ItemMap, keys: dict[str, str] | list[str], y_base: int) -> None:
-        for index, item in enumerate(pick_display_items(items, keys)):
-            block = await draw_block(item)
-            img.paste(block, (62 + ox * (index % 4), y_base + oy * (index // 4)), block)
-
-    await paste_blocks(data_gz, i_code, 487)
-    await paste_blocks(data2, commodity, 1007)
-    await paste_blocks(data3, bond, 1395)
-    await paste_blocks(data4, whsc, 1773)
-    await paste_blocks(data5, crypto, 1988)
-
-    footer = get_footer()
-    img.paste(footer, (75, 2135), footer)
-    res = await convert_img(img)
+    sections: list[tuple[str, list[DisplayItem]]] = [
+        ("国际市场", pick_display_items(data_gz, i_code)),
+        ("大宗商品", pick_display_items(data2, commodity)),
+        ("债券市场", pick_display_items(data3, bond)),
+        ("外汇市场", pick_display_items(data4, whsc)),
+        ("加密货币", pick_display_items(data5, crypto)),
+    ]
     _ai_return_all_weather(data_gz, data2, data3, data4, data5)
-    return res
+    html = build_all_weather_html(sections)
+    try:
+        return await render_html_to_bytes(
+            html,
+            max_width=float(CSS_WIDTH * 2),
+            dpi=192.0,
+            device_height=float(CSS_HEIGHT * 2),
+            default_font_size=15.0,
+            allow_refit=False,
+            image_format="png",
+            lang="zh",
+            root_max_width=float(CSS_WIDTH),
+        )
+    except (RuntimeError, OSError, ValueError) as e:
+        logger.exception(f"[SayuStock] 全天候 HTML 出图失败: {e}")
+        return "全天候出图失败"
 
 
 def _ai_return_all_weather(
