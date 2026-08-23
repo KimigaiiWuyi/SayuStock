@@ -36,9 +36,9 @@ description: >
 |----------|-----------|
 | **改 SayuStock 业务代码**（行情 / 出图 / 命令 / 模拟盘 / AI 工具） | **本 SKILL** |
 | **修 CI / 写测试 / 提 PR 对齐 Actions** | 本 SKILL [八](./references/08-testing-and-quality.md) + [十](./references/10-cicd-and-dev-workflow.md) |
-| 改 GsCore 框架核心（handler / ai_core / 启动 / 配置基类） | `docs/skills/gscore-development` |
-| 写一个全新的 GsCore 插件（通用模板） | `docs/skills/gscore-plugin-development` |
-| 查 AI Core 给插件暴露的 API | `docs/skills/gscore-ai-core-api` |
+| 改 GsCore 框架核心（handler / ai_core / 启动 / 配置基类） | Core `.agents/skills/gscore-development` |
+| 写一个全新的 GsCore 插件（通用模板） | Core `.agents/skills/gscore-plugin-development` |
+| 查 AI Core 给插件暴露的 API | Core `.agents/skills/gscore-ai-core-api` |
 | 用户向模拟盘操作说明 | 插件内 `docs/papertrade.md`、`SayuStock/stock_papertrade/PAPERTRADE_GUIDE.md` |
 | 行情 Port 一页速查 | 插件内 `doc/market_data_port.md` |
 
@@ -90,7 +90,7 @@ gsuid_core/plugins/SayuStock/          # 插件根（本仓库）
 ├── pyproject.toml                     # pytest / pyright 配置
 ├── pyrightconfig.json                 # basedpyright（勿写死本机 venv）
 ├── doc/ / docs/                       # 散落专题文档
-└── docs/skills/sayustock-development/ # 本 SKILL
+└── .agents/skills/sayustock-development/ # 本 SKILL
 ```
 
 运行时数据目录（Core 的 data_store）：
@@ -103,7 +103,7 @@ gsuid_core/plugins/SayuStock/          # 插件根（本仓库）
 
 ## 关联文档
 
-- 代码红线（若仓库有）：GsCore 根 `docs/LLM.md`
+- 代码红线：GsCore 根 [`AGENTS.md`](../../../../../../AGENTS.md)（插件内见 [`AGENTS.md`](../../../AGENTS.md)）
 - 行情速查：[`doc/market_data_port.md`](../../../doc/market_data_port.md)
 - 模拟盘用户文档：[`docs/papertrade.md`](../../papertrade.md)
 - 接口/路由旧索引：[`doc/interfaces_and_routes.md`](../../../doc/interfaces_and_routes.md)（可能滞后，以源码为准）

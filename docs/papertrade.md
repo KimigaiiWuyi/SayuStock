@@ -151,4 +151,4 @@ a模拟盘推送添加 放量盘                      # 本群订阅这个盘的
 
 ---
 
-开发者说明见 `docs/skills/sayustock-development/references/06-papertrade.md`。人格侧操作见 `SayuStock/stock_papertrade/PAPERTRADE_GUIDE.md`。
+开发者说明见 `.agents/skills/sayustock-development/references/06-papertrade.md`。人格侧操作见 `SayuStock/stock_papertrade/PAPERTRADE_GUIDE.md`。

@@ -85,7 +85,7 @@ basedpyright   # CI 用 basedpyright，不要用官方 pyright（见 §10.5.4）
 
 ## 8.5 代码风格红线（与 GsCore 对齐）
 
-若仓库有 `docs/LLM.md`，以之为准。插件侧实践：
+框架红线以 GsCore 根 `AGENTS.md` 为准。插件侧实践：
 
 1. **禁止**用 `try/except` 吞类型错误；外部 JSON 可解析处按需收窄。  
 2. **禁止**业务里 `dict.get`/`getattr` 兜底读 `f*` —— 用模型字段。  

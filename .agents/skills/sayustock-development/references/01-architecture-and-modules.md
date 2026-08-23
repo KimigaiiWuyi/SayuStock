@@ -29,7 +29,7 @@ plugins/SayuStock/
 │   └── tools/                 # 离线脚本（如 gen_A.py）
 ├── test/                      # pytest（从插件根或 monorepo 根跑）
 ├── doc/ / docs/               # 专题文档
-├── docs/skills/…              # 本开发 SKILL
+├── .agents/skills/…           # 本开发 SKILL
 ├── pyproject.toml             # poetry/pdm + pyright/basedpyright
 ├── ruff.toml
 └── README.md
