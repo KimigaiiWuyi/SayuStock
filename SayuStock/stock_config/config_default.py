@@ -5,6 +5,7 @@ from gsuid_core.utils.plugins_config.models import (
     GsIntConfig,
     GsStrConfig,
     GsBoolConfig,
+    GsListStrConfig,
 )
 
 CONFIG_DEFAULT: Dict[str, GSC] = {
@@ -42,6 +43,12 @@ CONFIG_DEFAULT: Dict[str, GSC] = {
         "每日定时任务只会清理超过该天数的缓存文件，不再每天清空缓存目录",
         7,
         options=[1, 3, 7, 15, 30],
+    ),
+    "holdings_analysis_unlimited_users": GsListStrConfig(
+        "持仓分析免限额用户",
+        "这些 user_id 不受「每日 1 次」限制；网页控制台改完立即生效，无需重启",
+        [],
+        options=[],
     ),
     "eastmoney_cookie": GsStrConfig(
         "东财Cookie",

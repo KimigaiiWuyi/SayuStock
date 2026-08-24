@@ -148,8 +148,12 @@ def test_has_session_started_today_asia_vs_us() -> None:
     assert has_session_started_today("100.NDX", morning) is False
     assert has_session_started_today("100.SXXP", morning) is False
     assert has_session_started_today("BTC", morning) is True
+    assert has_session_started_today("171.US10Y", morning) is True
+    assert has_session_started_today("171.CN10Y", morning) is True
+    assert has_session_started_today("JP.BOND", morning) is True
     evening = datetime(2026, 8, 24, 23, 0)
     assert has_session_started_today("100.NDX", evening) is True
+    assert has_session_started_today("171.US10Y", evening) is True
 
 
 def test_sunday_all_regular_markets_are_closed() -> None:
@@ -193,6 +197,11 @@ def test_cn_and_us_holidays_close_session() -> None:
     assert has_session_started_today("1.000001", datetime(2026, 8, 24, 10, 0)) is True
     assert has_session_started_today("119.USDJPY", datetime(2026, 8, 24, 10, 0)) is True
     assert has_session_started_today("119.USDJPY", datetime(2026, 1, 1, 20, 0)) is False
+    assert has_session_started_today("119.USDJPY", datetime(2026, 1, 1, 10, 0)) is False
+    # 退伍军人日：美债联邦假休；NYSE 开市
+    assert has_session_started_today("171.US10Y", datetime(2026, 11, 11, 10, 0)) is False
+    assert has_session_started_today("171.US10Y", datetime(2026, 11, 11, 23, 0)) is False
+    assert has_session_started_today("100.NDX", datetime(2026, 11, 11, 23, 0)) is True
 
 
 def test_holidays_generated_for_future_years() -> None:
@@ -202,6 +211,56 @@ def test_holidays_generated_for_future_years() -> None:
     assert has_session_started_today("100.NDX", datetime(2027, 1, 18, 23, 0)) is False
     assert has_session_started_today("1.000001", datetime(2027, 8, 23, 10, 0)) is True
     assert has_session_started_today("BTC", datetime(2027, 1, 1, 10, 0)) is True
+
+
+def test_weekday_morning_us_treasury_live_equity_rest() -> None:
+    """周一 10:00 BJT：美股未开；美债近 23h 已开；中债/日债已开。"""
+    now = datetime(2026, 8, 24, 10, 0)
+    html = build_all_weather_html(
+        [
+            (
+                "国际市场",
+                [
+                    DisplayItem(name="上证指数", price=3905.2, change_pct=0.04, code="1.000001"),
+                    DisplayItem(name="纳斯达克", price=26180.45, change_pct=0.43, code="100.NDX"),
+                ],
+            ),
+            (
+                "债券市场",
+                [
+                    DisplayItem(name="中国10年期国债", price=1.7085, change_pct=0.26, code="171.CN10Y"),
+                    DisplayItem(name="美国10年期国债收益率", price=4.7339, change_pct=0.51, code="171.US10Y"),
+                    DisplayItem(name="JP 10Y", price=2.87, change_pct=0.77, code=""),
+                ],
+            ),
+        ],
+        now=now,
+    )
+    assert html.count("[休]") == 1
+    assert "tile stale" in html
+    assert html.count("tile stale") == 1
+
+
+def test_preopen_asia_us_treasury_already_live() -> None:
+    """周一 07:00 BJT：A 股/日债未开，美债电子盘已开。"""
+    now = datetime(2026, 8, 24, 7, 0)
+    assert has_session_started_today("171.US10Y", now) is True
+    assert has_session_started_today("1.000001", now) is False
+    assert has_session_started_today("JP.BOND", now) is False
+    html = build_all_weather_html(
+        [
+            (
+                "债券市场",
+                [
+                    DisplayItem(name="美国10年期国债收益率", price=4.73, change_pct=0.5, code="171.US10Y"),
+                    DisplayItem(name="JP 10Y", price=2.87, change_pct=0.77, code=""),
+                ],
+            )
+        ],
+        now=now,
+    )
+    assert html.count("[休]") == 1
+    assert html.count("tile stale") == 1
 
 
 def test_preopen_us_price_is_gray_asia_is_live() -> None:

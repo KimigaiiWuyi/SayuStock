@@ -31,6 +31,7 @@ STOCK_CONFIG = StringConfig("SayuStock", CONFIG_PATH, CONFIG_DEFAULT)
 | `mapcloud_refresh_minutes` | 图/数据缓存 TTL | 3 |
 | `stock_cache_retention_days` | 每日清理保留天数 | 7 |
 | `eastmoney_cookie` | 东财 Cookie | 内置字符串 |
+| `holdings_analysis_unlimited_users` | 持仓分析免每日限额的 `user_id` 列表；网页控制台改完热生效 | `[]` |
 
 读取：
 

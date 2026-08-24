@@ -13,7 +13,7 @@ from gsuid_core.models import Event
 from gsuid_core.segment import MessageSegment
 
 from .parse import SymbolListResult, build_symbol_list
-from .quota import release_quota, try_claim_quota
+from .quota import release_quota, try_claim_quota, is_unlimited_user
 from ..utils.utils import convert_list
 from ..utils.database.models import SsBind
 
@@ -134,13 +134,17 @@ async def run_holdings_analysis_command(bot: Bot, ev: Event) -> None:
     # on_command 时 ev.text 通常是去掉命令前缀后的参数
     resolved = await resolve_symbols(ev, ev.text or "")
     if isinstance(resolved, str):
-        await bot.send(resolved)
+        await bot.send(resolved, at_sender=True)
         return
 
-    # 解析成功后再原子占坑；仅图片发送成功才保留，其余路径 finally 释放
-    if not try_claim_quota(uid, bid, day):
-        await bot.send(_QUOTA_HINT)
-        return
+    # 免限额看发起人 user_id；占坑仍按分析对象（@ 对方则记对方）。
+    sender_id = str(ev.user_id)
+    claimed = False
+    if not is_unlimited_user(sender_id):
+        if not try_claim_quota(uid, bid, day):
+            await bot.send(_QUOTA_HINT, at_sender=True)
+            return
+        claimed = True
 
     success = False
     try:
@@ -150,7 +154,7 @@ async def run_holdings_analysis_command(bot: Bot, ev: Event) -> None:
         prefix_msgs.append(
             f"本次标的（{resolved.source}，共 {len(resolved.symbols)} 只）：" + "、".join(resolved.symbols)
         )
-        await bot.send("\n".join(prefix_msgs))
+        await bot.send("\n".join(prefix_msgs), at_sender=True)
 
         try:
             from gsuid_core.ai_core.capability_agents.runner import (
@@ -158,7 +162,7 @@ async def run_holdings_analysis_command(bot: Bot, ev: Event) -> None:
                 run_capability_agent,
             )
         except ImportError as e:
-            await bot.send(f"⚠️ AI 子系统未就绪，无法分析：{type(e).__name__}: {e}")
+            await bot.send(f"⚠️ AI 子系统未就绪，无法分析：{type(e).__name__}: {e}", at_sender=True)
             return
 
         task = build_analysis_task(resolved.symbols, user_id=uid, day=day)
@@ -173,12 +177,12 @@ async def run_holdings_analysis_command(bot: Bot, ev: Event) -> None:
         except Exception as e:
             # agent 运行期异常类型不可枚举；finally 释放额度
             logger.exception(f"[holdings_analysis] 分析 agent 异常: {e}")
-            await bot.send(f"⚠️ 分析失败：{type(e).__name__}: {e}（额度已释放，可重试）")
+            await bot.send(f"⚠️ 分析失败：{type(e).__name__}: {e}（额度已释放，可重试）", at_sender=True)
             return
 
         md_s = normalize_analysis_markdown(md)
         if not md_s or md_s.startswith(CAPABILITY_AGENT_ERROR_PREFIX):
-            await bot.send(f"⚠️ 分析未完成：{(md_s or '空结果')[:300]}（额度已释放，可重试）")
+            await bot.send(f"⚠️ 分析未完成：{(md_s or '空结果')[:300]}（额度已释放，可重试）", at_sender=True)
             return
 
         image_bytes: bytes | None = None
@@ -206,24 +210,24 @@ async def run_holdings_analysis_command(bot: Bot, ev: Event) -> None:
                 logger.info("[holdings_analysis] 使用 render_md_to_bytes 兜底")
 
         if image_bytes is None:
-            await bot.send("⚠️ 出图失败（分析已完成但渲染不可用）。额度已释放，可稍后重试。")
+            await bot.send("⚠️ 出图失败（分析已完成但渲染不可用）。额度已释放，可稍后重试。", at_sender=True)
             return
 
         # 图片送达即为成功边界；确认文案失败不回滚额度
         try:
-            await bot.send(MessageSegment.image(image_bytes))
+            await bot.send(MessageSegment.image(image_bytes), at_sender=True)
         except (OSError, RuntimeError, ValueError, TypeError) as e:
             logger.exception(f"[holdings_analysis] 发送图片失败: {e}")
-            await bot.send(f"⚠️ 图片发送失败：{e}（额度已释放）")
+            await bot.send(f"⚠️ 图片发送失败：{e}（额度已释放）", at_sender=True)
             return
 
         success = True
         try:
-            await bot.send("✅ 持仓分析图已发送（评级与建议见上图）。非投资建议。")
+            await bot.send("✅ 持仓分析图已发送（评级与建议见上图）。非投资建议。", at_sender=True)
         except (OSError, RuntimeError, ValueError, TypeError) as e:
             logger.warning(f"[holdings_analysis] 确认文案发送失败（图已达）: {e}")
 
         logger.info(f"[holdings_analysis] 完成 user={uid} bot={bid} n={len(resolved.symbols)}")
     finally:
-        if not success:
+        if claimed and not success:
             release_quota(uid, bid, day)

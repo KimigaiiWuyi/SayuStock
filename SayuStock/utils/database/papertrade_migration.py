@@ -239,8 +239,8 @@ async def _seed_broadcast_targets(session: AsyncSession) -> None:
         seeds.append(origin_group)
 
     for gid in seeds:
-        # ws_bot_id / bot_self_id 迁移期无 ev 可抄，留空退化到兜底连接；
-        # 运维应在每个目标群重发一次「模拟盘推送添加」补齐。
+        # ws_bot_id / bot_self_id 迁移期无 ev 可抄，留空；投递时 broadcast 会回退在线连接。
+        # 运维应在每个目标群重发一次「模拟盘推送添加」补齐，避免多适配器挑错线。
         await _exec(
             session,
             (

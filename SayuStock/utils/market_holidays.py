@@ -33,6 +33,7 @@ _MARKET_CAL: dict[Market, str] = {
     Market.HK_STOCK: "HK",
     Market.US_STOCK: "US",
     Market.US_FUTURE: "US",
+    Market.US_BOND: "US_FED",
     Market.COMMODITY: "US",
     Market.COMMODITY_SPOT: "US",
     Market.CA_INDEX: "US",
@@ -56,6 +57,7 @@ def holiday_local_date(market: Market, now_bjt: datetime) -> date:
     if market in {
         Market.US_STOCK,
         Market.US_FUTURE,
+        Market.US_BOND,
         Market.COMMODITY,
         Market.COMMODITY_SPOT,
         Market.CA_INDEX,
@@ -78,6 +80,8 @@ def _holiday_dates(cal_id: str, year: int) -> frozenset[str]:
         return frozenset()
     if cal_id == "US":
         cal = _holidays.NYSE(years=year)
+    elif cal_id == "US_FED":
+        cal = _holidays.country_holidays("US", years=year)
     elif cal_id == "EU":
         cal = _holidays.country_holidays("GB", years=year)
         cal.update(_holidays.country_holidays("DE", years=year))
@@ -86,14 +90,34 @@ def _holiday_dates(cal_id: str, year: int) -> frozenset[str]:
     return frozenset(day.isoformat() for day in cal)
 
 
-def is_market_holiday(market: Market, now_bjt: datetime) -> bool:
-    """该市场在 now 对应的当地日历日是否因节假日休市（不含周末）。"""
-    if market in {Market.CRYPTO, Market.UNKNOWN}:
-        return False
-    local = holiday_local_date(market, now_bjt)
+# 亚洲上午已开盘、美东仍是前一晚的近 24h 品种。BJT 日期可能才是美国交易日。
+_OVERNIGHT_US = {
+    Market.US_FUTURE,
+    Market.US_BOND,
+    Market.COMMODITY,
+    Market.COMMODITY_SPOT,
+    Market.FX,
+}
+
+
+def _date_is_holiday(market: Market, local: date) -> bool:
     if market == Market.FX:
         return (local.month, local.day) in {(1, 1), (12, 25)}
     cal_id = _MARKET_CAL.get(market)
     if not cal_id:
         return False
     return local.isoformat() in _holiday_dates(cal_id, local.year)
+
+
+def is_market_holiday(market: Market, now_bjt: datetime) -> bool:
+    """该市场在 now 对应的当地日历日是否因节假日休市（不含周末）。"""
+    if market in {Market.CRYPTO, Market.UNKNOWN}:
+        return False
+    local = holiday_local_date(market, now_bjt)
+    if _date_is_holiday(market, local):
+        return True
+    if market in _OVERNIGHT_US:
+        bjt_d = _as_bjt(now_bjt).date()
+        if bjt_d != local and _date_is_holiday(market, bjt_d):
+            return True
+    return False

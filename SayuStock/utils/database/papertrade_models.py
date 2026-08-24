@@ -216,12 +216,11 @@ class SayuPaperAgentPool(BaseIDModel, table=True):
 class SayuPaperBroadcastTarget(BaseIDModel, table=True):
     """模拟盘播报目标（成交冒泡推到哪些群）。
 
-    ``ws_bot_id`` / ``bot_self_id`` 不是冗余：``emit_proactive_message`` 靠
-    ``Event.WS_BOT_ID`` 在 ``gss.active_bot`` 里选连接，选不到就
-    ``next(iter(...))`` 随便挑一条——多适配器部署下会把 A 平台的播报从 B 平台
-    发出去，消息静默丢失。``Event.session_id`` 也是
+    ``ws_bot_id`` / ``bot_self_id`` 不是冗余：``emit_proactive_message`` **只按**
+    ``Event.WS_BOT_ID`` 选连接，缺了会直接发送失败（群里像静默）。迁移种子留空时
+    由 ``broadcast._bind_live_ws`` 回退到当前在线连接。``Event.session_id`` 也是
     ``{WS_BOT_ID}:{bot_id}:{bot_self_id}:group:{group_id}``，缺字段会拼出对不上
-    的伪会话，让心跳去重与 AI 会话历史都记错账。
+    的伪会话，让心跳去重与 AI 会话历史都记错账。最好在目标群重发「模拟盘推送添加」。
 
     这三个字段在「模拟盘推送添加」命令执行时从当前 ``ev`` 直接抄——命令就是在
     目标群里发的，此刻的 ev 正是"这个群收得到消息"的权威来源。迁移种子没有 ev

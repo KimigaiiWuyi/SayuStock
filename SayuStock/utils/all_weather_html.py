@@ -104,8 +104,8 @@ _STALE_PRICE = "#9aa7bd"
 _CODE_BY_NAME: dict[str, str] = {}
 for _table in (i_code, commodity, bond, whsc, crypto):
     _CODE_BY_NAME.update({k: v for k, v in _table.items() if v})
-_CODE_BY_NAME["JP 30Y"] = "100.N225"
-_CODE_BY_NAME["JP 10Y"] = "100.N225"
+_CODE_BY_NAME["JP 30Y"] = "JP.BOND"
+_CODE_BY_NAME["JP 10Y"] = "JP.BOND"
 
 
 def resolve_emoji(name: str) -> str:

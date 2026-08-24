@@ -131,7 +131,8 @@ def test_parse_em_code_all_weather_prefixes() -> None:
     assert _parse_em_code("i:1.000001") == Market.A_SHARE
     assert _parse_em_code("113.rbm") == Market.CN_FUTURE_DAY
     assert _parse_em_code("171.CN10Y") == Market.BOND
-    assert _parse_em_code("171.US10Y") == Market.US_STOCK
+    assert _parse_em_code("171.US10Y") == Market.US_BOND
+    assert _parse_em_code("JP.BOND") == Market.JP_INDEX
     assert _parse_em_code("BTC") == Market.CRYPTO
     assert _parse_em_code("119.USDJPY") == Market.FX
     assert _parse_em_code("100.UDI") == Market.FX

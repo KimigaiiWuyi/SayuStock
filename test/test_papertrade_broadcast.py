@@ -252,3 +252,68 @@ def test_broadcast_fill_ignores_missing_account():
     )
     assert sent == 0
     assert emitter.calls == []
+
+
+# ============================================================
+# 5) 迁移种子空 ws_bot_id：必须回退到在线连接，不能静默
+# ============================================================
+def test_bind_live_ws_keeps_explicit_connection(monkeypatch):
+    live = object()
+    monkeypatch.setattr(
+        "gsuid_core.gss.gss",
+        SimpleNamespace(active_bot={"ws-1": live, "ws-2": object()}),
+    )
+    ev = bc.event_for_target(_target("111", ws_bot_id="ws-1"))
+    assert bc._bind_live_ws(ev) is live
+    assert ev.WS_BOT_ID == "ws-1"
+
+
+def test_bind_live_ws_falls_back_when_empty(monkeypatch):
+    live = object()
+    monkeypatch.setattr("gsuid_core.gss.gss", SimpleNamespace(active_bot={"ws-live": live}))
+    ev = bc.event_for_target(_target("111", ws_bot_id=""))
+    assert ev.WS_BOT_ID is None
+    assert bc._bind_live_ws(ev) is live
+    assert ev.WS_BOT_ID == "ws-live"
+    assert ev.real_bot_id == "ws-live"
+
+
+def test_bind_live_ws_returns_none_without_connections(monkeypatch):
+    monkeypatch.setattr("gsuid_core.gss.gss", SimpleNamespace(active_bot={}))
+    ev = bc.event_for_target(_target("111", ws_bot_id=""))
+    assert bc._bind_live_ws(ev) is None
+
+
+def test_emit_passes_fallback_bot_into_proactive(monkeypatch):
+    """空 ws_bot_id 时必须把 Bot 实例交给 emitter，否则 Core 会「无可用 Bot」直接 False。"""
+    live = object()
+    monkeypatch.setattr("gsuid_core.gss.gss", SimpleNamespace(active_bot={"ws-live": live}))
+
+    class FakeBot:
+        def __init__(self, raw: object, ev: object) -> None:
+            self.raw = raw
+            self.ev = ev
+
+    captured: Dict[str, Any] = {}
+
+    async def fake_call(**kwargs: Any) -> bool:
+        captured.update(kwargs)
+        return True
+
+    monkeypatch.setattr("gsuid_core.bot.Bot", FakeBot)
+    monkeypatch.setattr(bc, "_call_emitter", fake_call)
+    ev = bc.event_for_target(_target("666249732", ws_bot_id=""))
+    ok = asyncio.run(
+        bc._emit(
+            event=ev,
+            message="hi",
+            source="tool",
+            trigger_reason="papertrade_fill:默认模拟盘:688981:sell",
+            suppress_when_heartbeat_recent=False,
+        )
+    )
+    assert ok is True
+    assert captured["bot"].raw is live
+    assert captured["event"].WS_BOT_ID == "ws-live"
+    assert captured["suppress_when_heartbeat_recent"] is False
+    assert captured["source"] == "tool"

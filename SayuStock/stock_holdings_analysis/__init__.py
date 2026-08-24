@@ -20,7 +20,8 @@ sv_holdings_analysis = SV("持仓分析")
 
     当用户说「持仓分析」「帮我分析一下自选/持仓」「自选股综合评级」时调用。
     可无参数（读我的自选，最多 8 只）；或在 text 中传代码/名称列表（空格分隔，最多 8）。
-    每用户每天成功出图限 1 次。本工具会触发分析 agent + render_agent，耗时较长。
+    每用户每天成功出图限 1 次（配置 holdings_analysis_unlimited_users 的 user_id 不限）。
+    本工具会触发分析 agent + render_agent，耗时较长；结果会 @ 发起人。
 
     Args:
         text: 可选，股票代码或名称，空格/逗号分隔；留空则用「我的自选」

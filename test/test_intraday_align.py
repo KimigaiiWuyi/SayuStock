@@ -9,8 +9,8 @@ from pathlib import Path
 import pytest
 
 from SayuStock.utils.time_range import (
-    MARKET_SESSIONS,
     Market,
+    get_market_sessions,
     is_market_active_now,
     get_session_anchor_date,
     get_trading_datetimes_bjt,
@@ -101,10 +101,17 @@ CACHE_FILES = [
 
 
 def test_us_future_session_is_bjt_not_et() -> None:
-    sess = MARKET_SESSIONS[Market.US_FUTURE]
-    assert sess[0][0] in {"06:00", "07:00"}
-    assert sess[0][1] in {"05:00", "06:00"}
-    assert sess[0] != ("18:00", "17:00")
+    summer = get_market_sessions(Market.US_FUTURE, dt.datetime(2026, 7, 24, 12, 0))
+    winter = get_market_sessions(Market.US_FUTURE, dt.datetime(2026, 1, 15, 12, 0))
+    assert summer[0] == ("06:00", "05:00")
+    assert winter[0] == ("07:00", "06:00")
+    assert summer[0] != ("18:00", "17:00")
+    us_eq_s = get_market_sessions(Market.US_STOCK, dt.datetime(2026, 8, 24, 12, 0))
+    us_eq_w = get_market_sessions(Market.US_STOCK, dt.datetime(2026, 1, 15, 12, 0))
+    assert us_eq_s[0] == ("21:30", "04:00")
+    assert us_eq_w[0] == ("22:30", "05:00")
+    bond = get_market_sessions(Market.US_BOND, dt.datetime(2026, 8, 24, 10, 0))
+    assert bond[0] == ("06:00", "05:00")
 
 
 def test_session_anchor_after_midnight() -> None:
@@ -118,6 +125,12 @@ def test_session_anchor_after_midnight() -> None:
 
     midday = dt.datetime(2026, 7, 24, 12, 0)
     assert get_session_anchor_date("103.NQ00Y", midday) == dt.date(2026, 7, 24)
+
+    winter = dt.datetime(2026, 1, 15, 1, 5)
+    assert get_session_anchor_date("103.NQ00Y", winter) == dt.date(2026, 1, 14)
+    warr = get_trading_datetimes_bjt("103.NQ00Y", winter)
+    assert warr[0] == dt.datetime(2026, 1, 14, 7, 0)
+    assert warr[-1] == dt.datetime(2026, 1, 15, 6, 0)
 
 
 def test_a_share_trading_day_window_includes_lunch() -> None:

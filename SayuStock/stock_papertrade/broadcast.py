@@ -7,9 +7,10 @@ Kanban cron 里发生的，此时根本没有"触发上下文"——心跳树的
 所以播报目标必须是**数据**（``SayuPaperBroadcastTarget`` 表），每个目标独立
 造一个 Event 去投递。造 Event 时三个字段少一个都会投错：
 
-- ``ws_bot_id`` → ``emit_proactive_message._resolve_active_bot`` 靠它在
-  ``gss.active_bot`` 里挑连接。缺了就 ``next(iter(...))`` 随便挑一个，多适配器
-  部署下会把 QQ 的消息发进 Discord 的连接（发不出去，静默失败）。
+- ``ws_bot_id`` → ``emit_proactive_message`` **只按** ``Event.WS_BOT_ID`` 在
+  ``gss.active_bot`` 里挑连接；缺了或过期会返回 False，群里看起来像静默。
+  迁移种子 / 控制台手填常常没有这个字段。本模块在投递前会回退到当前在线连接，
+  并把选中的 id 写回 Event。多适配器时仍应在目标群重发「模拟盘推送添加」锁死连接。
 - ``bot_self_id`` → 进 ``Event.session_id``。缺了 session_id 会与真实会话对不上，
   主动消息同步进错的 AI 会话历史。
 - ``bot_id`` → 适配器类型（onebot/discord/...），路由的第一跳。
@@ -63,17 +64,43 @@ async def _targets(account_id: int) -> List[SayuPaperBroadcastTarget]:
     try:
         return await db.PaperBroadcastRepo.list_by_account(account_id, enabled_only=True)
     except Exception as e:
-        logger.debug(f"[SayuStock][PaperTrade] 读播报目标失败 account_id={account_id}: {e}")
+        logger.warning(f"[SayuStock][PaperTrade] 读播报目标失败 account_id={account_id}: {e}")
         return []
 
 
-async def _emit(
+def _bind_live_ws(event: Event) -> object | None:
+    """给 Event 补上当前能用的 WS 连接。
+
+    ``emit_proactive_message`` 在 ``bot is None`` 时只认 ``event.WS_BOT_ID``；
+    迁移种子把 ws_bot_id 留空，直接投会「无可用 Bot」然后静默。
+    单连接部署回退到那一条；多连接时先用第一条并打 warning，运维应在群里补「推送添加」。
+    """
+    from gsuid_core.gss import gss
+
+    bots = gss.active_bot
+    wanted = (event.WS_BOT_ID or "").strip()
+    if wanted and wanted in bots:
+        return bots[wanted]
+    if not bots:
+        return None
+    ws_id, raw = next(iter(bots.items()))
+    logger.warning(
+        f"[SayuStock][PaperTrade] 播报 Event 无有效 ws_bot_id（存的是 {wanted!r}），"
+        f"回退到在线连接 {ws_id}；请在目标群重发「模拟盘推送添加」锁死路由"
+    )
+    event.WS_BOT_ID = ws_id
+    event.real_bot_id = ws_id
+    return raw
+
+
+async def _call_emitter(
     *,
     event: Event,
     message: str,
     source: ProactiveSource,
     trigger_reason: str,
     suppress_when_heartbeat_recent: bool,
+    bot: object,
 ) -> bool:
     from gsuid_core.ai_core.proactive.emitter import emit_proactive_message
 
@@ -84,7 +111,35 @@ async def _emit(
             source=source,
             trigger_reason=trigger_reason,
             suppress_when_heartbeat_recent=suppress_when_heartbeat_recent,
+            bot=bot,
         )
+    )
+
+
+async def _emit(
+    *,
+    event: Event,
+    message: str,
+    source: ProactiveSource,
+    trigger_reason: str,
+    suppress_when_heartbeat_recent: bool,
+) -> bool:
+    from gsuid_core.bot import Bot
+
+    raw = _bind_live_ws(event)
+    if raw is None:
+        logger.warning(
+            f"[SayuStock][PaperTrade] 无在线 Bot，跳过播报 group={event.group_id} ws_bot_id={event.WS_BOT_ID!r}"
+        )
+        return False
+    bot = Bot(raw, event)
+    return await _call_emitter(
+        event=event,
+        message=message,
+        source=source,
+        trigger_reason=trigger_reason,
+        suppress_when_heartbeat_recent=suppress_when_heartbeat_recent,
+        bot=bot,
     )
 
 
@@ -99,13 +154,13 @@ async def broadcast_text(
     """把一段文本推给账户订阅的所有群，返回成功条数。
 
     **绝不抛异常**：播报失败不能连累已经落库的成交。单个群失败（bot 掉线 / 被踢）
-    只记 debug 并继续推下一个群 —— 一个群挂掉不该让其它群收不到。
+    记 warning 并继续推下一个群 —— 一个群挂掉不该让其它群收不到。
     """
     if account_id <= 0 or not message:
         return 0
     targets = await _targets(account_id)
     if not targets:
-        logger.debug(f"[SayuStock][PaperTrade] 账户 {account_id} 无启用中的播报目标，跳过播报")
+        logger.warning(f"[SayuStock][PaperTrade] 账户 {account_id} 无启用中的播报目标，跳过播报")
         return 0
 
     ok: int = 0
@@ -120,8 +175,15 @@ async def broadcast_text(
             )
             if sent:
                 ok += 1
+            else:
+                logger.warning(
+                    f"[SayuStock][PaperTrade] 播报到群 {t.group_id} 未发出 "
+                    f"(ws_bot_id={t.ws_bot_id!r} bot_self_id={t.bot_self_id!r})"
+                )
         except Exception as e:
-            logger.debug(f"[SayuStock][PaperTrade] 播报到群 {t.group_id} 失败（已跳过）: {e}")
+            logger.warning(f"[SayuStock][PaperTrade] 播报到群 {t.group_id} 失败（已跳过）: {e}")
+    if ok == 0:
+        logger.warning(f"[SayuStock][PaperTrade] 账户 {account_id} 成交播报 0/{len(targets)} 成功：{message[:80]}")
     return ok
 
 

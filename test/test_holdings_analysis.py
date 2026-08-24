@@ -54,6 +54,34 @@ def test_quota_natural_day():
     print("[OK] quota natural day")
 
 
+def test_unlimited_user_skips_quota_file(monkeypatch):
+    uid, bid = "vip_ha_user", "test_ha_bot"
+    day = date.today()
+    monkeypatch.setattr(q, "unlimited_user_ids", lambda: frozenset({uid}))
+    q.clear_quota_for_test(uid, bid, day)
+    assert q.is_unlimited_user(uid) is True
+    assert q.is_unlimited_user("someone_else") is False
+    assert q.try_claim_quota(uid, bid, day) is True
+    assert q.try_claim_quota(uid, bid, day) is True
+    assert q.is_quota_available(uid, bid, day) is True
+    assert q.quota_path(uid, bid, day).is_file() is False
+    q.mark_quota_used(uid, bid, day)
+    assert q.quota_path(uid, bid, day).is_file() is False
+    print("[OK] unlimited skips quota file")
+
+
+def test_regular_user_still_limited_when_others_unlimited(monkeypatch):
+    monkeypatch.setattr(q, "unlimited_user_ids", lambda: frozenset({"vip_only"}))
+    uid, bid = "normal_ha_user", "test_ha_bot"
+    day = date.today()
+    q.clear_quota_for_test(uid, bid, day)
+    assert q.is_unlimited_user(uid) is False
+    assert q.try_claim_quota(uid, bid, day) is True
+    assert q.try_claim_quota(uid, bid, day) is False
+    q.clear_quota_for_test(uid, bid, day)
+    print("[OK] regular user still limited")
+
+
 def test_quota_claim_release():
     uid, bid = "test_ha_claim", "test_ha_bot"
     day = date.today()
