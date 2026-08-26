@@ -40,8 +40,9 @@ class MultiFactorStrategy(Strategy):
             "【策略：多因子】\n"
             "- 四维评分：技术≈40% / 基本面≈30% / 事件舆情≈15% / 波动率调节。\n"
             f"- buy 建议 score ≥ {min_score:.2f}；不足则 hold 并在 reason 写清差在哪一维。\n"
-            "- buy 的 indicators **必须**写入 plan_stop_pct(<0) 或 plan_stop_price(>0)，"
-            "否则会被拒绝落库。请先调 stock_indicators。\n"
+            "- buy 的 snapshot/indicators **必须**写入 plan_stop_pct(<0) 或 plan_stop_price(>0)"
+            "（也接受 stop_pct / stop_price）；否则拒绝落库。请先调 stock_indicators。\n"
+            "- 成交只调 trade_insert（持仓随成交写入）；禁止与 position_upsert 并行改股数。\n"
             "- 禁止纯技术面强 buy：事件/舆情未检索时最多给试探仓。\n"
         )
 

@@ -82,13 +82,19 @@ async def bar(...):
     """错误：这只是表达式，__doc__ 为 None，永远召不回。"""
 ```
 
-## 9.8 模拟盘双账本（S-7）
+## 9.8 模拟盘双账本（S-7） / 流水与持仓分裂
 
 2026-07 事故：研究代理用 `record_*` / `state_set` 记账，SQLModel 另一套，主人格查持仓读错。
+
+2026-08-25 事故：决策代理把 `papertrade_trade_insert` 与 `papertrade_position_upsert`
+**并行**调用。止损闸拒绝流水（JSON 用了 `stop_pct` 且尾部写坏），upsert 仍建仓 →
+持仓有中际旭创、流水没有、现金未扣、群不播报、收盘净值虚高约 8.5 万。
 
 - 模拟盘只写 papertrade 表  
 - `stock_agent` 不承接模拟盘执行  
 - 建账确认文案不写死可变数字（artifact 永久化）  
+- **成交只走 `trade_insert`**：同一 session 写流水+现金+持仓；`position_upsert` 只刷新报价  
+- sell 现金是 `amount - fee`，**不要**再加 `realized_pnl`（否则盈亏记两遍）  
 
 ## 9.9 缓存污染与测试（S-8）
 
@@ -200,7 +206,7 @@ if not isinstance(raw_data, KlineSeries):
 | S-4 | 跨天分时甩日 | §9.5 |
 | S-5 | 装饰器未 import | §9.6 |
 | S-6 | 工具无 docstring | §9.7 / [§05](./05-ai-tools-and-agents.md) |
-| S-7 | 模拟盘双账本 / artifact 脏数字 | §9.8 / [§06](./06-papertrade.md) |
+| S-7 | 模拟盘双账本 / 流水与持仓分裂 / artifact 脏数字 | §9.8 / [§06](./06-papertrade.md) |
 | S-8 | 缓存与测试污染 | §9.9 |
 | S-9 | playwright / Agg | §9.10 |
 | S-10 | 板块展开 | §9.11 |

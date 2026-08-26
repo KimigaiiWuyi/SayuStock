@@ -195,6 +195,8 @@ def test_month_bottom_then_daily_confirms():
 
 def test_multi_factor_only_gates_plan_stop():
     assert _gate(MULTI, {"plan_stop_pct": -0.08}, score=0.01) == ""
+    assert _gate(MULTI, {"stop_pct": -0.08}, score=0.01) == ""
+    assert _gate(MULTI, {"stop_price": 780.15}, score=0.01) == ""
     assert _gate(MULTI, {"roe": 1.0}) != ""
 
 

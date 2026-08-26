@@ -194,7 +194,7 @@ SayuStock 插件里的"模拟盘"长期能力：
 - 通用辅助：`stock_financials`（财报 + 行业类型）/ `stock_indicators`（MA/MACD/RSI/BOLL 等技术指标）/ `stock_is_trading_day`（交易日 + 交易时段）
 
 **仅子代理可见**（category="default" + visible_when）：
-- 写操作：`papertrade_decision_insert`（写决策日志）/ `papertrade_trade_insert`（写流水 + 自动扣/加 cash + 累计 principal）/ `papertrade_position_upsert`（写持仓 + **可选 `last_quote_price`**）/ `papertrade_match_order`（撮合计算 fee，不写库）
+- 写操作：`papertrade_decision_insert`（写决策日志）/ `papertrade_trade_insert`（写流水 + 改现金 + **随成交原子改持仓** + 累计 principal）/ `papertrade_position_upsert`（**只刷新已有持仓报价**，不能建仓/改股数）/ `papertrade_match_order`（撮合计算 fee，不写库）
 
 ⚠️ **策略硬闸（2026-08-12 加）**：`papertrade_decision_insert` / `papertrade_trade_insert`
 的 buy 会先过**该盘策略的 `gate_buy`**：缺入场价/止损价、评分不够、止损太宽、
@@ -203,10 +203,12 @@ SayuStock 插件里的"模拟盘"长期能力：
 
 ⚠️ **成交价规则（2026-07-06）**：`papertrade_match_order` **永远按撮合此刻的实时
 行情价成交**——传入的 `price` 只是参考价，可不传；候选池里记的入池价 / 指标快照
-里的旧价**不会**被用来成交。后续 `trade_insert` / `position_upsert` 必须用
-match_order 返回的 `price` / `amount` / `fee_total`（`trade_insert` 会再校验一次，
-与实时价偏差 >3% 直接拒绝落库）。非交易日 / 非交易时段（9:30-11:30、13:00-15:00
-之外）match_order 一律拒单，收到"非交易时段拒绝撮合"就改 hold。
+里的旧价**不会**被用来成交。后续 `trade_insert` 必须用 match_order 返回的
+`price` / `amount` / `fee_total`（`trade_insert` 会再校验一次，与实时价偏差
+>3% 直接拒绝落库）。**禁止**把 `trade_insert` 和 `position_upsert` 并行：
+流水被闸拒绝时 upsert 仍会建仓，造成无流水幽灵仓、净值虚高、群里不播报。
+非交易日 / 非交易时段（9:30-11:30、13:00-15:00 之外）match_order 一律拒单，
+收到"非交易时段拒绝撮合"就改 hold。
 
 **入口**（by_trigger）：
 - `send_init_command` —— 唯一"建账户"路径，6 步全跑
@@ -236,8 +238,8 @@ match_order 返回的 `price` / `amount` / `fee_total`（`trade_insert` 会再�
   - `"live"` = 60s 内新鲜报价
   - `"db"`   = DB 有缓存但超过 60s
   - `"cost"` = 从未刷过价，用 `avg_cost` 兜底
-- 决策代理 `papertrade_position_upsert(qty, avg_cost=price, last_quote_price=price)`
-  把成交价当最新报价一并落库，避免刚买的 60s 内显示 `quote_source="cost"`。
+- 决策代理成交后**不必**再调 `position_upsert`：`trade_insert` 已把成交价写入
+  `last_quote_price`。`position_upsert` 只允许给已有持仓补报价，传入 qty 会被忽略。
 
 ## 六、当用户问"模拟盘能帮我赚钱吗？"
 

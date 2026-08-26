@@ -146,8 +146,9 @@ class Strategy(ABC):
             "Phase 1: papertrade_account_query + papertrade_position_list；"
             "有持仓时对每只回看 trade/decision 里的入场计划，禁止每轮重编止损。\n"
             f"{research}"
-            "Phase 执行: buy/sell 走 match_order → trade_insert → position_upsert → "
-            "decision_insert；hold 只写 decision_insert。\n"
+            "Phase 执行: buy/sell 走 match_order → trade_insert（原子写流水+现金+持仓）→ "
+            "decision_insert；hold 只写 decision_insert。"
+            "禁止与 position_upsert 并行改股数。\n"
             "最终消息只输出 <<NO_BROADCAST>>。\n"
         )
 

@@ -70,6 +70,8 @@ MatchResult = matcher.MatchResult
 calc_fee = matcher.calc_fee
 calc_new_avg_cost = matcher.calc_new_avg_cost
 calc_realized_pnl = matcher.calc_realized_pnl
+cash_delta_for_fill = matcher.cash_delta_for_fill
+apply_fill_qty_cost = matcher.apply_fill_qty_cost
 match_order = matcher.match_order
 round_lot = matcher.round_lot
 
@@ -248,6 +250,26 @@ def test_calc_new_avg_cost_empty():
     """空仓时返回 0"""
     assert calc_new_avg_cost(0, 0, 0, 0, 0) == 0.0
     print("[OK] 空仓平均成本为 0")
+
+
+def test_cash_delta_for_fill_does_not_add_realized_pnl():
+    """sell 现金只加 amount-fee；realized_pnl 不进现金。"""
+    assert cash_delta_for_fill("buy", 84799.0, 21.2) == -(84799.0 + 21.2)
+    assert cash_delta_for_fill("sell", 12133.0, 11.07) == 12133.0 - 11.07
+    # 旧公式会变成 11038.93（再减 1083），买力被亏损再扣一遍
+    assert cash_delta_for_fill("sell", 12133.0, 11.07) != 12133.0 - 11.07 - 1083.0
+
+
+def test_apply_fill_qty_cost_buy_then_partial_sell():
+    qty, avg = apply_fill_qty_cost(0, 0.0, "buy", 400, 32.75, 5.0)
+    assert qty == 400
+    assert abs(avg - (32.75 * 400 + 5.0) / 400) < 1e-9
+    qty2, avg2 = apply_fill_qty_cost(qty, avg, "sell", 200, 34.66, 8.466)
+    assert qty2 == 200
+    assert avg2 == avg
+    qty3, avg3 = apply_fill_qty_cost(qty2, avg2, "sell", 200, 34.66, 8.466)
+    assert qty3 == 0
+    assert avg3 == 0.0
 
 
 if __name__ == "__main__":

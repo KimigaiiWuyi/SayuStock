@@ -28,6 +28,39 @@ from ..utils.database.papertrade_models import (
     SayuPaperPosition,
 )
 
+
+@sv_papertrade_admin.on_fullmatch(("模拟盘对账",))
+async def send_heal_ledger(bot: Bot, ev: Event) -> list[str] | None:
+    """修幽灵仓、卖出现金多记的已实现盈亏、被抬高的净值、空播报路由。幂等。"""
+    from ..utils.database.papertrade_migration import heal_orphan_ledger
+
+    summary = await heal_orphan_ledger()
+    orphans: list[dict[str, Any]] = list(summary["orphans"])
+    cash_fix: list[dict[str, Any]] = list(summary["cash_restated"])
+    lines: list[str] = ["🧾 **模拟盘对账修复**"]
+    if not orphans and not cash_fix and int(summary["broadcast_filled"]) == 0:
+        lines.append("账本已自洽：没有无流水持仓，现金与流水一致，播报路由也无需回填。")
+        return await bot.send("\n".join(lines))
+    if orphans:
+        lines.append(f"删除幽灵仓 {len(orphans)} 只（持仓有、流水净头寸≤0）：")
+        for o in orphans:
+            lines.append(
+                f"  · 盘#{o['account_id']} {o['stock_name']}({o['stock_code']}) {o['qty']} 股 市值约 {o['mv']:,.0f}"
+            )
+    else:
+        lines.append("没有幽灵仓。")
+    if cash_fix:
+        lines.append("更正卖出现金误加 realized_pnl：")
+        for f in cash_fix:
+            lines.append(
+                f"  · 盘#{f['account_id']} 现金 {f['old_cash']:,.2f} → {f['new_cash']:,.2f} （多记 {f['extra']:,.2f}）"
+            )
+    if int(summary["snapshots_updated"]) > 0:
+        lines.append(f"已回写净值快照 {summary['snapshots_updated']} 行。")
+    lines.append(f"播报目标补全 ws_bot_id/bot_self_id：{summary['broadcast_filled']} 条。")
+    return await bot.send("\n".join(lines))
+
+
 # 压测专用盘：**绝不能**复用用户的真盘。压测会真买真卖、末尾还会 reset_account 把
 # 账本清空，跑在真盘上等于把用户几个月的记录抹了。
 _DRY_RUN_ACCOUNT_NAME: str = "压测临时盘"
@@ -240,8 +273,8 @@ async def send_dry_run(bot: Bot, ev: Event) -> list[str] | None:
                                      + 重试 bind_kanban_init/period
         ② 自主决策 (LLM，**不强制**) — LLM 自己判断 buy/sell/hold；
                                      验证三类行为 + 主动消息
-        ③ 强制 BUY (LLM，真撮合)   — papertrade_match_order + trade_insert +
-                                     position_upsert + decision_insert；
+        ③ 强制 BUY (LLM，真撮合)   — papertrade_match_order + trade_insert
+                                     （持仓随成交写入）+ decision_insert；
                                      失败则 ❌；最后推主动消息
         ④ 强制 SELL (LLM，真平仓)   — 平仓走完整撮合；如持仓空先 buy 兜底；
                                      推主动消息
@@ -730,9 +763,9 @@ async def send_dry_run(bot: Bot, ev: Event) -> list[str] | None:
             f"        - 事件/舆情要点或明确缺口（来自 Step 6/7.7）\n"
             f"        - 行业横向对比结论（来自 Step 8，若做了）\n"
             f"Step 10: papertrade_decision_insert(action=<你的判断>, reason='...', indicators='<JSON 摘要>')\n"
-            f"        若 action='buy'：先 papertrade_match_order(buy) → papertrade_trade_insert(buy) → papertrade_position_upsert(qty>0)，decision_insert 的 trade_id 关联\n"  # noqa: E501  压测 prompt：完整 step 描述，不拆行避免破坏 LLM 指令语义
-            "        若 action='sell'：先 papertrade_match_order(sell) → papertrade_trade_insert(sell, realized_pnl) → papertrade_position_upsert(qty=0)，decision_insert 的 trade_id 关联\n"  # noqa: E501  同上
-            "        若 action='hold'：仅 decision_insert，不调 match_order/trade_insert/position_upsert\n"
+            f"        若 action='buy'：先 papertrade_match_order(buy) → papertrade_trade_insert(buy，持仓随成交写入)，decision_insert 的 trade_id 关联\n"  # noqa: E501  压测 prompt：完整 step 描述，不拆行避免破坏 LLM 指令语义
+            "        若 action='sell'：先 papertrade_match_order(sell) → papertrade_trade_insert(sell, realized_pnl，持仓随成交更新)，decision_insert 的 trade_id 关联\n"  # noqa: E501  同上
+            "        若 action='hold'：仅 decision_insert，不调 match_order/trade_insert\n"
             "\n"
             "⚠️ 不要为了过测试伪造 row id；若 papertrade_* 工具不可达，"
             "就在报告里列工具缺口，仅 papertrade_decision_insert 写一条对应 action 的决策日志。"
@@ -765,14 +798,11 @@ async def send_dry_run(bot: Bot, ev: Event) -> list[str] | None:
             f"          stock_code='000001', stock_name='平安银行', secid=<Step2 拿到的>,\n"
             f"          side='buy', price=<price>, qty=<actual_qty from match>,\n"
             f"          amount=<amount from match>, fee=<fee_total from match>,\n"
-            f"          realized_pnl=0.0, reason='DRY_RUN ③ 强制 buy', snapshot='...',\n"
+            f"          realized_pnl=0.0, reason='DRY_RUN ③ 强制 buy',\n"
+            f"          snapshot='{{\"plan_stop_pct\":-0.08}}',\n"
             f"          decision_id=0, mode='balanced'\n"
-            f"        ) → 拿 trade_id\n"
-            f"Step 6: papertrade_position_upsert(\n"
-            f"          stock_code='000001', stock_name='平安银行', secid=<Step2 拿到的>,\n"
-            f"          qty=<actual_qty>, avg_cost=<price>\n"
-            f"        ) → 拿 pos_id\n"
-            f"Step 7: papertrade_decision_insert(\n"
+            f"        ) → 拿 trade_id（持仓已随成交写入，不要再 position_upsert 改股数）\n"
+            f"Step 6: papertrade_decision_insert(\n"
             f"          action='buy', stock_code='000001', stock_name='平安银行',\n"
             f"          score=0.5, reason='DRY_RUN ③ 强制 buy', indicators='...',\n"
             f"          trade_id=<trade_id from Step5>\n"
@@ -802,7 +832,7 @@ async def send_dry_run(bot: Bot, ev: Event) -> list[str] | None:
             f"\n"
             f"⚠️ 【DRY_RUN 强制 SELL】 — 不允许 action='hold'。\n"
             f'如持仓列表为空（③ 段没真建上），先做"建仓兜底"再 sell：\n'
-            f"  papertrade_match_order(buy, 100股, price=close) → trade_insert(buy) → position_upsert(100股)\n"
+            f"  papertrade_match_order(buy, 100股, price=close) → trade_insert(buy)（持仓随成交写入）\n"
             f"然后立刻 sell 整仓。\n"
             f"\n"
             f"Step 1: papertrade_account_query → 拿 cash\n"
@@ -819,9 +849,7 @@ async def send_dry_run(bot: Bot, ev: Event) -> list[str] | None:
             "          reason='DRY_RUN ④ 强制 sell 平仓', snapshot='...',\n"
             "          decision_id=0, mode='balanced'\n"
             "        ) → 拿 trade_id\n"
-            "Step 7: papertrade_position_upsert(stock_code='000001', stock_name='平安银行', secid, qty=0, avg_cost=0)\n"  # noqa: E501  压测 prompt：完整平仓参数
-            "        → 持仓清 0（qty=0 自动 DELETE）→ pos_id 可能 0\n"
-            "Step 8: papertrade_decision_insert(action='sell', stock_code='000001', stock_name='平安银行',\n"
+            "Step 7: papertrade_decision_insert(action='sell', stock_code='000001', stock_name='平安银行',\n"
             "          score=0.5, reason='DRY_RUN ④ 强制 sell', indicators='...',\n"
             "          trade_id=<trade_id from Step6>)\n"
             "\n"
@@ -983,13 +1011,11 @@ async def send_dry_run(bot: Bot, ev: Event) -> list[str] | None:
         buy_fee: float = sum(t.fee for t in trades_now if t.side == "buy")
         sell_fee: float = sum(t.fee for t in trades_now if t.side == "sell")
 
-        # papertrade_trade_insert 现在自动维护 cash + principal：
+        # papertrade_trade_insert 自动维护 cash + principal + 持仓：
         #   buy  : cash -= (amount + fee)
-        #   sell : cash += (amount - fee + realized_pnl); principal += realized_pnl
-        # 因此 expected_cash = initial + Σbuy(-amount-fee) + Σsell(amount-fee+realized_pnl)
-        #               = initial - buy_amount - buy_fee + sell_amount - sell_fee + realized_pnl
-        #               = initial + (sell_amount - buy_amount) - total_fee + realized_pnl
-        expected_cash: float = initial_cash - buy_amount - buy_fee + sell_amount - sell_fee + realized_pnl
+        #   sell : cash += (amount - fee)；principal += realized_pnl
+        # realized_pnl 不进现金（否则盈亏记两遍）。
+        expected_cash: float = initial_cash - buy_amount - buy_fee + sell_amount - sell_fee
         diff: float = round(cash_now - expected_cash, 4)
 
         # principal 也校验：sell 应累计 realized_pnl，本轮预期

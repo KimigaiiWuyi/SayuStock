@@ -5,11 +5,13 @@
 - :func:`decide_action`     决策树：基于 score + 持仓 + 模式 → 买/卖/持
 - :func:`apply_risk_check`  风控检查（单日交易次数 / 回撤熔断等）
 - :func:`indicators_have_entry_stop`  buy 决策 indicators 是否含止损计划
+- :func:`parse_llm_json_object` / :func:`normalize_plan_indicators`  止损 JSON
 - :data:`MODE_RULES`         三种风控模式的规则矩阵
 - :data:`MODE_THRESHOLDS`    各模式对应的 score 门槛
 """
 
-from typing import Any, Dict, List, Optional
+import json
+from typing import Any, Dict, List, Mapping, Optional
 from dataclasses import field, dataclass
 
 
@@ -36,16 +38,67 @@ def _as_finite_float(value: object) -> float | None:
     return None
 
 
+_STOP_PCT_ALIASES: tuple[str, ...] = ("plan_stop_pct", "stop_pct", "stop_loss_pct")
+_STOP_PRICE_ALIASES: tuple[str, ...] = ("plan_stop_price", "stop_price", "stop_loss_price")
+
+
+def parse_llm_json_object(raw: str) -> dict[str, object]:
+    """解析 LLM 塞进 snapshot/indicators 的 JSON 对象。
+
+    不可信输入：非法 JSON / 数组 / 尾部多余键（常见于嵌套写坏）都降为空 dict，
+    不抛给调用方。``JSONDecoder.raw_decode`` 能吃掉第一个完整对象后面的垃圾。
+    """
+    text = (raw or "").strip()
+    if not text or text == "{}":
+        return {}
+    parsed: object
+    try:
+        parsed = json.loads(text)
+    except (json.JSONDecodeError, TypeError, ValueError):
+        try:
+            parsed, _idx = json.JSONDecoder().raw_decode(text)
+        except (json.JSONDecodeError, TypeError, ValueError):
+            return {}
+    if not isinstance(parsed, dict):
+        return {}
+    return {str(k): v for k, v in parsed.items()}
+
+
+def normalize_plan_indicators(indicators: Mapping[str, object]) -> dict[str, object]:
+    """摊平嵌套 ``indicators``，并把 stop_pct / stop_price 别名写成 plan_stop_*。"""
+    out: dict[str, object] = {}
+    nested = indicators.get("indicators")
+    if isinstance(nested, dict):
+        out.update({str(k): v for k, v in nested.items()})
+    for k, v in indicators.items():
+        if k == "indicators":
+            continue
+        out[str(k)] = v
+    if _as_finite_float(out.get("plan_stop_pct")) is None:
+        for alias in _STOP_PCT_ALIASES[1:]:
+            if alias in out:
+                out["plan_stop_pct"] = out[alias]
+                break
+    if _as_finite_float(out.get("plan_stop_price")) is None:
+        for alias in _STOP_PRICE_ALIASES[1:]:
+            if alias in out:
+                out["plan_stop_price"] = out[alias]
+                break
+    return out
+
+
 def indicators_have_entry_stop(indicators: dict[str, object]) -> bool:
-    """buy 落库前：须有可解析数值止损（pct<0 或 price>0）。"""
-    if "plan_stop_pct" in indicators:
-        pct = _as_finite_float(indicators["plan_stop_pct"])
-        if pct is not None and pct < 0:
-            return True
-    if "plan_stop_price" in indicators:
-        price = _as_finite_float(indicators["plan_stop_price"])
-        if price is not None and price > 0:
-            return True
+    """buy 落库前：须有可解析数值止损（pct<0 或 price>0）。
+
+    接受 ``stop_pct`` / ``stop_price`` 别名；嵌套在 ``indicators`` 里的字段也会摊平。
+    """
+    ind = normalize_plan_indicators(indicators)
+    pct = _as_finite_float(ind.get("plan_stop_pct"))
+    if pct is not None and pct < 0:
+        return True
+    price = _as_finite_float(ind.get("plan_stop_price"))
+    if price is not None and price > 0:
+        return True
     return False
 
 

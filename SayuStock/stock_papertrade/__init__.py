@@ -120,7 +120,7 @@ _register_recurring_gates()
 # ── SV 实例 + 子模块导入触发装饰器 ───────────────────────────────
 from . import db, admin, ai_tools, commands  # noqa: E402,F401
 from .sv import sv_papertrade, sv_papertrade_admin  # noqa: E402,F401
-from .admin import send_dry_run, send_clear_all  # noqa: E402,F401
+from .admin import send_dry_run, send_clear_all, send_heal_ledger  # noqa: E402,F401
 
 # 兼容旧 import 路径：业务命令从 commands 模块再 re-export 出去
 from .commands import (  # noqa: E402,F401

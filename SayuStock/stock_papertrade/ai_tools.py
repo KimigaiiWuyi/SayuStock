@@ -40,6 +40,7 @@ from gsuid_core.ai_core.register import ai_tools
 from gsuid_core.ai_core.planning.runtime import PlanRunContext, get_plan_context
 
 from . import db, broadcast, strategies, account_scope
+from .strategy import parse_llm_json_object, normalize_plan_indicators
 from .indicators import compute_indicators
 from ..utils.market import KlinePeriod, get_market, is_market_error
 from .quote_service import quote_service
@@ -264,7 +265,7 @@ async def _gate_entry(
     from .strategies.volume_extremum import VolumeExtremumStrategy, load_structure
 
     strategy, params = _strategy_of(account)
-    merged = dict(indicators)
+    merged = dict(normalize_plan_indicators(indicators))
     # 止损卖必须先放行：load_structure 失败会短路，把 stop_triggered 旁路锁死
     if str(side).strip().lower() == "sell" and _is_stop_triggered(merged):
         return ""
@@ -283,6 +284,14 @@ async def _gate_entry(
             side=side,
         ),
     )
+
+
+def _plan_dict_from_json(*raws: str) -> dict[str, Any]:
+    """按参数顺序合并 snapshot/indicators JSON，后者覆盖前者，再摊平止损别名。"""
+    merged: dict[str, object] = {}
+    for raw in raws:
+        merged.update(parse_llm_json_object(raw))
+    return dict(normalize_plan_indicators(merged))
 
 
 # ============================================================
@@ -944,23 +953,8 @@ async def papertrade_decision_insert(
         norm_reason = norm_reason[:197] + "..."
 
     # indicators：合法 JSON 对象；buy 时强制止损计划字段
-    import json as _json
-
-    ind_obj: dict[str, object] = {}
-    if indicators and indicators.strip() and indicators.strip() != "{}":
-        try:
-            parsed: object = _json.loads(indicators)
-        except (_json.JSONDecodeError, TypeError, ValueError):
-            parsed = None
-        if isinstance(parsed, dict):
-            ind_obj = {str(k): v for k, v in parsed.items()}
-            indicators = _json.dumps(ind_obj, ensure_ascii=False)
-        else:
-            indicators = "{}"
-            ind_obj = {}
-    else:
-        indicators = ""
-        ind_obj = {}
+    ind_obj: dict[str, Any] = _plan_dict_from_json(indicators)
+    indicators = json.dumps(ind_obj, ensure_ascii=False) if ind_obj else ""
 
     if action_lc in ("buy", "sell") and (stock_code or "").strip():
         gate_msg: str = await _gate_entry(
@@ -1028,28 +1022,24 @@ async def papertrade_trade_insert(
     realized_pnl: float = 0.0,
     reason: str = "",
     snapshot: str = "",
+    indicators: str = "",
     decision_id: int = 0,
     mode: str = "balanced",
 ) -> str:
     """写入模拟盘交易流水一条记录（仅 papertrade_*_agent 调用）。
 
-    **本工具会自动维护账户现金**，**不要**再单独调
-    ``PaperAccountRepo.update_cash``。后端走
-    ``db.PaperTradeRepo.append_with_cash_update``，在同一 session 内原子地
-    写流水 + 调整 account.cash + 累计 principal（仅 sell 路径），
-    失败时 trade 行也不会落库。
+    **同一 session 原子地**：写流水 + 改现金 + 按成交改持仓。失败整笔回滚。
+    **不要**再调 ``PaperAccountRepo.update_cash``，也**不必**再调
+    ``papertrade_position_upsert`` 改股数（并行 upsert 会在流水被闸拒绝后
+    留下无成交幽灵仓）。
 
     现金变化公式：
         - ``side='buy'``  → ``cash -= (amount + fee)``，principal 不动
-        - ``side='sell'`` → ``cash += (amount - fee + realized_pnl)``，
+        - ``side='sell'`` → ``cash += (amount - fee)``，
                              ``principal += realized_pnl``
 
-    提示：realized_pnl 已经在 sell 路径里作为 cash 增量的修正项闭环——
-    上次 buy 时 cash -= amount + fee，现在 sell 只加 amount - fee 不够，
-    必须补 realized_pnl 把"买入时其实只扣了 amount 现金，但持仓价值按
-    avg_cost 记账"的差额在卖出现金里补回来。如果 LLM 在 realized_pnl
-    里填 0 但实际上 prices 有差，cash 会累计偏差；调用方请按
-    (sell_price - avg_cost) * qty - sell_fee 严格计算后传入。
+    ``realized_pnl`` 只进 principal / 卖出冒泡，**不再加进现金**（否则盈亏记两遍）。
+    调用方仍应按 ``(sell_price - avg_cost) * qty - sell_fee`` 传入，供账本与播报。
 
     **A 股 T+1 拦截**（2026-07-01 加）：``side='sell'`` 时若该股 **今天**
     有任何买入记录，对应锁定股数即使有也不能卖。A 股 T+1 规则要求 "T 日买
@@ -1061,11 +1051,14 @@ async def papertrade_trade_insert(
     对照：偏差 > 3% 时拒绝落库（说明传入的是入池旧价/隔夜价），返回错误
     让 LLM 重新走 match_order。行情不可达时放行（match_order 已把过关）。
 
-    **buy 入场止损硬门**：``side='buy'`` 时 ``snapshot`` JSON 必须含可解析
-    ``plan_stop_pct``(<0) 或 ``plan_stop_price``(>0)，否则拒绝写流水。
+    **buy 入场止损硬门**：``side='buy'`` 时 ``snapshot``（或 ``indicators``）JSON
+    必须含可解析 ``plan_stop_pct``(<0) 或 ``plan_stop_price``(>0)；也接受
+    ``stop_pct`` / ``stop_price`` 别名。尾部多余字段会忽略，不再因 JSON 写坏整笔拒单。
+
+    **持仓随成交原子写入**：成功后无需再调 ``papertrade_position_upsert`` 改股数。
     """
     # 交易执行统一走 TradeExecutor 抽象层（实时价偏差校验 / A 股 T+1 / 写流水
-    # + 现金维护都在 executor 里，模拟盘/实盘可切换）；本工具只透传 + 回传说明。
+    # + 现金 + 持仓都在同一 session）；本工具只透传 + 成交后播报。
     from .trade_executor import get_executor
 
     acc, note = await _write_account()
@@ -1077,17 +1070,7 @@ async def papertrade_trade_insert(
 
     side_lc: str = (side or "").lower().strip()
     if side_lc in ("buy", "sell"):
-        import json as _json
-
-        snap_obj: dict[str, Any] = {}
-        raw_snap = (snapshot or "").strip()
-        if raw_snap and raw_snap != "{}":
-            try:
-                parsed_snap: object = _json.loads(raw_snap)
-            except (_json.JSONDecodeError, TypeError, ValueError):
-                parsed_snap = None
-            if isinstance(parsed_snap, dict):
-                snap_obj = {str(k): v for k, v in parsed_snap.items()}
+        snap_obj: dict[str, Any] = _plan_dict_from_json(indicators, snapshot)
         gate_msg: str = await _gate_entry(
             acc,
             stock_code=stock_code,
@@ -1144,24 +1127,14 @@ async def papertrade_position_upsert(
     avg_cost: float,
     last_quote_price: float = 0.0,
 ) -> str:
-    """更新持仓（qty=0 时删除记录；仅 papertrade_*_agent 调用）。
+    """刷新已有持仓的报价（仅 papertrade_*_agent 调用）。
 
-    **本工具不动账户现金**——cash 的增减已由 ``papertrade_trade_insert``
-    在同一 session 内自动维护。position_upsert 只操作持仓表
-    (SayuPaperPosition)：qty>0 时 upsert，qty=0 时 DELETE 行。
+    **本工具不能建仓、不能改股数、不能清仓**。持仓股数由
+    ``papertrade_trade_insert`` 在成交时原子写入。传入的 ``qty`` /
+    ``avg_cost`` 会被忽略，避免「流水被闸拒绝但持仓已写上」的幽灵仓。
 
-    ``last_quote_price``（2026-07-01 新增，可选）：决策代理在 buy 时把
-    ``match_order.price`` 直接写进 ``SayuPaperPosition.last_quote_price``，
-    让下一次心跳开播时该持仓显示 ``quote_source="live"`` 而不是 "cost"。
-    不传或传 0 时不更新报价字段（保留历史值）。
-
-    调用顺序示例（buy 路径）：
-        1. papertrade_match_order(buy)  → 拿 fee_total / actual_qty / amount / price
-        2. papertrade_trade_insert(buy)  → 写 trade + 自动扣 cash
-        3. papertrade_position_upsert(qty, avg_cost=price, last_quote_price=price)  → 写持仓
-        4. papertrade_decision_insert(action='buy', trade_id=...)
+    无对应持仓时直接拒绝。只允许给已有持仓写 ``last_quote_price``。
     """
-    # 交易执行统一走 TradeExecutor 抽象层（模拟盘/实盘可切换）。
     from .trade_executor import get_executor
 
     acc, note = await _write_account()
@@ -1170,16 +1143,25 @@ async def papertrade_position_upsert(
     denied: str = await _deny_write(acc)
     if denied:
         return denied
+    existing = await db.PaperPositionRepo.get(acc.id, stock_code)
+    if existing is None:
+        return (
+            "⚠️ 禁止无流水建仓：持仓由 papertrade_trade_insert 在成交时原子写入。"
+            "请先 match_order → trade_insert；本工具只给已有持仓刷新报价。"
+        )
     pos_id: int = await get_executor().update_position(
         account_id=acc.id,
         stock_code=stock_code,
-        stock_name=stock_name,
-        secid=secid,
-        qty=qty,
-        avg_cost=avg_cost,
+        stock_name=stock_name or existing.stock_name,
+        secid=secid or existing.secid,
+        qty=existing.qty,
+        avg_cost=existing.avg_cost,
         last_quote_price=last_quote_price,
     )
-    return f"ok pos_id={pos_id}  （cash 由 trade_insert 自动维护）"
+    ignored: str = ""
+    if qty != existing.qty:
+        ignored = f"；已忽略传入 qty={qty}（股数={existing.qty} 由流水维护）"
+    return f"ok pos_id={pos_id} qty={existing.qty}{ignored}"
 
 
 @ai_tools(
@@ -1590,6 +1572,10 @@ async def papertrade_snapshot_write(
         today_cn: _dt.date = _dt.datetime.now(ZoneInfo("Asia/Shanghai")).date()
     except Exception:
         today_cn = _dt.date.today()
+
+    orphans = await db.drop_orphan_positions(acc.id)
+    if orphans:
+        _gslogger.warning(f"[SayuStock][PaperTrade] 快照前丢弃无流水幽灵仓 account_id={acc.id} codes={orphans}")
 
     enriched: list[tuple[SayuPaperPosition, dict]] = await _get_enriched_positions(acc.id)
     agg: dict[str, float] = _aggregate_enriched(enriched)

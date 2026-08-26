@@ -12,12 +12,13 @@ from typing import Any, Dict, List, Optional
 from datetime import date, datetime
 
 from sqlmodel import col
-from sqlalchemy import or_, and_, func, select
+from sqlalchemy import or_, and_, case, func, select
 from sqlalchemy.engine import Result, CursorResult
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from gsuid_core.utils.database.base_models import with_session
 
+from .matcher import apply_fill_qty_cost, cash_delta_for_fill
 from ..utils.database.papertrade_models import (
     DEFAULT_STRATEGY_ID,
     DEFAULT_ACCOUNT_NAME,
@@ -482,6 +483,30 @@ class PaperPositionRepo:
         await session.flush()
         return affected
 
+    @classmethod
+    @with_session
+    async def delete_codes(
+        cls,
+        session: AsyncSession,
+        account_id: int,
+        codes: List[str],
+    ) -> int:
+        """按代码删持仓（幽灵仓修复 / 快照对账）。空列表不写库。"""
+        from sqlalchemy import delete as _sa_delete
+
+        cleaned = [c.strip() for c in codes if c and c.strip()]
+        if account_id <= 0 or not cleaned:
+            return 0
+        stmt = _sa_delete(SayuPaperPosition).where(
+            and_(
+                col(SayuPaperPosition.account_id) == account_id,
+                col(SayuPaperPosition.stock_code).in_(cleaned),
+            )
+        )
+        result = await session.execute(stmt)
+        await session.flush()
+        return _rowcount(result)
+
 
 # ============================================================
 # Trade Repo（append-only）
@@ -580,37 +605,43 @@ class PaperTradeRepo:
         snapshot: str = "",
         decision_id: Optional[int] = None,
         mode: str = "balanced",
-    ) -> SayuPaperTrade:
-        """原子地：写 trade 行 + 调整账户 cash + sell 时累计 principal。
+    ) -> tuple[SayuPaperTrade, int]:
+        """同一 session：写流水 + 改现金 + 按成交改持仓。
 
-        与 ``append`` 的区别：本方法在同一 session 内把 trade 流水与 account 现金绑定，
-        避免 LLM 调 ``append`` 后忘记调 ``PaperAccountRepo.update_cash`` 导致
-        trade 行跟 cash 自相矛盾。``with_session`` wrapper 在 commit 时一并持久化，
-        若中间任何一步抛错会自动回滚，不会出现"trade 入表但 cash 没动"的脏状态。
+        持仓不再等 LLM 另调 ``position_upsert``：并行调用会在流水被闸拒绝后
+        留下无成交幽灵仓，净值被持仓市值凭空抬高，成交播报也不会发。
 
-        Args:
-            side: ``buy`` → cash -= (amount + fee)，principal 不变；``sell`` →
-                cash += (amount - fee) + realized_pnl，principal += realized_pnl。
-                之所以 sell 时 cash 同时加上 realized_pnl，是因为前次 buy 已经
-                把 amount 当作现金流出扣过（cash -= amount + fee_total_buy），
-                现在 sell 回款只 + (amount - fee)，差额自然体现在 cash 上。
+        现金：buy ``cash -= amount+fee``；sell ``cash += amount-fee``。
+        ``realized_pnl`` 只累加 ``principal``，不再加进现金（否则盈亏记两遍）。
 
         Returns:
-            SayuPaperTrade: 已 flush 的 trade 行（含 id）。
+            (trade, 成交后持仓股数)；清仓后股数为 0。
 
         Raises:
-            ValueError: side 非法。
-            RuntimeError: 该 account_id 找不到 account（账户被删 / 未初始化）。
+            ValueError: side 非法 / 卖出超过持仓。
+            RuntimeError: 账户不存在。
         """
         if side not in ("buy", "sell"):
             raise ValueError(f"side 非法: {side!r}（期望 buy 或 sell）")
 
-        # 先取 account：既做存在性校验，又拿到 origin 用于双写
         acc_stmt = select(SayuPaperAccount).where(col(SayuPaperAccount.id) == account_id)
         acc: Optional[SayuPaperAccount] = (await session.execute(acc_stmt)).scalars().first()
         if acc is None:
             raise RuntimeError(f"SayuPaperAccount 不存在 (account_id={account_id})；请先创建模拟盘")
 
+        pos_stmt = select(SayuPaperPosition).where(
+            and_(
+                col(SayuPaperPosition.account_id) == account_id,
+                col(SayuPaperPosition.stock_code) == stock_code,
+            )
+        )
+        existing: Optional[SayuPaperPosition] = (await session.execute(pos_stmt)).scalars().first()
+        old_qty: int = existing.qty if existing is not None else 0
+        old_avg: float = existing.avg_cost if existing is not None else 0.0
+        if side == "sell" and old_qty < qty:
+            raise ValueError(f"持仓不足：{stock_code} 持仓 {old_qty} 股，卖出 {qty} 股；已拒绝落库")
+
+        now = datetime.now()
         trade = SayuPaperTrade(
             account_id=account_id,
             group_id=acc.group_id,
@@ -626,26 +657,81 @@ class PaperTradeRepo:
             realized_pnl=realized_pnl,
             reason=reason,
             snapshot=snapshot,
-            decided_at=datetime.now(),
-            executed_at=datetime.now(),
+            decided_at=now,
+            executed_at=now,
             decision_id=decision_id,
             mode=mode,
         )
         session.add(trade)
-        await session.flush()
 
-        if side == "buy":
-            # buy：现金要付出 amount + fee
-            acc.cash -= amount + fee
-        else:  # sell
-            # sell：现金回 amount - fee；principal 累计 realized_pnl
-            acc.cash += amount - fee + realized_pnl
+        acc.cash += cash_delta_for_fill(side, amount, fee)
+        if side == "sell":
             acc.principal += realized_pnl
-
-        acc.last_decided_at = datetime.now()
+        acc.last_decided_at = now
         session.add(acc)
+
+        new_qty, new_avg = apply_fill_qty_cost(old_qty, old_avg, side, qty, price, fee)
+        if new_qty <= 0:
+            if existing is not None:
+                from sqlalchemy import delete as _sa_delete
+
+                await session.execute(
+                    _sa_delete(SayuPaperPosition).where(
+                        and_(
+                            col(SayuPaperPosition.account_id) == account_id,
+                            col(SayuPaperPosition.stock_code) == stock_code,
+                        )
+                    )
+                )
+        elif existing is not None:
+            existing.qty = new_qty
+            existing.avg_cost = new_avg
+            existing.stock_name = stock_name or existing.stock_name
+            existing.secid = secid or existing.secid
+            existing.last_quote_price = price
+            existing.last_quote_at = now
+            existing.updated_at = now
+            session.add(existing)
+        else:
+            session.add(
+                SayuPaperPosition(
+                    account_id=account_id,
+                    group_id=acc.group_id,
+                    bot_id=acc.bot_id,
+                    stock_code=stock_code,
+                    stock_name=stock_name,
+                    secid=secid,
+                    qty=new_qty,
+                    avg_cost=new_avg,
+                    last_quote_price=price,
+                    last_quote_at=now,
+                    opened_at=now,
+                    updated_at=now,
+                )
+            )
         await session.flush()
-        return trade
+        return trade, new_qty
+
+    @classmethod
+    @with_session
+    async def net_qty_by_code(cls, session: AsyncSession, account_id: int) -> Dict[str, int]:
+        """按股票汇总流水净持仓：Σbuy qty − Σsell qty。"""
+        qty_expr = func.coalesce(
+            func.sum(
+                case(
+                    (col(SayuPaperTrade.side) == "buy", col(SayuPaperTrade.qty)),
+                    else_=-col(SayuPaperTrade.qty),
+                )
+            ),
+            0,
+        )
+        stmt = (
+            select(col(SayuPaperTrade.stock_code), qty_expr)
+            .where(col(SayuPaperTrade.account_id) == account_id)
+            .group_by(col(SayuPaperTrade.stock_code))
+        )
+        result = await session.execute(stmt)
+        return {str(row[0]): int(row[1]) for row in result.all()}
 
     @classmethod
     @with_session
@@ -739,6 +825,19 @@ class PaperTradeRepo:
             "total_fee": float(row.total_fee),
             "trade_count": int(row.trade_count),
         }
+
+
+async def drop_orphan_positions(account_id: int) -> List[str]:
+    """删掉流水净持仓 ≤0 但仍挂在持仓表上的幽灵仓，返回被删代码。"""
+    if account_id <= 0:
+        return []
+    nets = await PaperTradeRepo.net_qty_by_code(account_id)
+    positions = await PaperPositionRepo.list_by_account(account_id)
+    orphans = [p.stock_code for p in positions if int(nets.get(p.stock_code, 0)) <= 0]
+    if not orphans:
+        return []
+    await PaperPositionRepo.delete_codes(account_id, orphans)
+    return orphans
 
 
 # ============================================================

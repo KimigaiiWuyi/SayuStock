@@ -24,7 +24,7 @@ from dataclasses import dataclass
 from gsuid_core.logger import logger as _gslogger
 
 from . import db
-from .matcher import MatchResult, match_order as _match_order
+from .matcher import MatchResult, match_order as _match_order, cash_delta_for_fill
 from .quote_service import quote_service
 from .trading_calendar import trading_day_summary, should_run_papertrade
 
@@ -39,6 +39,7 @@ class RecordResult:
     ok: bool
     trade_id: int = 0
     cash_delta: float = 0.0
+    position_qty: int = 0
     message: str = ""
 
 
@@ -254,7 +255,7 @@ class PaperTradeExecutor(TradeExecutor):
                 )
 
         try:
-            t = await db.PaperTradeRepo.append_with_cash_update(
+            t, pos_qty = await db.PaperTradeRepo.append_with_cash_update(
                 account_id,
                 stock_code=stock_code,
                 stock_name=stock_name,
@@ -271,19 +272,23 @@ class PaperTradeExecutor(TradeExecutor):
                 mode=mode,
             )
         except (ValueError, RuntimeError) as e:
-            # side 非法 / 账户不存在——不写库，明示错误给 LLM
+            # side 非法 / 账户不存在 / 卖出超过持仓——不写库，明示错误给 LLM
             return RecordResult(ok=False, message=f"⚠️ trade_insert 失败: {e}")
 
-        cash_delta: float = -(amount + fee) if side == "buy" else (amount - fee + realized_pnl)
+        cash_delta: float = cash_delta_for_fill(side, amount, fee)
         if side == "buy":
-            formula: str = "buy: cash -= amount+fee"
+            formula: str = "buy: cash -= amount+fee；持仓已随成交写入"
         else:
-            formula = "sell: cash += amount-fee+realized_pnl, principal += realized_pnl"
+            formula = "sell: cash += amount-fee，principal += realized_pnl；持仓已随成交更新"
         return RecordResult(
             ok=True,
             trade_id=t.id,
             cash_delta=cash_delta,
-            message=f"ok trade_id={t.id}  cash_delta={cash_delta:+,.2f}  ({formula})",
+            position_qty=pos_qty,
+            message=(
+                f"ok trade_id={t.id}  cash_delta={cash_delta:+,.2f}  "
+                f"position_qty={pos_qty}  ({formula}；不必再调 position_upsert 改股数)"
+            ),
         )
 
     async def update_position(

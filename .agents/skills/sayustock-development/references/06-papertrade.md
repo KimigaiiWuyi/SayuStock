@@ -71,6 +71,7 @@ WebConsole：`SayuPaper*Admin` 注册到管理后台。
 - SQLite 的表级 `UNIQUE (group_id, bot_id)` 是 `sqlite_autoindex_*`，**DROP INDEX 删不掉**，
   只能读 DDL → 正则剥掉约束 → 建临时表 → 搬数据 → 换名（整个过程一个事务）
 - 全流程幂等；孤儿子表行跳过并告警
+- 启动时再跑 ``heal_orphan_ledger``：删幽灵仓；若现金−流水重算现金≈Σrealized_pnl，判定为旧卖出公式把盈亏加进了现金并更正；回写净值；补空的播报路由。master 也可发 ``模拟盘对账``。
 
 ## 6.4 用户命令
 
@@ -83,7 +84,7 @@ WebConsole：`SayuPaper*Admin` 注册到管理后台。
 | 模拟盘推送添加｜删除｜列表 | 当前群订阅/退订某盘的成交播报 | 增删管理 / 列表任何人 |
 | 模拟盘列表 / 查看 &lt;盘名&gt; / 持仓 &lt;盘名&gt; / 收益 &lt;盘名&gt; / 记录 &lt;盘名&gt; | 只读查询 | 任何人 |
 | 模拟盘排行 / 模拟盘查询 &lt;盘名&gt; | 跨盘排行 / 单盘明细 | 管理 |
-| 模拟盘清盘 &lt;盘名&gt; / 模拟盘模拟测试 | 运维 | master（pm=0） |
+| 模拟盘清盘 &lt;盘名&gt; / 模拟盘对账 / 模拟盘模拟测试 | 运维 | master（pm=0） |
 
 权限 helpers：`permissions.user_pm_level` / `check_admin`。
 
@@ -111,8 +112,8 @@ fullmatch）。带参命令若也想支持裸发（给用法提示），必须**
       → 财报/新闻(可选工具)
       → strategy 评分 (-1~+1) + 风控门
       → matcher / trade_executor
-      → db 写持仓/流水/决策
-      → 系统侧成交冒泡（非 agent 闲聊）
+      → db **同一 session** 写流水+现金+持仓（禁止 LLM 并行 upsert 改股数）
+      → 系统侧成交冒泡（非 agent 闲聊；流水失败则不播报、不建仓）
 ```
 
 风控参数（单票仓位、日交易次数、止损、回撤熔断、现金缓冲）在 `strategy.py` 按模式

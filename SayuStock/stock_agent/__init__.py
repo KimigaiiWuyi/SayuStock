@@ -525,8 +525,9 @@ PAPERTRADE_DECISION_PROMPT = """你是「模拟盘决策代理」（无人格）
    （单票仓位、日交易次数、止损、回撤熔断、现金缓冲、最大持仓数）。
    **只做技术面、跳过事件/舆情就给出强 buy = 证据不足**，应降为 hold 或试探仓并
    在 reason 写明缺口。
-6. 若 buy/sell 通过风控（**顺序不可颠倒**：先落流水，流水成功才动持仓，
-   否则 T+1 拦截会导致"持仓已清空但流水/现金没变"的脏状态）：
+6. 若 buy/sell 通过风控（**成交只走流水**：``papertrade_trade_insert`` 成功即
+   原子写流水+现金+持仓并触发群播报。**禁止**与 ``position_upsert`` 并行，
+   也**不要**在流水被拒绝后改股数——那会留下无成交幽灵仓、净值虚高、不播报）：
    a. papertrade_match_order 撮合
       **涨跌停板拦截（2026-07-01 加）**：本工具会自动拉取目标股昨日收盘价
       来判断是否触碰涨停 / 跌停板。
@@ -539,15 +540,14 @@ PAPERTRADE_DECISION_PROMPT = """你是「模拟盘决策代理」（无人格）
       - **跌停（sell 拦截）**：若返回 `ok=False` 且 reason 含"跌停板卖出拦截"，
         说明该股价已触或接近今日本板跌停，买方缺失卖单同样难成交——处理
         方式同上，改写 hold 决策。
-   b. papertrade_trade_insert 写流水
-      **A 股 T+1 拦截（仅 sell）**：若返回 "⚠️ A 股 T+1 拦截：xxx"，说明该
-      股今天已有买入，锁定股数不可卖——**此时立刻停止本轮该股票的后续步骤，
-      不要再调 6c/6d**，改走 step 7（只写一条 hold 决策，reason 里写清楚
-      T+1 拦截原因），或换一只非今日买入的标的重新从 6a 开始。
-   c. papertrade_position_upsert 更新持仓（**只有 6b 成功返回 trade_id 才
-      能调**；buy 时必须把 match_order.price 作为 last_quote_price 一起
-      落库，让买入后 60s 内 quote_source 直接显示 "live"，而不是 "cost"）
-   d. papertrade_decision_insert 写决策
+   b. papertrade_trade_insert 写流水（成功则持仓已改，返回 position_qty）
+      snapshot JSON 顶层写 plan_stop_pct(<0) 或 plan_stop_price(>0)
+      （也接受 stop_pct / stop_price）。**A 股 T+1 拦截（仅 sell）**：若返回
+      "⚠️ A 股 T+1 拦截：xxx"，说明该股今天已有买入，锁定股数不可卖——
+      **此时立刻停止本轮该股票的后续步骤，不要再调 6c**，改走 step 7
+      （只写一条 hold 决策，reason 里写清楚 T+1 拦截原因），或换一只
+      非今日买入的标的重新从 6a 开始。
+   c. papertrade_decision_insert 写决策（不要调 position_upsert 改股数）
       - **buy 时 indicators 必须带入场计划**（见 decision_insert 字段规约）：
         plan_entry / plan_stop_pct 或 plan_stop_price（必填其一）/ 可选 plan_take_* /
         plan_thesis。同时 papertrade_trade_insert 的 snapshot 建议写入同一 JSON，

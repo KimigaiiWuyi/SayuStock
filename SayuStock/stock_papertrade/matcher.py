@@ -315,6 +315,39 @@ def calc_realized_pnl(avg_cost: float, sell_qty: int, sell_price: float, fee: fl
     return (sell_price - avg_cost) * sell_qty - fee
 
 
+def cash_delta_for_fill(side: str, amount: float, fee: float) -> float:
+    """成交引起的现金变化。``realized_pnl`` 不进现金——本金单独记。
+
+    buy：付出成交额 + 佣金；sell：收回成交额 − 佣金/印花税。
+    旧实现把 realized_pnl 再加进 sell 现金，等于把盈亏记了两遍。
+    """
+    side_lc = (side or "").strip().lower()
+    if side_lc == "buy":
+        return -(amount + fee)
+    if side_lc == "sell":
+        return amount - fee
+    raise ValueError(f"side 非法: {side!r}（期望 buy 或 sell）")
+
+
+def apply_fill_qty_cost(
+    old_qty: int,
+    old_avg_cost: float,
+    side: str,
+    qty: int,
+    price: float,
+    fee: float,
+) -> tuple[int, float]:
+    """按一笔成交算出新的持仓股数和均价。sell 不足仓由调用方先拦。"""
+    side_lc = (side or "").strip().lower()
+    if side_lc == "buy":
+        new_qty = old_qty + qty
+        return new_qty, calc_new_avg_cost(old_qty, old_avg_cost, qty, price, fee)
+    new_qty = old_qty - qty
+    if new_qty <= 0:
+        return 0, 0.0
+    return new_qty, old_avg_cost
+
+
 def calc_new_avg_cost(old_qty: int, old_avg_cost: float, buy_qty: int, buy_price: float, buy_fee: float) -> float:
     """加仓后新的加权平均成本。买费用计入成本。"""
     if old_qty + buy_qty == 0:

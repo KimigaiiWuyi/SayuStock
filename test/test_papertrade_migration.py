@@ -18,7 +18,6 @@ import asyncio
 from typing import List, Tuple, Optional
 from pathlib import Path
 
-import pytest
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
@@ -429,5 +428,160 @@ def test_name_collision_with_existing_default_gets_suffixed(tmp_path):
     assert dict(rows)[first] != DEFAULT or names.count(DEFAULT) == 1
 
 
-if __name__ == "__main__":
-    raise SystemExit(pytest.main([__file__, "-v"]))
+# ============================================================
+# 4) 幽灵仓 / 净值 / 播报路由对账（服务端启动自愈）
+# ============================================================
+_HEAL_ALTERS: Tuple[str, ...] = (
+    "ALTER TABLE sayupaperposition ADD COLUMN qty INTEGER DEFAULT 0",
+    "ALTER TABLE sayupaperposition ADD COLUMN stock_name TEXT DEFAULT ''",
+    "ALTER TABLE sayupaperposition ADD COLUMN avg_cost REAL DEFAULT 0",
+    "ALTER TABLE sayupaperposition ADD COLUMN last_quote_price REAL",
+    "ALTER TABLE sayupaperposition ADD COLUMN opened_at TIMESTAMP",
+    "ALTER TABLE sayupapertrade ADD COLUMN side TEXT DEFAULT 'buy'",
+    "ALTER TABLE sayupapertrade ADD COLUMN qty INTEGER DEFAULT 0",
+    "ALTER TABLE sayupapertrade ADD COLUMN price REAL DEFAULT 0",
+    "ALTER TABLE sayupapertrade ADD COLUMN amount REAL DEFAULT 0",
+    "ALTER TABLE sayupapertrade ADD COLUMN fee REAL DEFAULT 0",
+    "ALTER TABLE sayupapertrade ADD COLUMN realized_pnl REAL DEFAULT 0",
+    "ALTER TABLE sayupapertrade ADD COLUMN executed_at TIMESTAMP",
+    "ALTER TABLE sayupapersnapshot ADD COLUMN trade_date DATE",
+    "ALTER TABLE sayupapersnapshot ADD COLUMN cash REAL DEFAULT 0",
+    "ALTER TABLE sayupapersnapshot ADD COLUMN position_value REAL DEFAULT 0",
+    "ALTER TABLE sayupapersnapshot ADD COLUMN total_equity REAL DEFAULT 0",
+    "ALTER TABLE sayupapersnapshot ADD COLUMN day_pnl REAL DEFAULT 0",
+    "ALTER TABLE sayupapersnapshot ADD COLUMN day_pnl_pct REAL DEFAULT 0",
+    "ALTER TABLE sayupapersnapshot ADD COLUMN total_pnl REAL DEFAULT 0",
+    "ALTER TABLE sayupapersnapshot ADD COLUMN total_pnl_pct REAL DEFAULT 0",
+)
+
+
+async def _heal_schema(fx: _Fixture) -> None:
+    async with fx.engine.begin() as conn:
+        for sql in _HEAL_ALTERS:
+            await conn.execute(text(sql))
+
+
+def test_heal_drops_orphan_position_and_rewrites_snapshot(tmp_path):
+    """无流水持仓必须删；建仓日之后的净值扣掉幽灵市值；有流水的持仓不动。"""
+
+    async def body(fx: _Fixture):
+        await _heal_schema(fx)
+        acc = await fx.add_account("111", "onebot", "2025-01-01 09:00:00", cash=596091.39, initial_cash=1000000)
+        async with fx.maker() as s:
+            await s.execute(
+                text(
+                    "INSERT INTO sayupaperposition "
+                    "(account_id, group_id, bot_id, stock_code, stock_name, qty, avg_cost, "
+                    "last_quote_price, opened_at) VALUES "
+                    "(:a,'111','onebot','600036','招商银行',1000,37.72,39.5,'2026-07-07'),"
+                    "(:a,'111','onebot','300308','中际旭创',100,847.99,846.0,'2026-08-25 14:31:37')"
+                ),
+                {"a": acc},
+            )
+            await s.execute(
+                text(
+                    "INSERT INTO sayupapertrade "
+                    "(account_id, group_id, bot_id, stock_code, side, qty, price) VALUES "
+                    "(:a,'111','onebot','600036','buy',1000,37.72)"
+                ),
+                {"a": acc},
+            )
+            await s.execute(
+                text(
+                    "INSERT INTO sayupapersnapshot "
+                    "(account_id, group_id, bot_id, stock_code, trade_date, cash, position_value, "
+                    "total_equity, day_pnl, day_pnl_pct, total_pnl, total_pnl_pct) VALUES "
+                    "(:a,'111','onebot','','2026-08-24',596091.39,438763,1034854.39,1674.93,0.16,34854.39,3.48),"
+                    "(:a,'111','onebot','','2026-08-25',596091.39,523890,1119981.39,85127,8.226,119981.39,11.9981)"
+                ),
+                {"a": acc},
+            )
+            await s.commit()
+        first = await mig.heal_orphan_ledger()
+        second = await mig.heal_orphan_ledger()
+        pos = await fx.rows("SELECT stock_code, qty FROM sayupaperposition ORDER BY stock_code")
+        snap = await fx.rows(
+            "SELECT trade_date, position_value, total_equity FROM sayupapersnapshot ORDER BY trade_date"
+        )
+        return acc, first, second, pos, snap
+
+    acc, first, second, pos, snap = _run(tmp_path, body)
+    assert first["orphans"][0]["stock_code"] == "300308"
+    assert first["orphans"][0]["account_id"] == acc
+    assert first["snapshots_updated"] >= 1
+    assert second["orphans"] == []
+    assert pos == [("600036", 1000)]
+    by_day = {str(r[0])[:10]: r for r in snap}
+    assert abs(float(by_day["2026-08-24"][2]) - 1034854.39) < 0.01
+    # 最新快照按剩余持仓现价重写：1000×39.5
+    assert abs(float(by_day["2026-08-25"][1]) - 39500.0) < 0.01
+    assert abs(float(by_day["2026-08-25"][2]) - (596091.39 + 39500.0)) < 0.01
+
+
+def test_heal_fills_empty_broadcast_routing_from_same_group(tmp_path):
+    async def body(fx: _Fixture):
+        await _heal_schema(fx)
+        a1 = await fx.add_account("g1", "onebot", "2025-01-01 09:00:00", cash=1, initial_cash=1)
+        a2 = await fx.add_account("g2", "onebot", "2026-01-01 09:00:00", cash=1, initial_cash=1)
+        async with fx.maker() as s:
+            await s.execute(
+                text(
+                    "INSERT INTO sayupaperbroadcasttarget "
+                    "(account_id, bot_id, bot_self_id, ws_bot_id, group_id, enabled, created_by) VALUES "
+                    "(:a1,'onebot','','','666249732',1,'migration'),"
+                    "(:a2,'onebot','3399214199','NoneBot2','666249732',1,'u1')"
+                ),
+                {"a1": a1, "a2": a2},
+            )
+            await s.commit()
+        summary = await mig.heal_orphan_ledger()
+        rows = await fx.rows(
+            "SELECT account_id, bot_self_id, ws_bot_id FROM sayupaperbroadcasttarget ORDER BY account_id"
+        )
+        return summary, rows
+
+    summary, rows = _run(tmp_path, body)
+    assert summary["broadcast_filled"] == 1
+    assert rows[0][1:] == ("3399214199", "NoneBot2")
+    assert rows[1][1:] == ("3399214199", "NoneBot2")
+
+
+def test_heal_restates_cash_when_sell_added_realized_pnl(tmp_path):
+    """旧公式把 realized_pnl 加进卖出现金；对账后现金 = initial + Σ(buy/sell 正确差额)。"""
+
+    async def body(fx: _Fixture):
+        await _heal_schema(fx)
+        # buy 10000+5 后 989995；sell 11000-10+990 误加盈亏 → 1001975；正确应为 1000985
+        acc = await fx.add_account("111", "onebot", "2025-01-01 09:00:00", cash=1001975.0, initial_cash=1000000)
+        async with fx.maker() as s:
+            await s.execute(
+                text(
+                    "INSERT INTO sayupapertrade "
+                    "(account_id, group_id, bot_id, stock_code, side, qty, price, amount, fee, "
+                    "realized_pnl, executed_at) VALUES "
+                    "(:a,'111','onebot','000001','buy',100,100,10000,5,0,'2026-07-01 10:00:00'),"
+                    "(:a,'111','onebot','000001','sell',100,110,11000,10,990,'2026-07-02 10:00:00')"
+                ),
+                {"a": acc},
+            )
+            await s.execute(
+                text(
+                    "INSERT INTO sayupapersnapshot "
+                    "(account_id, group_id, bot_id, stock_code, trade_date, cash, position_value, "
+                    "total_equity, day_pnl, day_pnl_pct, total_pnl, total_pnl_pct) VALUES "
+                    "(:a,'111','onebot','','2026-07-02',1001975,0,1001975,1975,0.2,1975,0.2)"
+                ),
+                {"a": acc},
+            )
+            await s.commit()
+        first = await mig.heal_orphan_ledger()
+        cash = await fx.scalar(f"SELECT cash FROM sayupaperaccount WHERE id = {acc}")
+        snap_cash = await fx.scalar(f"SELECT cash FROM sayupapersnapshot WHERE account_id = {acc}")
+        second = await mig.heal_orphan_ledger()
+        return first, cash, snap_cash, second
+
+    first, cash, snap_cash, second = _run(tmp_path, body)
+    assert first["cash_restated"][0]["extra"] == 990
+    assert abs(float(cash) - 1000985.0) < 0.01
+    assert abs(float(snap_cash) - 1000985.0) < 0.01
+    assert second["cash_restated"] == []

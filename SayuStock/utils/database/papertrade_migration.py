@@ -26,7 +26,8 @@
 from __future__ import annotations
 
 import re
-from typing import List, Tuple, Optional
+from typing import Any, Dict, List, Tuple, Optional
+from datetime import date, datetime
 
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -50,6 +51,7 @@ _CHILD_TABLES: Tuple[str, ...] = (
 )
 
 _LOG = "[SayuStock][PaperTrade][迁移v2]"
+_HEAL_LOG = "[SayuStock][PaperTrade][对账]"
 
 
 # ============================================================
@@ -441,13 +443,376 @@ async def run_papertrade_v2_migration() -> Optional[str]:
         return None
 
 
+def _empty_heal() -> Dict[str, Any]:
+    return {"orphans": [], "snapshots_updated": 0, "broadcast_filled": 0, "cash_restated": []}
+
+
+def _row_date(value: object) -> Optional[date]:
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return value.date()
+    if isinstance(value, date):
+        return value
+    raw = str(value).strip()
+    if not raw:
+        return None
+    try:
+        return date.fromisoformat(raw[:10])
+    except ValueError:
+        return None
+
+
+def _pos_mv(qty: object, last_quote: object, avg_cost: object) -> float:
+    q = int(qty or 0)
+    px = last_quote if last_quote is not None else avg_cost
+    return float(q) * float(px or 0.0)
+
+
+def _trade_cash_delta(side: object, amount: object, fee: object) -> float:
+    """正确现金变化：buy 付 amount+fee，sell 收回 amount-fee。不含 realized_pnl。"""
+    amt = float(amount or 0.0)
+    fee_v = float(fee or 0.0)
+    if str(side or "").strip().lower() == "buy":
+        return -(amt + fee_v)
+    return amt - fee_v
+
+
+def _cash_on(timeline: List[Tuple[date, float]], snap_date: date, stored: float) -> float:
+    last: Optional[float] = None
+    for d, cash in timeline:
+        if d <= snap_date:
+            last = cash
+        else:
+            break
+    return stored if last is None else last
+
+
+async def heal_orphan_ledger() -> Dict[str, Any]:
+    """清幽灵仓、更正「卖出现金误加 realized_pnl」、回写净值、补播报路由。
+
+    幂等。服务端部署本版后重启或发「模拟盘对账」即可，不必拷开发机的库。
+    """
+    out: Dict[str, Any] = _empty_heal()
+    async with async_maker() as session:
+        if not await _has_table(session, _ACCOUNT_TABLE):
+            return out
+        if not await _has_table(session, "sayupaperposition"):
+            return out
+        if not await _has_column(session, "sayupaperposition", "qty"):
+            return out
+        if not await _has_column(session, "sayupaperposition", "avg_cost"):
+            return out
+        has_quote = await _has_column(session, "sayupaperposition", "last_quote_price")
+        has_name = await _has_column(session, "sayupaperposition", "stock_name")
+        has_opened = await _has_column(session, "sayupaperposition", "opened_at")
+        quote_col = "last_quote_price" if has_quote else "NULL"
+        name_col = "stock_name" if has_name else "''"
+        opened_col = "opened_at" if has_opened else "NULL"
+        pos_sql = (
+            "SELECT id, account_id, stock_code, "
+            f"{name_col} AS stock_name, qty, avg_cost, "
+            f"{quote_col} AS last_quote_price, {opened_col} AS opened_at "
+            "FROM sayupaperposition WHERE qty > 0 AND account_id > 0"
+        )
+        pos_rows = (await session.execute(text(pos_sql))).all()
+        nets: Dict[Tuple[int, str], int] = {}
+        if (
+            await _has_table(session, "sayupapertrade")
+            and await _has_column(session, "sayupapertrade", "side")
+            and await _has_column(session, "sayupapertrade", "qty")
+        ):
+            net_rows = (
+                await session.execute(
+                    text(
+                        "SELECT account_id, stock_code, "
+                        "COALESCE(SUM(CASE WHEN side = 'buy' THEN qty ELSE -qty END), 0) "
+                        "FROM sayupapertrade WHERE account_id > 0 "
+                        "GROUP BY account_id, stock_code"
+                    )
+                )
+            ).all()
+            nets = {(int(r[0]), str(r[1])): int(r[2]) for r in net_rows}
+
+        orphans: List[Dict[str, Any]] = []
+        phantom_mv: Dict[int, float] = {}
+        opened_on: Dict[int, date] = {}
+        for row in pos_rows:
+            pid, acc_id, code = int(row[0]), int(row[1]), str(row[2] or "")
+            if nets.get((acc_id, code), 0) > 0:
+                continue
+            mv = _pos_mv(row[4], row[6], row[5])
+            od = _row_date(row[7]) or date.min
+            orphans.append(
+                {
+                    "id": pid,
+                    "account_id": acc_id,
+                    "stock_code": code,
+                    "stock_name": str(row[3] or ""),
+                    "qty": int(row[4] or 0),
+                    "mv": round(mv, 2),
+                }
+            )
+            phantom_mv[acc_id] = phantom_mv.get(acc_id, 0.0) + mv
+            prev = opened_on.get(acc_id)
+            opened_on[acc_id] = od if prev is None or od < prev else prev
+
+        can_snap = await _has_table(session, "sayupapersnapshot") and await _has_column(
+            session, "sayupapersnapshot", "position_value"
+        )
+        can_day = can_snap and await _has_column(session, "sayupapersnapshot", "day_pnl")
+        can_broadcast = await _has_table(session, _BROADCAST_TABLE) and await _has_column(
+            session, _BROADCAST_TABLE, "ws_bot_id"
+        )
+        can_cash = (
+            await _has_table(session, "sayupapertrade")
+            and await _has_column(session, "sayupapertrade", "amount")
+            and await _has_column(session, "sayupapertrade", "fee")
+            and await _has_column(session, "sayupapertrade", "realized_pnl")
+            and await _has_column(session, "sayupapertrade", "executed_at")
+        )
+
+        cash_restated, cash_timeline, live_cash = ([], {}, {})
+        if can_cash:
+            cash_restated, cash_timeline, live_cash = await _plan_cash_restatement(session)
+
+        if orphans:
+            ids = ",".join(str(int(o["id"])) for o in orphans)
+            await session.execute(text(f"DELETE FROM sayupaperposition WHERE id IN ({ids})"))
+            out["orphans"] = orphans
+        for fix in cash_restated:
+            await session.execute(
+                text(f"UPDATE {_ACCOUNT_TABLE} SET cash = :cash WHERE id = :id"),
+                {"cash": fix["new_cash"], "id": int(fix["account_id"])},
+            )
+        out["cash_restated"] = cash_restated
+
+        affected = set(phantom_mv) | {int(f["account_id"]) for f in cash_restated}
+        if can_day and affected:
+            out["snapshots_updated"] = await _rewrite_snapshots(
+                session,
+                phantom_mv=phantom_mv,
+                opened_on=opened_on,
+                cash_timeline=cash_timeline,
+                live_cash=live_cash,
+                has_quote=has_quote,
+                acc_ids=affected,
+            )
+
+        if can_broadcast:
+            out["broadcast_filled"] = await _fill_empty_broadcast_routing(session)
+        await session.commit()
+    if out["orphans"] or out["broadcast_filled"] or out["cash_restated"]:
+        codes = [f"{o['stock_code']}×{o['qty']}" for o in out["orphans"]]
+        logger.warning(
+            f"{_HEAL_LOG} 幽灵仓 {len(out['orphans'])} 只 {codes}；"
+            f"现金更正 {len(out['cash_restated'])} 盘；"
+            f"快照改 {out['snapshots_updated']} 行；播报补 {out['broadcast_filled']} 条"
+        )
+    return out
+
+
+async def _plan_cash_restatement(
+    session: AsyncSession,
+) -> tuple[List[Dict[str, Any]], Dict[int, List[Tuple[date, float]]], Dict[int, float]]:
+    """若账户现金 − 按流水重算现金 ≈ Σrealized_pnl，判定为旧卖出公式把盈亏加进了现金。"""
+    accs = (await session.execute(text(f"SELECT id, cash, initial_cash FROM {_ACCOUNT_TABLE}"))).all()
+    trades = (
+        await session.execute(
+            text(
+                "SELECT account_id, side, amount, fee, realized_pnl, executed_at "
+                "FROM sayupapertrade WHERE account_id > 0 "
+                "ORDER BY executed_at ASC, id ASC"
+            )
+        )
+    ).all()
+    by_acc: Dict[int, List[Any]] = {}
+    for row in trades:
+        by_acc.setdefault(int(row[0]), []).append(row)
+
+    fixes: List[Dict[str, Any]] = []
+    timeline: Dict[int, List[Tuple[date, float]]] = {}
+    live_cash: Dict[int, float] = {}
+    for acc in accs:
+        aid = int(acc[0])
+        cash = float(acc[1] or 0.0)
+        initial = float(acc[2] or 0.0)
+        expected = initial
+        pnl_sum = 0.0
+        steps: List[Tuple[date, float]] = []
+        for row in by_acc.get(aid, []):
+            expected += _trade_cash_delta(row[1], row[2], row[3])
+            if str(row[1] or "").strip().lower() == "sell":
+                pnl_sum += float(row[4] or 0.0)
+            d = _row_date(row[5])
+            if d is not None:
+                steps.append((d, expected))
+        gap = cash - expected
+        if abs(gap) <= 0.05 or abs(gap - pnl_sum) > 1.0:
+            continue
+        new_cash = round(expected, 4)
+        fixes.append(
+            {
+                "account_id": aid,
+                "old_cash": round(cash, 4),
+                "new_cash": new_cash,
+                "extra": round(gap, 4),
+            }
+        )
+        timeline[aid] = steps
+        live_cash[aid] = new_cash
+    return fixes, timeline, live_cash
+
+
+async def _rewrite_snapshots(
+    session: AsyncSession,
+    *,
+    phantom_mv: Dict[int, float],
+    opened_on: Dict[int, date],
+    cash_timeline: Dict[int, List[Tuple[date, float]]],
+    live_cash: Dict[int, float],
+    has_quote: bool,
+    acc_ids: set[int],
+) -> int:
+    """按幽灵市值 + 正确现金重写快照；日盈亏按更正后的总资产链条重算。"""
+    updated = 0
+    for acc_id in acc_ids:
+        initial = (
+            await session.execute(
+                text(f"SELECT initial_cash, cash FROM {_ACCOUNT_TABLE} WHERE id = :id"),
+                {"id": acc_id},
+            )
+        ).first()
+        if initial is None:
+            continue
+        initial_cash = float(initial[0] or 0.0)
+        now_cash = float(live_cash.get(acc_id, initial[1] or 0.0))
+        snaps = (
+            await session.execute(
+                text(
+                    "SELECT id, trade_date, cash, position_value, total_equity "
+                    "FROM sayupapersnapshot WHERE account_id = :id "
+                    "ORDER BY trade_date ASC, id ASC"
+                ),
+                {"id": acc_id},
+            )
+        ).all()
+        opened = opened_on.get(acc_id)
+        mv = phantom_mv.get(acc_id, 0.0)
+        steps = cash_timeline.get(acc_id, [])
+        prev_equity: Optional[float] = None
+        for snap in snaps:
+            td = _row_date(snap[1])
+            stored_cash = float(snap[2] or 0.0)
+            pv = float(snap[3] or 0.0)
+            if td is not None and opened is not None and td >= opened:
+                pv = max(0.0, pv - mv)
+            cash = _cash_on(steps, td, stored_cash) if td is not None else stored_cash
+            equity = round(cash + pv, 2)
+            total_pnl = round(equity - initial_cash, 2)
+            total_pct = round(total_pnl / initial_cash * 100, 4) if initial_cash else 0.0
+            if prev_equity is None:
+                day_pnl = round(equity - initial_cash, 2)
+                base = initial_cash
+            else:
+                day_pnl = round(equity - prev_equity, 2)
+                base = prev_equity
+            day_pct = round(day_pnl / base * 100, 4) if base else 0.0
+            await session.execute(
+                text(
+                    "UPDATE sayupapersnapshot SET cash = :cash, position_value = :pv, total_equity = :eq, "
+                    "day_pnl = :dp, day_pnl_pct = :dpp, total_pnl = :tp, total_pnl_pct = :tpp "
+                    "WHERE id = :sid"
+                ),
+                {
+                    "cash": round(cash, 2),
+                    "pv": round(pv, 2),
+                    "eq": equity,
+                    "dp": day_pnl,
+                    "dpp": day_pct,
+                    "tp": total_pnl,
+                    "tpp": total_pct,
+                    "sid": int(snap[0]),
+                },
+            )
+            updated += 1
+            prev_equity = equity
+
+        quote_expr = "last_quote_price" if has_quote else "NULL"
+        live_rows = (
+            await session.execute(
+                text(
+                    f"SELECT qty, {quote_expr} AS last_quote_price, avg_cost "
+                    "FROM sayupaperposition WHERE account_id = :id AND qty > 0"
+                ),
+                {"id": acc_id},
+            )
+        ).all()
+        live_pv = round(sum(_pos_mv(r[0], r[1], r[2]) for r in live_rows), 2)
+        live_eq = round(now_cash + live_pv, 2)
+        latest = (
+            await session.execute(
+                text(
+                    "SELECT id FROM sayupapersnapshot WHERE account_id = :id ORDER BY trade_date DESC, id DESC LIMIT 1"
+                ),
+                {"id": acc_id},
+            )
+        ).first()
+        if latest is not None:
+            total_pnl = round(live_eq - initial_cash, 2)
+            total_pct = round(total_pnl / initial_cash * 100, 4) if initial_cash else 0.0
+            await session.execute(
+                text(
+                    "UPDATE sayupapersnapshot SET cash = :cash, position_value = :pv, "
+                    "total_equity = :eq, total_pnl = :tp, total_pnl_pct = :tpp WHERE id = :sid"
+                ),
+                {
+                    "cash": round(now_cash, 2),
+                    "pv": live_pv,
+                    "eq": live_eq,
+                    "tp": total_pnl,
+                    "tpp": total_pct,
+                    "sid": int(latest[0]),
+                },
+            )
+    return updated
+
+
+async def _fill_empty_broadcast_routing(session: AsyncSession) -> int:
+    """同一群里若有完整 ws_bot_id / bot_self_id，抄给迁移种子留下的空目标。"""
+    rows = (await session.execute(text(f"SELECT id, group_id, bot_self_id, ws_bot_id FROM {_BROADCAST_TABLE}"))).all()
+    donors: Dict[str, Tuple[str, str]] = {}
+    for _tid, gid, self_id, ws_id in rows:
+        g = str(gid or "")
+        self_s = str(self_id or "").strip()
+        ws_s = str(ws_id or "").strip()
+        if g and self_s and ws_s and g not in donors:
+            donors[g] = (self_s, ws_s)
+    filled = 0
+    for tid, gid, self_id, ws_id in rows:
+        self_s = str(self_id or "").strip()
+        ws_s = str(ws_id or "").strip()
+        if self_s and ws_s:
+            continue
+        donor = donors.get(str(gid or ""))
+        if donor is None:
+            continue
+        await session.execute(
+            text(f"UPDATE {_BROADCAST_TABLE} SET bot_self_id = :self_id, ws_bot_id = :ws_id WHERE id = :id"),
+            {"self_id": donor[0], "ws_id": donor[1], "id": int(tid)},
+        )
+        filled += 1
+    return filled
+
+
 @on_core_start_before(priority=-70)
 async def papertrade_migrate_v2() -> None:
     """启动钩子。任何异常都只记日志，绝不让迁移失败拖挂 core 启动。"""
     try:
         skipped = await run_papertrade_v2_migration()
+        if skipped:
+            logger.warning(f"{_LOG} 跳过：{skipped}")
+        await heal_orphan_ledger()
     except Exception as e:
         logger.exception(f"{_LOG} 迁移异常，模拟盘将以现有 schema 继续运行: {e}")
         return
-    if skipped:
-        logger.warning(f"{_LOG} 跳过：{skipped}")

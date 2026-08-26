@@ -61,6 +61,8 @@ score_stock = s.score_stock
 decide_action = s.decide_action
 apply_risk_check = s.apply_risk_check
 indicators_have_entry_stop = s.indicators_have_entry_stop
+parse_llm_json_object = s.parse_llm_json_object
+normalize_plan_indicators = s.normalize_plan_indicators
 tech_from_indicators = s.tech_from_indicators
 MODE_RULES = s.MODE_RULES
 MODE_THRESHOLDS = s.MODE_THRESHOLDS
@@ -511,7 +513,38 @@ def test_indicators_have_entry_stop():
     assert indicators_have_entry_stop({"plan_stop_price": 0}) is False
     assert indicators_have_entry_stop({"plan_stop_price": -1}) is False
     assert indicators_have_entry_stop({"plan_stop_pct": True}) is False
+    assert indicators_have_entry_stop({"stop_pct": -0.08}) is True
+    assert indicators_have_entry_stop({"stop_price": 780.15}) is True
+    assert indicators_have_entry_stop({"indicators": {"plan_stop_pct": -0.08}}) is True
     print("[OK] indicators_have_entry_stop")
+
+
+def test_parse_llm_json_object_ignores_trailing_junk():
+    """LLM 常把 sector 写在第一个对象闭合之后，raw_decode 仍要拿到止损字段。"""
+    raw = (
+        '{"entry_price":847.99,"plan_stop_pct":-0.08,"plan_stop_price":780.15,'
+        '"event":"2Q26超预期"},"sector":"通信设备","sector_change_pct":1.59}'
+    )
+    parsed = parse_llm_json_object(raw)
+    assert parsed["plan_stop_pct"] == -0.08
+    assert parsed["plan_stop_price"] == 780.15
+    assert indicators_have_entry_stop(parsed) is True
+
+
+def test_parse_llm_json_object_empty_and_invalid():
+    assert parse_llm_json_object("") == {}
+    assert parse_llm_json_object("{}") == {}
+    assert parse_llm_json_object("not-json") == {}
+    assert parse_llm_json_object("[1,2]") == {}
+
+
+def test_normalize_plan_aliases_and_nested_indicators():
+    out = normalize_plan_indicators({"stop_pct": -0.08, "indicators": {"ma5": 1.0}})
+    assert out["plan_stop_pct"] == -0.08
+    assert out["ma5"] == 1.0
+    nested = normalize_plan_indicators({"indicators": {"stop_price": 10.5, "rsi6": 30}})
+    assert nested["plan_stop_price"] == 10.5
+    assert nested["rsi6"] == 30
 
 
 if __name__ == "__main__":
