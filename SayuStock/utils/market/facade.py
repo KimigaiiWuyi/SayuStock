@@ -20,6 +20,7 @@ from .models import (
 from .adapters.composite import CompositeMarketData
 from .adapters.okx.provider import OkxMarketData
 from .adapters.vix.provider import VixMarketData
+from .adapters.tiantian.provider import TiantianFundMarketData
 from .adapters.eastmoney.provider import EastMoneyMarketData
 
 
@@ -28,6 +29,7 @@ def build_default_market() -> MarketDataPort:
         equity=EastMoneyMarketData(),
         crypto=OkxMarketData(),
         vix=VixMarketData(),
+        fund=TiantianFundMarketData(),
     )
 
 

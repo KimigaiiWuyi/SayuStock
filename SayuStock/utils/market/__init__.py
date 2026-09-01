@@ -26,6 +26,7 @@ from .models import (
 from .convert import board_to_df, kline_to_df, quote_fields, kline_to_cn_df
 from .display import DisplayItem, from_quote, from_board_row, pick_display_items, board_rows_to_items
 from .registry import get_market, set_market
+from .fund_route import maybe_otc_fund_query
 
 __all__ = [
     "AssetClass",
@@ -63,6 +64,7 @@ __all__ = [
     "is_market_error",
     "kline_to_cn_df",
     "kline_to_df",
+    "maybe_otc_fund_query",
     "quote_fields",
     "set_market",
 ]

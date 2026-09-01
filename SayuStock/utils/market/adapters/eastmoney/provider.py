@@ -57,8 +57,12 @@ _PERIOD_DAYS: dict[KlinePeriod, int] = {
 }
 
 
-def _sec_type_to_asset(sec_type: str) -> AssetClass:
-    if "ETF" in sec_type or "基金" in sec_type:
+def _sec_type_to_asset(sec_type: str, *, secid: str = "") -> AssetClass:
+    if "ETF" in sec_type:
+        return AssetClass.ETF
+    if secid.startswith("150."):
+        return AssetClass.FUND
+    if "基金" in sec_type:
         return AssetClass.ETF
     if "指数" in sec_type:
         return AssetClass.INDEX
@@ -125,7 +129,7 @@ class EastMoneyMarketData:
         return SymbolRef(
             code=item["code"],
             name=item["name"],
-            asset_class=_sec_type_to_asset(item["sec_type"]),
+            asset_class=_sec_type_to_asset(item["sec_type"], secid=item["secid"]),
             exchange=_exchange_of(item["secid"], item["sec_type"]),
             provider_symbol=item["secid"],
             sec_type=item["sec_type"] or "",
@@ -158,7 +162,7 @@ class EastMoneyMarketData:
         symbol = SymbolRef(
             code=secid.split(".")[-1],
             name=code_info[1] or secid,
-            asset_class=_sec_type_to_asset(sec_type),
+            asset_class=_sec_type_to_asset(sec_type, secid=secid),
             exchange=_exchange_of(secid, sec_type),
             provider_symbol=secid,
             sec_type=sec_type or "",
@@ -193,7 +197,7 @@ class EastMoneyMarketData:
         symbol = SymbolRef(
             code=secid.split(".")[-1],
             name=code_info[1] or secid,
-            asset_class=_sec_type_to_asset(sec_type),
+            asset_class=_sec_type_to_asset(sec_type, secid=secid),
             exchange=_exchange_of(secid, sec_type),
             provider_symbol=secid,
             sec_type=sec_type or "",

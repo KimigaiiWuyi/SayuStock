@@ -91,6 +91,7 @@ from . import commands, admin, ai_tools  # noqa: F401
 `MS_MAP` 示例：`日k`→`101`，`周k`→`102`，`月k`→`103`，`k线`→`100`。
 
 解析逻辑在 `send_stock_img`：前缀命中则 K 线，否则分时。VIX 别名仅支持分时。
+场外基金（东财 `150.*`）没有蜡烛图：`个股 日k 720001` 在 data 层改走 `compare-stock`（天天基金累计净值增长率）。
 
 ## 2.6 自选股
 

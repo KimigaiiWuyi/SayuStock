@@ -1,4 +1,4 @@
-"""按 query 路由 equity / crypto / vix。"""
+"""按 query 路由 equity / crypto / vix / 场外基金。"""
 
 from __future__ import annotations
 
@@ -7,8 +7,8 @@ from datetime import date
 from collections.abc import Sequence
 
 from ..port import MarketDataPort
-from ..enums import RankBy, BoardKind, ValueKind, KlinePeriod
-from ..errors import MarketError
+from ..enums import RankBy, BoardKind, ValueKind, AssetClass, KlinePeriod
+from ..errors import MarketError, is_market_error
 from ..models import (
     Quote,
     SymbolRef,
@@ -22,15 +22,24 @@ from ..models import (
     NorthboundFlow,
     FinancialSnapshot,
 )
+from ..fund_route import maybe_otc_fund_query
 from .okx.provider import is_crypto_query
 from .vix.provider import is_vix_query
+from .tiantian.provider import is_otc_fund_query
 
 
 class CompositeMarketData:
-    def __init__(self, equity: MarketDataPort, crypto: MarketDataPort, vix: MarketDataPort) -> None:
+    def __init__(
+        self,
+        equity: MarketDataPort,
+        crypto: MarketDataPort,
+        vix: MarketDataPort,
+        fund: MarketDataPort | None = None,
+    ) -> None:
         self._equity = equity
         self._crypto = crypto
         self._vix = vix
+        self._fund = fund
 
     def _route(self, query: str) -> MarketDataPort:
         if is_vix_query(query):
@@ -39,11 +48,22 @@ class CompositeMarketData:
             return self._crypto
         return self._equity
 
+    async def _kline_port(self, query: str) -> MarketDataPort:
+        if is_vix_query(query):
+            return self._vix
+        if is_crypto_query(query):
+            return self._crypto
+        if self._fund is not None and maybe_otc_fund_query(query) and await is_otc_fund_query(query):
+            return self._fund
+        return self._equity
+
     async def resolve(self, query: str) -> SymbolRef | None:
-        return await self._route(query).resolve(query)
+        port = await self._kline_port(query)
+        return await port.resolve(query)
 
     async def quote(self, query: str) -> Quote | MarketError:
-        return await self._route(query).quote(query)
+        port = await self._kline_port(query)
+        return await port.quote(query)
 
     async def quotes(self, queries: Sequence[str]) -> list[Quote | MarketError]:
         return [await self.quote(q) for q in queries]
@@ -59,7 +79,18 @@ class CompositeMarketData:
         start: date | None = None,
         end: date | None = None,
     ) -> KlineSeries | MarketError:
-        return await self._route(query).kline(query, period, start=start, end=end)
+        port = await self._kline_port(query)
+        series = await port.kline(query, period, start=start, end=end)
+        if (
+            port is self._equity
+            and self._fund is not None
+            and not is_market_error(series)
+            and (series.symbol.asset_class == AssetClass.FUND or series.symbol.provider_symbol.startswith("150."))
+        ):
+            fund_series = await self._fund.kline(query, period, start=start, end=end)
+            if not is_market_error(fund_series):
+                return fund_series
+        return series
 
     async def board(
         self,

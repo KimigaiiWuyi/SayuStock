@@ -73,10 +73,11 @@ utils/
 │   ├── convert/dataframe.py
 │   ├── display.py          # DisplayItem（列表卡片）
 │   ├── adapters/
-│   │   ├── composite.py    # equity / crypto / vix 路由
+│   │   ├── composite.py    # equity / crypto / vix / 场外基金路由
 │   │   ├── eastmoney/      # 主源：HTTP + parse_*
 │   │   ├── okx/            # 加密货币
-│   │   └── vix/            # VIX
+│   │   ├── vix/            # VIX
+│   │   └── tiantian/       # 场外基金净值（天天基金）
 │   └── compat.py           # 仅测试/调试；业务禁止依赖
 ├── render_data.py          # ★ 渲染计算唯一真相源（吃领域模型）
 ├── render_text.py          # ★ 图 → 文字（给看不见图的 AI）

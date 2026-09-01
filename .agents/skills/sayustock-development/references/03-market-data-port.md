@@ -93,6 +93,7 @@ build_default_market()  →  CompositeMarketData(
     equity=EastMoneyMarketData(),
     crypto=OkxMarketData(),
     vix=VixMarketData(),
+    fund=TiantianFundMarketData(),
 )
 ```
 
@@ -100,9 +101,11 @@ build_default_market()  →  CompositeMarketData(
 
 1. `is_vix_query` → VIX adapter  
 2. `is_crypto_query` → OKX adapter  
-3. 否则 → 东财 equity  
+3. 场外基金（东财 QuoteID `150.*`，如 `720001`）→ 天天基金净值  
+4. 否则 → 东财 equity；若东财返回的序列仍是 `150.*` / `AssetClass.FUND`，Composite 再改走天天基金（名称无「混合」等关键字的安全网）  
 
-`board` / `hotmap` / 菜单 / 北向等**固定走 equity**（加密/VIX 无板块云图语义）。
+`board` / `hotmap` / 菜单 / 北向等**固定走 equity**（加密/VIX/场外基金无板块云图语义）。
+`个股 日k/周k` 命中场外基金时，data 层改走 `compare-stock`（净值增长率，不是蜡烛图）。
 
 测试可 `set_market(fake_port)` 注入假实现。
 
@@ -124,10 +127,11 @@ build_default_market()  →  CompositeMarketData(
 传输层 `utils/eastmoney.py` 的 `EASTMONEY_REQUESTER`：**允许 adapter 与少数特殊筛选用**；
 feature 模块不应再直接 `stock_request` 然后读 `f*`。
 
-### OKX / VIX
+### OKX / VIX / 天天基金
 
 - `okx/client.py` + `parse.py` + `provider.py`：candle / index-ticker → 模型  
 - `vix/provider.py`：`get_vix_data` → `IntradaySeries`  
+- `tiantian/client.py` + `parse.py` + `provider.py`：场外基金搜索 + `FundMNHisNetList` 累计净值 → `KlineSeries`（OHLC 均为净值，供对比图归一化）  
 
 ## 3.8 薄封装 `utils/stock/request.py`
 

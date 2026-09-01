@@ -39,10 +39,11 @@ snap = await market.hotmap()
 2. 在 `facade.build_default_market` / `CompositeMarketData` 中注册路由。
 3. **禁止**在 feature 模块解析供应商原始字段。
 
-## OKX / VIX
+## OKX / VIX / 场外基金
 
 - 加密货币经 `CompositeMarketData` 路由到 `OkxMarketData`
 - VIX 路由到 `VixMarketData`
+- 场外基金（东财 `150.*`，如 `720001`）路由到 `TiantianFundMarketData`，K 线为累计净值；Quote 用单位净值
 - 业务侧统一 `get_market().intraday/kline/quote`
 
 ## 已移除

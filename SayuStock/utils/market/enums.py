@@ -8,6 +8,7 @@ from enum import Enum
 class AssetClass(str, Enum):
     EQUITY = "equity"
     ETF = "etf"
+    FUND = "fund"
     INDEX = "index"
     FUTURE = "future"
     CRYPTO = "crypto"

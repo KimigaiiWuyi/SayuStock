@@ -72,11 +72,12 @@ async def send_my_stock_img(bot: Bot, ev: Event) -> list[str] | None:
     例如"帮我看看证券ETF"、"贵州茅台日K"、"白酒ETF周K"。
     也支持直接输入板块名称（如"证券"、"白酒"），系统会自动获取该板块内前13只成分股并生成多股分时对比图。
     支持同时查询多只股票的分时图。
+    场外基金（如 720001 / 财通价值动量混合A）没有 K 线，日k/周k/月k 会改走净值增长率对比图。
 
     Args:
         text: 查询内容，格式为 "[周期前缀] 股票名称或代码"
               - 无前缀：默认显示分时图，例如 "证券ETF"
-              - "日k": 日K线，例如 "日k 证券ETF"
+              - "日k": 日K线，例如 "日k 证券ETF"；场外基金则出净值对比
               - "周k": 周K线，例如 "周k 白酒ETF"
               - "月k"/"季k"/"年k": 对应周期K线
               - 板块名称：例如 "证券"，自动展开为板块内前13只成分股分时对比
@@ -86,13 +87,14 @@ async def send_my_stock_img(bot: Bot, ev: Event) -> list[str] | None:
 )
 async def send_stock_img(bot: Bot, ev: Event) -> list[str] | None:
     logger.info("开始执行[个股数据]")
-    content = ev.text.strip().lower()
-    if not content:
+    raw = ev.text.strip()
+    if not raw:
         return await bot.send("请后跟股票代码使用, 例如：个股 证券ETF")
+    lowered = raw.lower()
 
     for g in MS_MAP:
-        if content.startswith(g):
-            content = content.replace(g, "")
+        if lowered.startswith(g):
+            content = raw[len(g) :].strip()
             kline_code = MS_MAP[g]
             vix_name = get_vix_name(content)
             if vix_name:
@@ -104,7 +106,7 @@ async def send_stock_img(bot: Bot, ev: Event) -> list[str] | None:
             break
     else:
         im = await render_image(
-            content.replace("分时", "").strip(),
+            raw.replace("分时", "").strip(),
             "single-stock",
         )
     await bot.send(im)
@@ -116,8 +118,10 @@ async def send_stock_img(bot: Bot, ev: Event) -> list[str] | None:
     to_ai="""对比多只股票/ETF的涨跌幅走势，支持输入板块名称自动展开为成分股对比。
 
     当用户想要对比几只股票走势、比较不同ETF表现、"帮我对比白酒和医药"、
-    "证券ETF和沪深300谁涨得多"时调用。不指定标的则对比用户自选列表。
+    "证券ETF和沪深300谁涨得多"、"720001 和 510300 比一比"时调用。
+    不指定标的则对比用户自选列表。
     也支持直接输入板块名称（如"证券"、"白酒"），系统会自动获取该板块内前13只成分股并纳入对比。
+    场外基金用天天基金累计净值增长率，可与 ETF/指数放在同一张对比图。
 
     Args:
         text: 查询内容，格式为 "[时间范围] 股票名称或代码1 股票名称或代码2 ..."
@@ -125,6 +129,7 @@ async def send_stock_img(bot: Bot, ev: Event) -> list[str] | None:
               - 也可指定具体日期如 "2024.01.01~2024.12.31"
               - 无时间范围默认「最近一年」日 K 归一化对比
               - 多个标的以空格分隔，例如 "白酒ETF 医药ETF 证券ETF"
+              - 场外基金代码/名称可与 ETF 混排，例如 "720001 510300"
               - 板块名称：例如 "证券"，自动展开为板块内前13只成分股并参与对比
               - 不指定标的则对比用户自选列表
     """,

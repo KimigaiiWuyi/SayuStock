@@ -182,6 +182,7 @@ if not isinstance(raw_data, KlineSeries):
 | 用官方 pyright | unknown diagnostic rule | 统一 **basedpyright** |
 | 脚本 E402 | pre-commit / lint 红 | 路径补丁后的 import 加 `# noqa: E402` |
 | 对比图默认窗口 | 用户觉得「只有一个月」 | 对比默认 `KlinePeriod.D1_YEAR`（365 天），勿改回 `D1_RECENT`（50 天） |
+| 场外基金当 K 线 | `个股 日k 720001` 只有一根柱 | 东财 `150.*` 无真 K 线；走天天基金净值，命令层改 `compare-stock` |
 
 ## 9.17 改完自查清单
 

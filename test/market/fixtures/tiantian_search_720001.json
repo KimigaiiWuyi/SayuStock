@@ -1,0 +1,21 @@
+{
+  "ErrCode": 0,
+  "ErrMsg": "fromes",
+  "Datas": [
+    {
+      "_id": "720001",
+      "CODE": "720001",
+      "NAME": "财通价值动量混合A",
+      "JP": "CTJZDLHHA",
+      "CATEGORY": 700,
+      "CATEGORYDESC": "基金",
+      "FundBaseInfo": {
+        "FCODE": "720001",
+        "SHORTNAME": "财通价值动量混合A",
+        "FTYPE": "混合型-灵活",
+        "DWJZ": 14.081,
+        "FSRQ": "2026-09-01"
+      }
+    }
+  ]
+}

@@ -10,12 +10,14 @@ from dataclasses import dataclass
 from gsuid_core.logger import logger
 
 from ..utils.market import (
+    AssetClass,
     KlinePeriod,
     get_market,
     is_market_error,
+    maybe_otc_fund_query,
 )
 from ..utils.constant import ErroText, bk_dict, market_dict
-from ..utils.market.models import KlineSeries, BoardSnapshot, IntradaySeries
+from ..utils.market.models import SymbolRef, KlineSeries, BoardSnapshot, IntradaySeries
 
 MarketPayload = BoardSnapshot | IntradaySeries | KlineSeries
 CloudMapRawData = Union[MarketPayload, str]
@@ -61,13 +63,16 @@ class CloudMapDataService:
             else:
                 raw_data = "概念云图需要后跟概念类型, 例如： 概念云图 华为欧拉"
         elif resolved_sector and resolved_sector.startswith("single-stock-kline"):
+            if await self._should_compare_otc_fund(market):
+                return await self._as_compare_result(market, start_time, end_time)
             raw_data = await self._fetch_kline(market, resolved_sector, start_time, end_time)
+            if isinstance(raw_data, KlineSeries) and self._is_otc_fund_kline(raw_data):
+                tokens = self._split_queries(market)
+                if len(tokens) <= 1:
+                    return self._compare_result_from_series([raw_data], start_time, end_time)
+                return await self._as_compare_result(market, start_time, end_time)
         elif resolved_sector == "compare-stock":
-            raw_data, compare_datas = await self.fetch_compare_stocks(market, start_time, end_time)
-            raw_datas = list[IntradaySeries | KlineSeries](compare_datas)
-            st_f = start_time.strftime("%Y%m%d") if start_time else ""
-            et_f = end_time.strftime("%Y%m%d") if end_time else ""
-            special_cache_key = f"compare-stock-{st_f}-{et_f}"
+            return await self._as_compare_result(market, start_time, end_time)
         elif resolved_sector == "single-stock":
             raw_data, single_datas = await self.fetch_single_stock_group(market, start_time, end_time)
             raw_datas = list[IntradaySeries | KlineSeries](single_datas)
@@ -99,6 +104,60 @@ class CloudMapDataService:
                 snap = await port.board(str(code), limit=None, sort_asc=False)
                 return concept_name, snap.message if is_market_error(snap) else snap
         return upper_sector, ErroText["typemap"]
+
+    @staticmethod
+    def _split_queries(market: str) -> List[str]:
+        return [item.strip() for item in market.replace("，", " ").replace(",", " ").split() if item.strip()]
+
+    @staticmethod
+    def _is_plain_code(query: str) -> bool:
+        text = query.strip()
+        if text.count(".") == 1:
+            left, right = text.split(".", 1)
+            return left.isdigit() and right.isdigit()
+        return text.isdigit() and len(text) == 6
+
+    async def _should_compare_otc_fund(self, market: str) -> bool:
+        port = get_market()
+        for token in self._split_queries(market):
+            if not maybe_otc_fund_query(token):
+                continue
+            ref = await port.resolve(token)
+            if ref is not None and self._is_otc_fund_ref(ref):
+                return True
+        return False
+
+    @staticmethod
+    def _is_otc_fund_ref(ref: SymbolRef) -> bool:
+        return ref.asset_class == AssetClass.FUND or ref.provider_symbol.startswith("150.")
+
+    @staticmethod
+    def _is_otc_fund_kline(series: KlineSeries) -> bool:
+        return series.symbol.asset_class == AssetClass.FUND or series.symbol.provider_symbol.startswith("150.")
+
+    def _compare_result_from_series(
+        self,
+        series_list: List[KlineSeries],
+        start_time: Optional[datetime],
+        end_time: Optional[datetime],
+    ) -> CloudMapDataResult:
+        if not series_list:
+            return CloudMapDataResult(ErroText["notData"], [], "compare-stock", None)
+        st_f = start_time.strftime("%Y%m%d") if start_time else ""
+        et_f = end_time.strftime("%Y%m%d") if end_time else ""
+        raw_datas = list[IntradaySeries | KlineSeries](series_list)
+        return CloudMapDataResult(series_list[0], raw_datas, "compare-stock", f"compare-stock-{st_f}-{et_f}")
+
+    async def _as_compare_result(
+        self,
+        market: str,
+        start_time: Optional[datetime],
+        end_time: Optional[datetime],
+    ) -> CloudMapDataResult:
+        raw_data, compare_datas = await self.fetch_compare_stocks(market, start_time, end_time)
+        if isinstance(raw_data, str):
+            return CloudMapDataResult(raw_data, [], "compare-stock", None)
+        return self._compare_result_from_series(compare_datas, start_time, end_time)
 
     async def _fetch_kline(
         self,
@@ -162,6 +221,8 @@ class CloudMapDataService:
             snap = await port.board(str(menu_c[query]), limit=13, sort_asc=False)
             if not is_market_error(snap):
                 return [r.code for r in snap.rows if r.code]
+        if self._is_plain_code(query):
+            return []
         q = await port.quote(query)
         if not is_market_error(q) and "(板块)" in q.symbol.name:
             snap = await port.board(q.symbol.code or query, limit=13, sort_asc=False)

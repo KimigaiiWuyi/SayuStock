@@ -7,6 +7,8 @@ from typing import Literal
 from datetime import date
 from collections.abc import Sequence
 
+import pytest
+
 from SayuStock.utils.market import get_market, set_market
 from SayuStock.utils.market.enums import BoardKind, ValueKind, AssetClass, KlinePeriod
 from SayuStock.utils.market.errors import MarketError, unsupported, is_market_error
@@ -153,6 +155,76 @@ def test_composite_routes_by_query() -> None:
         k_etf = await port.kline("510300", KlinePeriod.D1_YEAR)
         assert not is_market_error(k_btc) and k_btc.symbol.exchange == "crypto"
         assert not is_market_error(k_etf) and k_etf.symbol.exchange == "equity"
+
+    asyncio.run(_run())
+
+
+def test_composite_routes_otc_fund(monkeypatch: pytest.MonkeyPatch) -> None:
+    import SayuStock.utils.market.adapters.composite as composite_mod
+
+    async def _yes(_query: str) -> bool:
+        return True
+
+    async def _no(_query: str) -> bool:
+        return False
+
+    async def _run() -> None:
+        monkeypatch.setattr(composite_mod, "is_otc_fund_query", _yes)
+        port = CompositeMarketData(
+            _TagPort("equity"),
+            _TagPort("crypto"),
+            _TagPort("vix"),
+            _TagPort("fund"),
+        )
+        k_fund = await port.kline("720001", KlinePeriod.D1_YEAR)
+        assert not is_market_error(k_fund)
+        assert k_fund.symbol.exchange == "fund"
+        k_etf = await port.kline("510300", KlinePeriod.D1_YEAR)
+        assert not is_market_error(k_etf)
+        assert k_etf.symbol.exchange == "equity"
+        monkeypatch.setattr(composite_mod, "is_otc_fund_query", _no)
+        k_named = await port.kline("财通价值动量混合A", KlinePeriod.D1_YEAR)
+        assert not is_market_error(k_named)
+        assert k_named.symbol.exchange == "equity"
+
+    asyncio.run(_run())
+
+
+def test_composite_retries_fund_when_equity_returns_otc() -> None:
+    class _EquityOtc(_TagPort):
+        async def kline(
+            self,
+            query: str,
+            period: KlinePeriod,
+            *,
+            start: date | None = None,
+            end: date | None = None,
+        ) -> KlineSeries:
+            _ = start, end
+            return KlineSeries(
+                symbol=SymbolRef(
+                    code=query,
+                    name="兴全合润",
+                    asset_class=AssetClass.FUND,
+                    exchange="OTC",
+                    provider_symbol="150.163406",
+                    sec_type="基金",
+                ),
+                period=period,
+                bars=(),
+                adjusted=False,
+            )
+
+    async def _run() -> None:
+        port = CompositeMarketData(
+            _EquityOtc("equity"),
+            _TagPort("crypto"),
+            _TagPort("vix"),
+            _TagPort("fund"),
+        )
+        series = await port.kline("兴全合润", KlinePeriod.D1_YEAR)
+        assert not is_market_error(series)
+        assert series.symbol.exchange == "fund"
 
     asyncio.run(_run())
 
