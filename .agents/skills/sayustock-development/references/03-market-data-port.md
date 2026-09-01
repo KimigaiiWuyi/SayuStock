@@ -26,6 +26,7 @@ if is_market_error(q):
     return q.message  # 用户可读错误
 
 series = await port.intraday("600519")
+five = await port.intraday("600519", ndays=5)  # 五日分时，东财走 push2his
 kl = await port.kline("600519", KlinePeriod.D1)
 snap = await port.hotmap()
 board = await port.board("沪深A", limit=100, sort_asc=False)
@@ -42,7 +43,7 @@ fin = await port.financial_snapshot("600519")
 |------|------|----------|
 | `SymbolRef` | 标的身份 | `code`, `name`, `asset_class`, `exchange`, `provider_symbol` |
 | `Quote` | 快照 | `price`, `open/high/low`, `prev_close`, `change_pct`（百分数如 1.23）, `amount`, `turnover_rate`, … |
-| `IntradayPoint` / `IntradaySeries` | 分时 | `points: tuple[IntradayPoint,…]`, 可选 `quote` |
+| `IntradayPoint` / `IntradaySeries` | 分时 | `points`、可选 `quote`、`ndays`（1=当日，5=五日） |
 | `Bar` / `KlineSeries` | K 线 | `period: KlinePeriod`, `bars`, `adjusted` |
 | `BoardRow` / `BoardSnapshot` | 列表/云图 | `kind`, `title`, `rows`（含 `change_pct`, `market_cap`, `industry`…） |
 | `BoardExtras` | 扩展列 | pe / turnover / lead_code… |
@@ -62,7 +63,7 @@ fin = await port.financial_snapshot("600519")
 |------|------|
 | `resolve(query)` | `SymbolRef \| None` |
 | `quote` / `quotes` | `Quote \| MarketError` |
-| `intraday` | `IntradaySeries \| MarketError` |
+| `intraday(query, *, ndays=1)` | `IntradaySeries \| MarketError`；`ndays=5` 为五日分时 |
 | `kline(query, period, *, start, end)` | `KlineSeries \| MarketError` |
 | `board(kind \| str, *, sector, limit, sort_asc)` | `BoardSnapshot \| MarketError` |
 | `hotmap` | `BoardSnapshot \| MarketError` |
@@ -139,7 +140,7 @@ feature 模块不应再直接 `stock_request` 然后读 `f*`。
 
 | 函数 | 行为 |
 |------|------|
-| `get_gg(market, sector, start, end)` | `single-stock` → intraday；`single-stock-kline-*` → kline |
+| `get_gg(market, sector, start, end)` | `single-stock` / `single-stock-ndays-*` → intraday；`single-stock-kline-*` → kline |
 | `get_vix(name)` | `port.intraday` |
 | `get_mtdata` / `get_hotmap` | board / hotmap |
 

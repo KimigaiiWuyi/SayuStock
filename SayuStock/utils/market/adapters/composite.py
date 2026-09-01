@@ -68,8 +68,8 @@ class CompositeMarketData:
     async def quotes(self, queries: Sequence[str]) -> list[Quote | MarketError]:
         return [await self.quote(q) for q in queries]
 
-    async def intraday(self, query: str) -> IntradaySeries | MarketError:
-        return await self._route(query).intraday(query)
+    async def intraday(self, query: str, *, ndays: int = 1) -> IntradaySeries | MarketError:
+        return await self._route(query).intraday(query, ndays=ndays)
 
     async def kline(
         self,

@@ -28,6 +28,16 @@ _kline_cache: dict[str, tuple[float, object]] = {}
 _struct_cache: dict[str, tuple[float, object]] = {}
 
 
+def _last_finite_float(series: pd.Series) -> float | None:
+    raw = series.iloc[-1]
+    if isinstance(raw, bool) or not isinstance(raw, (int, float)):
+        return None
+    value = float(raw)
+    if value != value:
+        return None
+    return value
+
+
 @dataclass(frozen=True, slots=True)
 class VolumeStructure:
     rel_volume: Optional[float]
@@ -70,8 +80,13 @@ def measure_from_ohlcv(df: pd.DataFrame, params: Mapping[str, Any]) -> VolumeStr
         return "⚠️ 无法计算 rel_volume / close_percentile（窗口内数据无效）"
     last_close = float(close.iloc[-1])
     if "open" in df.columns:
-        last_open = float(pd.to_numeric(df["open"].iloc[-1], errors="coerce"))
-        bullish = last_close > last_open
+        open_col = df["open"]
+        if isinstance(open_col, pd.Series):
+            open_num = pd.to_numeric(open_col, errors="coerce")
+            last_open = _last_finite_float(open_num) if isinstance(open_num, pd.Series) else None
+            bullish = last_open is not None and last_close > last_open
+        else:
+            bullish = False
     else:
         bullish = False
     return VolumeStructure(

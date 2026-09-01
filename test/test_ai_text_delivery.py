@@ -196,6 +196,10 @@ def test_emit_ai_text_dispatch_matches_chart_kinds(captured: list[str]) -> None:
     assert captured and "分时" in captured[0]
 
     captured.clear()
+    rm._emit_ai_text("甲", "single-stock-ndays-5", intraday, [])
+    assert captured and "5日分时" in captured[0]
+
+    captured.clear()
     rm._emit_ai_text("大盘云图", None, cloud, [])
     assert captured and "大盘云图" in captured[0]
 

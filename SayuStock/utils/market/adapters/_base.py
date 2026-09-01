@@ -37,7 +37,8 @@ class PartialMarketData:
     async def quotes(self, queries: Sequence[str]) -> list[Quote | MarketError]:
         return [await self.quote(q) for q in queries]
 
-    async def intraday(self, query: str) -> IntradaySeries | MarketError:
+    async def intraday(self, query: str, *, ndays: int = 1) -> IntradaySeries | MarketError:
+        _ = ndays
         return unsupported("intraday 未实现", provider=self.provider_name)
 
     async def kline(

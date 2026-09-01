@@ -15,6 +15,7 @@ print(q.price, q.change_pct, q.symbol.code)
 
 kl = await market.kline("600519", KlinePeriod.D1)
 series = await market.intraday("600519")
+five = await market.intraday("600519", ndays=5)  # 五日分时
 snap = await market.hotmap()
 ```
 
@@ -23,7 +24,7 @@ snap = await market.hotmap()
 | 模型 | 用途 |
 |------|------|
 | `Quote` | 快照行情 |
-| `IntradaySeries` | 分时 |
+| `IntradaySeries` | 分时（`ndays=1` 当日，`ndays=5` 五日） |
 | `KlineSeries` | K 线 |
 | `BoardSnapshot` | 板块/云图列表 |
 

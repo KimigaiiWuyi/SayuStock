@@ -107,6 +107,8 @@ __all__ = [
     "_add_cross_midnight_marker",
     "_apply_intraday_10min_ticks",
     "_apply_intraday_axis",
+    "_apply_intraday_day_separators",
+    "_apply_intraday_day_ticks",
     "_apply_intraday_kline_ticks",
     "_apply_month_ticks",
     "_hide_root_x_tick_labels",
@@ -158,6 +160,7 @@ BG_COLOR = "#050505"
 FG_COLOR = "#f5f5f5"
 AXIS_COLOR = "#d8d8d8"
 GRID_COLOR = "#777777"
+DAY_SEP_COLOR = "#7f8c9a"
 FONT_CANDIDATES = ["Microsoft YaHei", "SimHei", "Arial Unicode MS", "DejaVu Sans"]
 # 对齐系统 MiSans 静态字族的 wght 档（VF 在 matplotlib 里只有 Regular 一档）
 FONT_W_THIN = 150
@@ -987,6 +990,50 @@ def _apply_pane_x_tick_labels(ax: Axes, positions: list[int], labels: list[str])
     fig = ax.figure
     if isinstance(fig, Figure):
         _hide_root_x_tick_labels(fig)
+
+
+def _apply_intraday_day_separators(
+    ax: Axes,
+    *,
+    starts: list[int],
+    n_points: int,
+    shade: bool = True,
+) -> None:
+    """五日分时：隔日竖线 + 隔日浅底，和当日分时的 10 分钟刻度互斥。"""
+    if n_points <= 0 or len(starts) < 2:
+        return
+    bounds = starts + [n_points]
+    if shade:
+        for index in range(len(starts)):
+            if index % 2 == 1:
+                ax.axvspan(
+                    float(bounds[index]) - 0.5,
+                    float(bounds[index + 1]) - 0.5,
+                    facecolor="#ffffff",
+                    alpha=0.045,
+                    zorder=0,
+                )
+    for pos in starts[1:]:
+        ax.axvline(float(pos) - 0.5, color=DAY_SEP_COLOR, linestyle="--", alpha=0.72, linewidth=1.2, zorder=2)
+
+
+def _apply_intraday_day_ticks(ax: Axes, positions: list[int], labels: list[str]) -> None:
+    if not positions or not labels:
+        return
+    _apply_pane_x_tick_labels(ax, positions, labels)
+    ax.tick_params(axis="x", rotation=0)
+    for lab in ax.get_xticklabels():
+        text = lab.get_text()
+        lines = text.split("\n")
+        if len(lines) < 2:
+            continue
+        chg = lines[-1].strip()
+        if chg.startswith("+"):
+            lab.set_color(UP_COLOR)
+        elif chg.startswith("-"):
+            lab.set_color(DOWN_COLOR)
+        lab.set_fontsize(11)
+        lab.set_linespacing(1.2)
 
 
 def _apply_intraday_10min_ticks(ax: Axes, index: pd.Index) -> None:

@@ -83,8 +83,16 @@ def _holiday_dates(cal_id: str, year: int) -> frozenset[str]:
     elif cal_id == "US_FED":
         cal = _holidays.country_holidays("US", years=year)
     elif cal_id == "EU":
-        cal = _holidays.country_holidays("GB", years=year)
-        cal.update(_holidays.country_holidays("DE", years=year))
+        gb = _holidays.country_holidays("GB", years=year)
+        de = _holidays.country_holidays("DE", years=year)
+        iso: list[str] = []
+        for cal in (gb, de):
+            for day in cal:
+                if isinstance(day, datetime):
+                    iso.append(day.date().isoformat())
+                elif isinstance(day, date):
+                    iso.append(day.isoformat())
+        return frozenset(iso)
     else:
         cal = _holidays.country_holidays(cal_id, years=year)
     return frozenset(day.isoformat() for day in cal)

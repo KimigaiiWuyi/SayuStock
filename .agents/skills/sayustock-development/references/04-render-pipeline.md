@@ -53,6 +53,7 @@ class CloudMapDataResult:
 | sector 以 `single-stock-kline` 开头 | `kline` + `KlinePeriod` |
 | sector == `compare-stock` | 多标的 `kline(D1_YEAR)`（默认约一年日 K） |
 | sector == `single-stock` | `intraday`；若名含「(板块)」则展开成分股分时 |
+| sector == `single-stock-ndays-5` | `intraday(..., ndays=5)`，五日分时（图上按交易日分隔） |
 | 其它 | `board(market)` |
 
 板块展开：`_fetch_sector_codes` → 并行 `intraday`，最多约 13 只。

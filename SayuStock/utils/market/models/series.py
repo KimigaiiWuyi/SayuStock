@@ -27,6 +27,7 @@ class IntradaySeries:
     symbol: SymbolRef
     points: tuple[IntradayPoint, ...]
     quote: Quote | None
+    ndays: int = 1
 
 
 @dataclass(frozen=True, slots=True)

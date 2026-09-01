@@ -84,13 +84,15 @@ from . import commands, admin, ai_tools  # noqa: F401
 
 | sector | 含义 |
 |--------|------|
-| `single-stock` | 分时（可多标的空格分隔） |
+| `single-stock` | 当日分时（可多标的空格分隔） |
+| `single-stock-ndays-5` | 五日分时（分时线，不是 K 线） |
 | `single-stock-kline-{code}` | K 线；code 见 `MS_MAP`（5/15/30/60/100/101…106） |
 | `compare-stock` | 多标的日 K 对比 |
 
 `MS_MAP` 示例：`日k`→`101`，`周k`→`102`，`月k`→`103`，`k线`→`100`。
+五日前缀：`五日` / `5日` / `五天` / `5天`（及「五日分时」）。
 
-解析逻辑在 `send_stock_img`：前缀命中则 K 线，否则分时。VIX 别名仅支持分时。
+解析逻辑在 `utils/stock_period.parse_stock_img_request`：先匹配五日分时，再匹配 K 线前缀，否则当日分时。VIX 别名仅支持当日分时。
 场外基金（东财 `150.*`）没有蜡烛图：`个股 日k 720001` 在 data 层改走 `compare-stock`（天天基金累计净值增长率）。
 
 ## 2.6 自选股

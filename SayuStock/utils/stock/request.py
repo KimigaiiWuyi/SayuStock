@@ -7,6 +7,7 @@ from gsuid_core.logger import logger
 from .utils import calculate_difference
 from ..market import KlinePeriod, get_market, is_market_error
 from ..eastmoney import EASTMONEY_REQUESTER
+from ..stock_period import is_intraday_sector, intraday_ndays_from_sector
 from ..market.models import KlineSeries, BoardSnapshot, IntradaySeries
 
 
@@ -92,8 +93,11 @@ async def get_gg(
     logger.info(f"[SayuStock] get_gg code: {market} sector: {sector}")
     port = get_market()
 
-    if sector == "single-stock":
-        series = await port.intraday(market)
+    if is_intraday_sector(sector):
+        ndays = intraday_ndays_from_sector(sector)
+        if ndays is None:
+            ndays = 1
+        series = await port.intraday(market, ndays=ndays)
         if is_market_error(series):
             return series.message
         return series

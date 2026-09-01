@@ -16,6 +16,8 @@ MACD / CMF，AI 一个都拿不到，等于让它裸看 K 线数字瞎猜。对�
 新增图表元素时，请同步在这里补上对应文字，并在 ``test/test_render_text.py`` 加断言。
 """
 
+from datetime import date
+
 import pandas as pd
 
 from .indicators import swing_stats, normalize_pct, compute_indicators
@@ -239,11 +241,41 @@ def compare_text(series_list: list[KlineSeries]) -> str:
     return header + "\n" + "\n".join(blocks)
 
 
+def _intraday_day_close_line(series: IntradaySeries) -> str:
+    """五日分时：每个交易日最后一个有效价 + 相对前一日收盘的涨跌。"""
+    last_by_day: dict[date, float] = {}
+    order: list[date] = []
+    for point in series.points:
+        if point.price == 0.0:
+            continue
+        day = point.ts.date()
+        if day not in last_by_day:
+            order.append(day)
+        last_by_day[day] = point.price
+    if len(order) < 2:
+        return ""
+    parts: list[str] = []
+    prev: float | None = None
+    for day in order:
+        last = last_by_day[day]
+        label = f"{day.month:02d}-{day.day:02d}"
+        if prev is None:
+            parts.append(f"{label} {last}")
+        else:
+            pct = (last / prev - 1.0) * 100.0 if prev != 0 else 0.0
+            parts.append(f"{label} {last}({pct:+.2f}%)")
+        prev = last
+    return "分日收盘: " + "  ".join(parts)
+
+
 def single_stock_text(
     series: IntradaySeries | list[IntradaySeries],
     is_multi: bool = False,
+    *,
+    ndays: int = 1,
 ) -> str:
     """分时图的文字版（单只或多只），读 Quote / IntradaySeries 语义字段。"""
+    span = f"{ndays}日分时" if ndays > 1 else "分时"
     if is_multi or isinstance(series, list):
         items = series if isinstance(series, list) else [series]
         parts: list[str] = []
@@ -263,22 +295,29 @@ def single_stock_text(
             )
         if not parts:
             return ""
-        return "【多股分时行情】\n" + "\n".join(parts)
+        return f"【多股{span}行情】\n" + "\n".join(parts)
 
     if not isinstance(series, IntradaySeries):
         return ""
     q = series.quote
+    day_line = _intraday_day_close_line(series) if ndays > 1 else ""
     if q is None:
         last = series.points[-1].price if series.points else None
-        return f"【{series.symbol.display_name} 分时行情】\n最新价: {last}"
-    return (
-        f"【{q.symbol.display_name} 分时行情】\n"
+        text = f"【{series.symbol.display_name} {span}行情】\n最新价: {last}"
+        if day_line:
+            return text + "\n" + day_line
+        return text
+    text = (
+        f"【{q.symbol.display_name} {span}行情】\n"
         f"最新价: {q.price}  涨跌幅: {q.change_pct}%\n"
         f"开盘价: {q.prev_close}  "
         f"最高价: {q.high}  最低价: {q.low}\n"
         f"换手率: {q.turnover_rate}%  成交额: {q.amount}  "
         f"成交量: {q.volume}"
     )
+    if day_line:
+        return text + "\n" + day_line
+    return text
 
 
 def cloudmap_text(

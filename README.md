@@ -54,6 +54,10 @@
 <a><img src="https://s2.loli.net/2025/02/23/k1AOeTfxtPZHluo.jpg"></a>
 </p></details>
 
+<details><summary>个股 五日 贵州茅台（5日 / 五日分时，分时线不是K线）</summary><p>
+五日分时走东财 trends2 <code>ndays=5</code>（push2his），图上按交易日分隔。
+</p></details>
+
 <details><summary>个股 日k 东方财富（周k、月k、年k）</summary><p>
 <a><img src="https://s2.loli.net/2025/05/16/Mlz5qEyKBe16SdR.png"></a>
 </p></details>

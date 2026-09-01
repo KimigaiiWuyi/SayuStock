@@ -70,7 +70,8 @@ class _TagPort:
     async def quotes(self, queries: Sequence[str]) -> list[Quote | MarketError]:
         return [await self.quote(q) for q in queries]
 
-    async def intraday(self, query: str) -> IntradaySeries | MarketError:
+    async def intraday(self, query: str, *, ndays: int = 1) -> IntradaySeries | MarketError:
+        _ = ndays
         return unsupported("x", provider=self.tag)
 
     async def kline(

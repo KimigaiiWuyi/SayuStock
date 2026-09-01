@@ -6,7 +6,7 @@ from datetime import date, datetime
 
 from .._base import PartialMarketData
 from ...enums import AssetClass
-from ...errors import MarketError, not_found, empty_error, network_error
+from ...errors import MarketError, not_found, empty_error, unsupported, network_error
 from ...models import Quote, SymbolRef, IntradayPoint, IntradaySeries
 from ....constant import VIX_LIST
 from ....stock.get_vix import get_vix_data
@@ -75,7 +75,9 @@ class VixMarketData(PartialMarketData):
             as_of=last.ts,
         )
 
-    async def intraday(self, query: str) -> IntradaySeries | MarketError:
+    async def intraday(self, query: str, *, ndays: int = 1) -> IntradaySeries | MarketError:
+        if ndays != 1:
+            return unsupported("VIX 不支持五日分时，请使用 个股 300vix 查看当日分时", provider=PROVIDER)
         vix = resolve_vix_key(query)
         if vix is None:
             return not_found("非 VIX 标的", provider=PROVIDER)

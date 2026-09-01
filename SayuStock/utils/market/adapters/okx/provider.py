@@ -18,7 +18,7 @@ from .client import (
     fetch_today_1m_candles,
 )
 from ...enums import KlinePeriod
-from ...errors import MarketError, not_found
+from ...errors import MarketError, not_found, unsupported
 from ...models import Quote, SymbolRef, KlineSeries, IntradaySeries
 
 PROVIDER = "okx"
@@ -57,7 +57,9 @@ class OkxMarketData(PartialMarketData):
             open_utc8=ticker["open_utc8"],
         )
 
-    async def intraday(self, query: str) -> IntradaySeries | MarketError:
+    async def intraday(self, query: str, *, ndays: int = 1) -> IntradaySeries | MarketError:
+        if ndays != 1:
+            return unsupported("该市场不支持五日分时，请使用 个股 xxx 查看当日分时", provider=PROVIDER)
         inst_id = normalize_inst_id(query)
         if inst_id is None:
             return not_found("非加密货币标的", provider=PROVIDER)

@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import math
 from typing import Any, List, cast
+from datetime import date, datetime
 from collections import defaultdict
 from dataclasses import dataclass
 
@@ -20,7 +21,11 @@ from gsuid_core.logger import logger
 
 from .utils import int_to_percentage, number_to_chinese
 from .constant import ErroText
-from .time_range import get_trading_datetimes_bjt, is_within_trading_day_window
+from .time_range import (
+    get_session_anchor_date,
+    get_trading_datetimes_bjt,
+    is_within_trading_day_window,
+)
 from .market.models import KlineSeries, BoardSnapshot, IntradaySeries
 from .market.convert.dataframe import kline_to_cn_df
 
@@ -59,6 +64,10 @@ class SingleStockRenderData:
     tick_texts: list[str]
     bar_colors: list[str]
     title_text: str
+    ndays: int
+    day_starts: list[int]
+    day_tick_positions: list[int]
+    day_tick_labels: list[str]
 
 
 @dataclass(slots=True)
@@ -444,6 +453,130 @@ def _rows_from_resolved_trends(
     return rows
 
 
+def _as_timestamp(value: object) -> pd.Timestamp | None:
+    if value is None or value is pd.NaT:
+        return None
+    if isinstance(value, pd.Timestamp):
+        return value
+    if isinstance(value, datetime):
+        stamp = pd.Timestamp(value)
+        return stamp if isinstance(stamp, pd.Timestamp) else None
+    if isinstance(value, np.datetime64):
+        stamp = pd.Timestamp(value)
+        return stamp if isinstance(stamp, pd.Timestamp) else None
+    return None
+
+
+def _minute_ts(ts: object) -> pd.Timestamp | None:
+    stamp = ts if isinstance(ts, pd.Timestamp) else _as_timestamp(ts)
+    if stamp is None:
+        return None
+    minute = stamp.floor("min")
+    if not isinstance(minute, pd.Timestamp):
+        return None
+    return minute
+
+
+def _naive_bjt(ts: pd.Timestamp) -> datetime:
+    py = ts.to_pydatetime()
+    if py.tzinfo is not None:
+        return py.replace(tzinfo=None)
+    return py
+
+
+def _rows_from_multi_day_trends(
+    resolved: list[tuple[dict[str, Any], pd.Timestamp]],
+    *,
+    code_id: str,
+) -> list[dict[str, Any]]:
+    """按会话日切开，每天铺满该日交易分钟，五日图各日等宽。"""
+    if not resolved:
+        return []
+    grouped: dict[date, dict[pd.Timestamp, dict[str, Any]]] = {}
+    order: list[date] = []
+    for item, ts in resolved:
+        minute_ts = _minute_ts(ts)
+        if minute_ts is None:
+            continue
+        key = get_session_anchor_date(code_id, now_bjt=_naive_bjt(minute_ts))
+        if key not in grouped:
+            grouped[key] = {}
+            order.append(key)
+        grouped[key][minute_ts] = {**item, "datetime": minute_ts}
+    rows: list[dict[str, Any]] = []
+    for key in order:
+        existing = grouped[key]
+        first_ts = min(existing)
+        session_times: list[pd.Timestamp] = []
+        for t in get_trading_datetimes_bjt(code_id, now_bjt=_naive_bjt(first_ts)):
+            minute_ts = _minute_ts(t)
+            if minute_ts is not None:
+                session_times.append(minute_ts)
+        if not session_times:
+            rows.extend(existing[t] for t in sorted(existing))
+            continue
+        for minute_ts in session_times:
+            if minute_ts in existing:
+                rows.append(existing[minute_ts])
+            else:
+                rows.append(_empty_trend_row(minute_ts.to_pydatetime()))
+    return rows
+
+
+def _intraday_day_axis(
+    dts: pd.Series,
+    prices: pd.Series,
+    *,
+    code_id: str = "",
+) -> tuple[list[int], list[int], list[str]]:
+    """五日分时 X 轴：每个交易日一段，刻度为 MM-DD + 当日涨跌。"""
+    starts: list[int] = []
+    tick_pos: list[int] = []
+    tick_lab: list[str] = []
+    if dts.empty:
+        return starts, tick_pos, tick_lab
+    keys: list[date | None] = []
+    for ts in dts:
+        stamp = _as_timestamp(ts)
+        if stamp is None:
+            keys.append(None)
+            continue
+        if code_id:
+            keys.append(get_session_anchor_date(code_id, now_bjt=_naive_bjt(stamp)))
+        else:
+            keys.append(stamp.date())
+    groups: list[tuple[date, int, int]] = []
+    current: date | None = None
+    for index, key in enumerate(keys):
+        if key is None:
+            continue
+        if current is None or key != current:
+            groups.append((key, index, index))
+            current = key
+        else:
+            day, start, _end = groups[-1]
+            groups[-1] = (day, start, index)
+    prev_last: float | None = None
+    for key, start, end in groups:
+        starts.append(start)
+        window = prices.iloc[start : end + 1]
+        valid = window.dropna()
+        if valid.empty:
+            chg_text = "—"
+        else:
+            last = float(valid.iloc[-1])
+            if prev_last is None:
+                first = float(valid.iloc[0])
+                pct = (last / first - 1.0) * 100.0 if first != 0 else 0.0
+            else:
+                pct = (last / prev_last - 1.0) * 100.0 if prev_last != 0 else 0.0
+            prev_last = last
+            chg_text = f"{pct:+.2f}%"
+        tick_pos.append((start + end) // 2)
+        tick_lab.append(f"{key.month:02d}-{key.day:02d}\n{chg_text}")
+    return starts, tick_pos, tick_lab
+
+
 def _session_rows_from_intraday(
     series: IntradaySeries,
     *,
@@ -469,6 +602,8 @@ def _session_rows_from_intraday(
         for p in series.points
     ]
     resolved = _resolve_trend_absolute_datetimes(trends, now_bjt=now_bjt)
+    if series.ndays > 1:
+        return _rows_from_multi_day_trends(resolved, code_id=code_id)
     return _rows_from_resolved_trends(
         resolved,
         code_id=code_id,
@@ -575,11 +710,23 @@ def build_single_stock_render_data(series: IntradaySeries) -> SingleStockRenderD
     stock_code = series.symbol.code
     new_price = quote.price if quote is not None else series.points[-1].price
     turnover_rate = quote.turnover_rate if quote is not None else 0
+    ndays = series.ndays if series.ndays > 1 else 1
+    name_bit = f"{stock_name} {ndays}日分时" if ndays > 1 else stock_name
     title_text = (
-        f"【{stock_name} 最新价：{new_price}】 开盘价：{open_price} "
+        f"【{name_bit} 最新价：{new_price}】 开盘价：{open_price} "
         f"涨跌幅：{custom_info} 换手率 {turnover_rate}% "
         f"成交额 {total_amount}"
     )
+    day_starts: list[int] = []
+    day_tick_positions: list[int] = []
+    day_tick_labels: list[str] = []
+    if ndays > 1:
+        code_id = series.symbol.provider_symbol or series.symbol.code
+        day_starts, day_tick_positions, day_tick_labels = _intraday_day_axis(
+            _frame_column(price_history_pd, "dt"),
+            price_column,
+            code_id=code_id,
+        )
 
     return SingleStockRenderData(
         df=price_history_pd,
@@ -598,6 +745,10 @@ def build_single_stock_render_data(series: IntradaySeries) -> SingleStockRenderD
         tick_texts=tick_texts,
         bar_colors=bar_colors,
         title_text=title_text,
+        ndays=ndays,
+        day_starts=day_starts,
+        day_tick_positions=day_tick_positions,
+        day_tick_labels=day_tick_labels,
     )
 
 

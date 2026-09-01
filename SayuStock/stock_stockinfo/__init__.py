@@ -6,30 +6,13 @@ from gsuid_core.models import Event
 from ..utils.utils import convert_list, get_vix_name
 from .get_cloudmap import render_image
 from ..utils.time_range import parse_time_range
+from ..utils.stock_period import KLINE_PREFIX_TO_CODE, parse_stock_img_request
 from ..utils.database.models import SsBind
 
 sv_stock_stockinfo = SV("个股行情")
 sv_stock_compare = SV("对比个股", priority=3)
 
-MS_MAP = {
-    "5k": "5",
-    "15k": "15",
-    "30k": "30",
-    "60k": "60",
-    "k线": "100",
-    "日线": "101",
-    "日k": "101",
-    "周k": "102",
-    "周线": "102",
-    "月k": "103",
-    "月线": "103",
-    "季k": "104",
-    "季线": "104",
-    "半年k": "105",
-    "半年线": "105",
-    "年k": "106",
-    "年线": "106",
-}
+MS_MAP = KLINE_PREFIX_TO_CODE
 
 
 @sv_stock_stockinfo.on_fullmatch(
@@ -68,21 +51,22 @@ async def send_my_stock_img(bot: Bot, ev: Event) -> list[str] | None:
     ("个股"),
     to_ai="""查询股票/ETF的K线图或分时图，支持输入板块名称自动展开为板块内成分股。
 
-    当用户询问某只股票/ETF今天走势、分时图、日K、周K、月K时调用。
-    例如"帮我看看证券ETF"、"贵州茅台日K"、"白酒ETF周K"。
+    当用户询问某只股票/ETF今天走势、分时图、五日分时、日K、周K、月K时调用。
+    例如"帮我看看证券ETF"、"贵州茅台日K"、"白酒ETF周K"、"上证指数五日"。
     也支持直接输入板块名称（如"证券"、"白酒"），系统会自动获取该板块内前13只成分股并生成多股分时对比图。
     支持同时查询多只股票的分时图。
     场外基金（如 720001 / 财通价值动量混合A）没有 K 线，日k/周k/月k 会改走净值增长率对比图。
 
     Args:
         text: 查询内容，格式为 "[周期前缀] 股票名称或代码"
-              - 无前缀：默认显示分时图，例如 "证券ETF"
+              - 无前缀：默认显示当日分时图，例如 "证券ETF"
+              - "五日"/"5日"：五日分时图（不是K线），例如 "五日 贵州茅台"
               - "日k": 日K线，例如 "日k 证券ETF"；场外基金则出净值对比
               - "周k": 周K线，例如 "周k 白酒ETF"
               - "月k"/"季k"/"年k": 对应周期K线
               - 板块名称：例如 "证券"，自动展开为板块内前13只成分股分时对比
               - 多个标的以空格分隔，例如 "证券ETF 白酒ETF"
-              - VIX指数：例如 "300vix"（仅支持分时，不支持K线）
+              - VIX指数：例如 "300vix"（仅支持当日分时，不支持K线/五日）
     """,
 )
 async def send_stock_img(bot: Bot, ev: Event) -> list[str] | None:
@@ -90,25 +74,13 @@ async def send_stock_img(bot: Bot, ev: Event) -> list[str] | None:
     raw = ev.text.strip()
     if not raw:
         return await bot.send("请后跟股票代码使用, 例如：个股 证券ETF")
-    lowered = raw.lower()
-
-    for g in MS_MAP:
-        if lowered.startswith(g):
-            content = raw[len(g) :].strip()
-            kline_code = MS_MAP[g]
-            vix_name = get_vix_name(content)
-            if vix_name:
-                return await bot.send("[VIX] 仅支持使用 个股 300vix 方式调用, 暂时无法查看日K等数据")
-            im = await render_image(
-                content,
-                f"single-stock-kline-{kline_code}",
-            )
-            break
-    else:
-        im = await render_image(
-            raw.replace("分时", "").strip(),
-            "single-stock",
-        )
+    content, sector = parse_stock_img_request(raw)
+    if not content:
+        return await bot.send("请后跟股票代码使用, 例如：个股 证券ETF 或 个股 五日 贵州茅台")
+    vix_name = get_vix_name(content)
+    if vix_name and sector != "single-stock":
+        return await bot.send("[VIX] 仅支持使用 个股 300vix 方式调用, 暂时无法查看日K/五日等数据")
+    im = await render_image(content, sector)
     await bot.send(im)
 
 

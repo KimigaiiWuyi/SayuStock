@@ -153,7 +153,7 @@ class EastMoneyMarketData:
     async def quotes(self, queries: Sequence[str]) -> list[Quote | MarketError]:
         return list(await asyncio.gather(*[self.quote(q) for q in queries]))
 
-    async def intraday(self, query: str) -> IntradaySeries | MarketError:
+    async def intraday(self, query: str, *, ndays: int = 1) -> IntradaySeries | MarketError:
         code_info = await get_code_id(query)
         if code_info is None:
             return not_found(ErroText["notStock"], provider=PROVIDER)
@@ -167,6 +167,9 @@ class EastMoneyMarketData:
             provider_symbol=secid,
             sec_type=sec_type or "",
         )
+        days = ndays if ndays > 1 else 1
+        if days > 5:
+            days = 5
         raw = await EASTMONEY_REQUESTER.get_single_stock(secid, sec_type)
         quote: Quote | None = None
         if not isinstance(raw, str):
@@ -174,12 +177,13 @@ class EastMoneyMarketData:
             if not isinstance(q, MarketError):
                 quote = q
                 symbol = q.symbol
-            trends = extract_trends_from_payload(raw)
-            if trends is not None:
-                return parse_intraday_from_trends_list(trends, symbol, quote)
+            if days == 1:
+                trends = extract_trends_from_payload(raw)
+                if trends is not None:
+                    return parse_intraday_from_trends_list(trends, symbol, quote, ndays=1)
 
-        trends_only = await EASTMONEY_REQUESTER.get_stock_trends(secid)
-        return parse_intraday_from_trends_list(trends_only, symbol, quote)
+        trends_only = await EASTMONEY_REQUESTER.get_stock_trends(secid, ndays=days)
+        return parse_intraday_from_trends_list(trends_only, symbol, quote, ndays=days)
 
     async def kline(
         self,

@@ -306,22 +306,35 @@ class EastMoneyRequester:
 
         return self.menu_cache[today_key][mode]
 
-    @async_file_cache(market="{sec_id}", sector="single-stock-trends", suffix="json", minutes=2)
-    async def get_stock_trends(self, sec_id: str) -> Union[List[Dict[str, Union[str, float, int]]], str]:
-        """获取个股当日分时走势。
+    @async_file_cache(market="{sec_id}", sector="single-stock-trends-{ndays}", suffix="json", minutes=2)
+    async def get_stock_trends(
+        self, sec_id: str, ndays: int = 1
+    ) -> Union[List[Dict[str, Union[str, float, int]]], str]:
+        """获取个股分时走势。
 
         Args:
             sec_id: 东方财富完整证券 ID，例如 `1.600519`。
+            ndays: 交易日天数。1 为当日分时；5 为五日分时（走 push2his）。
 
         Returns:
             分时点列表。每个点包含时间、价格、开盘、最高、最低、成交量、
             成交额和均价；请求失败时返回错误文本。
         """
+        days = ndays if ndays > 1 else 1
+        if days > 5:
+            days = 5
         params: List[Tuple[str, Any]] = []
-        url = "https://push2.eastmoney.com/api/qt/stock/trends2/get"
+        # push2 实时接口会忽略 ndays>1；多日分时必须走 push2his
+        if days > 1:
+            url = "https://push2his.eastmoney.com/api/qt/stock/trends2/get"
+        else:
+            url = "https://push2.eastmoney.com/api/qt/stock/trends2/get"
         params.append(("fields1", ",".join(SINGLE_LINE_FIELDS1)))
         params.append(("fields2", ",".join(SINGLE_LINE_FIELDS2)))
         params.append(("secid", sec_id))
+        if days > 1:
+            params.append(("ndays", str(days)))
+            params.append(("iscr", "0"))
         resp = await self.stock_request(url, params=params)
 
         if isinstance(resp, int):

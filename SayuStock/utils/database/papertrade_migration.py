@@ -463,17 +463,48 @@ def _row_date(value: object) -> Optional[date]:
         return None
 
 
+def _as_int(value: object) -> int:
+    if isinstance(value, bool) or value is None:
+        return 0
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        return int(value)
+    if isinstance(value, str):
+        raw = value.strip()
+        if raw.lstrip("-").isdigit():
+            return int(raw)
+    return 0
+
+
+def _as_float(value: object) -> float:
+    if isinstance(value, bool) or value is None:
+        return 0.0
+    if isinstance(value, (int, float)):
+        return float(value)
+    if isinstance(value, str):
+        raw = value.strip()
+        if not raw:
+            return 0.0
+        try:
+            return float(raw)
+        except ValueError:
+            return 0.0
+    return 0.0
+
+
 def _pos_mv(qty: object, last_quote: object, avg_cost: object) -> float:
-    q = int(qty or 0)
-    px = last_quote if last_quote is not None else avg_cost
-    return float(q) * float(px or 0.0)
+    q = _as_int(qty)
+    px = _as_float(last_quote) if last_quote is not None else _as_float(avg_cost)
+    return float(q) * px
 
 
 def _trade_cash_delta(side: object, amount: object, fee: object) -> float:
     """正确现金变化：buy 付 amount+fee，sell 收回 amount-fee。不含 realized_pnl。"""
-    amt = float(amount or 0.0)
-    fee_v = float(fee or 0.0)
-    if str(side or "").strip().lower() == "buy":
+    amt = _as_float(amount)
+    fee_v = _as_float(fee)
+    side_text = str(side).strip().lower() if side is not None else ""
+    if side_text == "buy":
         return -(amt + fee_v)
     return amt - fee_v
 

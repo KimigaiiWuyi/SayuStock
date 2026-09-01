@@ -42,11 +42,14 @@ from .chart_base import (
     _draw_end_point_labels,
     _paint_chart_background,
     _hide_root_x_tick_labels,
+    _apply_intraday_day_ticks,
     _apply_intraday_10min_ticks,
     _format_detail_legend_label,
+    _apply_intraday_day_separators,
 )
 from .render_data import (
     SingleStockRenderData,
+    _intraday_day_axis,
     build_multi_stock_render_data,
     build_single_stock_render_data,
 )
@@ -192,6 +195,8 @@ def draw_single_stock_chart(series: IntradaySeries) -> DrawResult:
             ax.set_yticks(tick_values)
             ax.set_yticklabels([f"{value}%" for value in tick_values])
             ax.tick_params(labelbottom=False)
+            if stock.ndays > 1:
+                _apply_intraday_day_separators(ax, starts=stock.day_starts, n_points=len(prices), shade=True)
         else:
             ax.clear()
             _style_axis(ax)
@@ -199,7 +204,10 @@ def draw_single_stock_chart(series: IntradaySeries) -> DrawResult:
             ax.tick_params(axis="x", rotation=20)
             ax.tick_params(labelbottom=True)
             ax.yaxis.set_major_formatter(FuncFormatter(_format_money_axis))
-            _apply_intraday_10min_ticks(ax, prices.index)
+            if stock.ndays > 1:
+                _apply_intraday_day_ticks(ax, stock.day_tick_positions, stock.day_tick_labels)
+            else:
+                _apply_intraday_10min_ticks(ax, prices.index)
             bar_colors = [str(value) for value in prices["bar_color"]]
             for line in list(ax.lines):
                 line.remove()
@@ -234,6 +242,8 @@ def draw_single_stock_chart(series: IntradaySeries) -> DrawResult:
                     bar.set_clip_path(ax.patch)
                 ax.set_ylim(0, volume_top)
                 ax.set_ybound(0, volume_top)
+            if stock.ndays > 1:
+                _apply_intraday_day_separators(ax, starts=stock.day_starts, n_points=len(prices), shade=True)
         legend = ax.get_legend()
         if legend is not None:
             legend.get_frame().set_facecolor(BG_COLOR)
@@ -259,7 +269,8 @@ def draw_single_stock_chart(series: IntradaySeries) -> DrawResult:
         alpha=0.65,
         fontweight=FONT_W_LIGHT,
     )
-    fig.subplots_adjust(left=0.045, right=0.988, top=0.88, bottom=0.10, hspace=0.04)
+    bottom = 0.13 if stock.ndays > 1 else 0.10
+    fig.subplots_adjust(left=0.045, right=0.988, top=0.88, bottom=bottom, hspace=0.04)
     _hide_root_x_tick_labels(fig)
     return _fig_to_image(fig)
 
@@ -356,6 +367,15 @@ def draw_multi_stock_chart(series_list: list[IntradaySeries]) -> DrawResult:
     for stock_index in range(len(multi.stocks)):
         vol_name = f"vol_{stock_index}"
         stock_volumes.append(np.asarray(prices[vol_name], dtype=float))
+    multi_ndays = max((item.ndays for item in series_list), default=1)
+    day_starts: list[int] = []
+    day_pos: list[int] = []
+    day_lab: list[str] = []
+    if multi_ndays > 1:
+        day_starts, day_pos, day_lab = _intraday_day_axis(
+            pd.Series(prices.index),
+            _frame_column(prices, "close"),
+        )
 
     chart = Chart(
         prices,
@@ -403,6 +423,8 @@ def draw_multi_stock_chart(series_list: list[IntradaySeries]) -> DrawResult:
             ax.set_ylabel("涨跌幅")
             ax.tick_params(labelbottom=False)
             ax.grid(True, axis="y", color=GRID_COLOR, alpha=0.42, linewidth=0.8)
+            if multi_ndays > 1:
+                _apply_intraday_day_separators(ax, starts=day_starts, n_points=len(prices), shade=True)
             x_right = max(len(prices) - 1, 0)
             end_entries: list[tuple[float, float, str, str, str]] = []
             for stock_index, col_name in enumerate(price_columns):
@@ -438,7 +460,10 @@ def draw_multi_stock_chart(series_list: list[IntradaySeries]) -> DrawResult:
             ax.set_ylabel("成交额")
             ax.tick_params(axis="x", rotation=20)
             ax.yaxis.set_major_formatter(FuncFormatter(_format_money_axis))
-            _apply_intraday_10min_ticks(ax, prices.index)
+            if multi_ndays > 1:
+                _apply_intraday_day_ticks(ax, day_pos, day_lab)
+            else:
+                _apply_intraday_10min_ticks(ax, prices.index)
             ax.tick_params(labelbottom=True)
             for line in list(ax.lines):
                 line.remove()
@@ -477,6 +502,8 @@ def draw_multi_stock_chart(series_list: list[IntradaySeries]) -> DrawResult:
                 cumulative_bottom = cumulative_bottom + stock_volumes[vol_idx]
             ax.set_ylim(0, volume_top)
             ax.set_ybound(0, volume_top)
+            if multi_ndays > 1:
+                _apply_intraday_day_separators(ax, starts=day_starts, n_points=len(prices), shade=True)
             volume_legend = ax.get_legend()
             if volume_legend is not None:
                 volume_legend.get_frame().set_facecolor(BG_COLOR)
@@ -485,9 +512,10 @@ def draw_multi_stock_chart(series_list: list[IntradaySeries]) -> DrawResult:
                     text.set_color(FG_COLOR)
                     text.set_fontweight(FONT_W_MED)
 
+    multi_title = f"{multi_ndays}日分时涨跌幅对比" if multi_ndays > 1 else "分时涨跌幅对比"
     if axes:
         axes[0].set_title(
-            "分时涨跌幅对比",
+            multi_title,
             color=FG_COLOR,
             fontsize=22,
             fontweight=FONT_W_BOLD,
@@ -502,6 +530,7 @@ def draw_multi_stock_chart(series_list: list[IntradaySeries]) -> DrawResult:
         alpha=0.65,
         fontweight=FONT_W_LIGHT,
     )
-    fig.subplots_adjust(left=0.045, right=0.965, top=0.855, bottom=0.10, hspace=0.04)
+    bottom = 0.13 if multi_ndays > 1 else 0.10
+    fig.subplots_adjust(left=0.045, right=0.965, top=0.855, bottom=bottom, hspace=0.04)
     _hide_root_x_tick_labels(fig)
     return _fig_to_image(fig)

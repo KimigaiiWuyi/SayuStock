@@ -22,6 +22,7 @@ from __future__ import annotations
 
 from typing import List, Literal, Optional
 
+from gsuid_core.bot import Bot, _Bot
 from gsuid_core.logger import logger
 from gsuid_core.models import Event
 
@@ -68,7 +69,7 @@ async def _targets(account_id: int) -> List[SayuPaperBroadcastTarget]:
         return []
 
 
-def _bind_live_ws(event: Event) -> object | None:
+def _bind_live_ws(event: Event) -> _Bot | None:
     """给 Event 补上当前能用的 WS 连接。
 
     ``emit_proactive_message`` 在 ``bot is None`` 时只认 ``event.WS_BOT_ID``；
@@ -100,7 +101,7 @@ async def _call_emitter(
     source: ProactiveSource,
     trigger_reason: str,
     suppress_when_heartbeat_recent: bool,
-    bot: object,
+    bot: Bot,
 ) -> bool:
     from gsuid_core.ai_core.proactive.emitter import emit_proactive_message
 
@@ -124,8 +125,6 @@ async def _emit(
     trigger_reason: str,
     suppress_when_heartbeat_recent: bool,
 ) -> bool:
-    from gsuid_core.bot import Bot
-
     raw = _bind_live_ws(event)
     if raw is None:
         logger.warning(

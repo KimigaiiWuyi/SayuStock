@@ -31,6 +31,7 @@ from .chart_intraday import (
 )
 from ..utils.constant import ErroText
 from ..utils.stock.utils import get_file
+from ..utils.stock_period import is_intraday_sector, intraday_ndays_from_sector
 from ..utils.market.models import KlineSeries, BoardSnapshot, IntradaySeries
 from ..stock_config.stock_config import STOCK_CONFIG
 
@@ -68,7 +69,7 @@ async def render_image_file(
     end_time: datetime | None = None,
 ) -> str | Path:
     logger.info(f"[SayuStock] market: {market} sector: {sector}")
-    if sector == "single-stock" and not market:
+    if is_intraday_sector(sector) and not market:
         return ErroText["notMarket"]
     if not market:
         market = "沪深A"
@@ -95,7 +96,7 @@ async def render_image_file(
             logger.info(f"[SayuStock] png文件在{minutes}分钟内，直接返回文件数据。")
             return file
 
-    if sector == "single-stock":
+    if is_intraday_sector(sector):
         if raw_datas:
             fig = await to_multi_fig([s for s in raw_datas if isinstance(s, IntradaySeries)])
         elif isinstance(raw_data, IntradaySeries):
@@ -131,14 +132,18 @@ def _emit_ai_text(
     与绘图分支分开、且先于缓存判断执行，保证「有图必有文字」——
     分支条件必须与下面的绘图分发保持一致。
     """
-    if sector == "single-stock":
+    if is_intraday_sector(sector):
+        ndays = intraday_ndays_from_sector(sector)
+        if ndays is None:
+            ndays = 1
         if raw_datas:
             _ai_return_single_stock(
                 [s for s in raw_datas if isinstance(s, IntradaySeries)],
                 is_multi=True,
+                ndays=ndays,
             )
         elif isinstance(raw_data, IntradaySeries):
-            _ai_return_single_stock(raw_data)
+            _ai_return_single_stock(raw_data, ndays=ndays)
     elif sector == "compare-stock":
         _ai_return_compare_stock([s for s in raw_datas if isinstance(s, KlineSeries)])
     elif sector and sector.startswith("single-stock-kline"):
@@ -151,9 +156,11 @@ def _emit_ai_text(
 def _ai_return_single_stock(
     raw_data: IntradaySeries | list[IntradaySeries],
     is_multi: bool = False,
+    *,
+    ndays: int = 1,
 ) -> None:
     """把分时图的数据以文字发给 AI（部分模型看不到图，文字是它唯一的输入）。"""
-    text = render_text.single_stock_text(raw_data, is_multi)
+    text = render_text.single_stock_text(raw_data, is_multi, ndays=ndays)
     if text:
         ai_return(text)
 

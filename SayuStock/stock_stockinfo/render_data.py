@@ -11,6 +11,7 @@ from ..utils.render_data import (
     CloudmapRenderData,
     MultiStockRenderData,
     SingleStockRenderData,
+    _intraday_day_axis,
     build_kline_render_data,
     build_compare_render_data,
     build_cloudmap_render_data,
@@ -30,4 +31,5 @@ __all__ = [
     "build_kline_render_data",
     "build_multi_stock_render_data",
     "build_single_stock_render_data",
+    "_intraday_day_axis",
 ]

@@ -273,3 +273,56 @@ def test_single_stock_text() -> None:
     )
     text = rt.single_stock_text(series)
     assert "某股" in text and "12.3" in text
+    assert "分时行情" in text
+
+
+def test_single_stock_five_day_text() -> None:
+    symbol = SymbolRef("000001", "上证指数", AssetClass.INDEX, "SSE", "1.000001")
+    quote = Quote(
+        symbol=symbol,
+        price=3979.65,
+        open=3979.0,
+        high=4000.0,
+        low=3960.0,
+        prev_close=3986.3,
+        change_pct=-0.17,
+        change_amount=None,
+        volume=1.0,
+        amount=1.0,
+        turnover_rate=1.0,
+        pe=None,
+        pb=None,
+        market_cap=None,
+        float_market_cap=None,
+        industry=None,
+        limit_up=None,
+        limit_down=None,
+        as_of=datetime(2026, 9, 1, 15, 0),
+    )
+    points = (
+        IntradayPoint(
+            ts=datetime(2026, 8, 26, 15, 0),
+            price=3881.74,
+            open=3881.74,
+            high=3881.74,
+            low=3881.74,
+            volume=1,
+            amount=1,
+            avg_price=3881.74,
+        ),
+        IntradayPoint(
+            ts=datetime(2026, 9, 1, 15, 0),
+            price=3979.65,
+            open=3979.65,
+            high=3979.65,
+            low=3979.65,
+            volume=1,
+            amount=1,
+            avg_price=3979.65,
+        ),
+    )
+    series = IntradaySeries(symbol=symbol, points=points, quote=quote, ndays=5)
+    text = rt.single_stock_text(series, ndays=5)
+    assert "5日分时" in text
+    assert "分日收盘" in text
+    assert "08-26" in text and "09-01" in text

@@ -45,12 +45,20 @@
     ]
   },
   "个股查询": {
-    "desc": "支持分时/日K/周K/月K/季K/年K，多股可空格分隔",
+    "desc": "支持分时/五日分时/日K/周K/月K/季K/年K，多股可空格分隔",
     "data": [
       {
         "name": "个股",
         "desc": "查询个股分时图（默认）",
         "eg": "个股 证券ETF",
+        "need_ck": false,
+        "need_sk": false,
+        "need_admin": false
+      },
+      {
+        "name": "五日分时",
+        "desc": "查询个股五日分时图（分时线，不是K线）",
+        "eg": "个股 五日 贵州茅台",
         "need_ck": false,
         "need_sk": false,
         "need_admin": false

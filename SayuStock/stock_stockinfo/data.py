@@ -17,6 +17,7 @@ from ..utils.market import (
     maybe_otc_fund_query,
 )
 from ..utils.constant import ErroText, bk_dict, market_dict
+from ..utils.stock_period import is_intraday_sector, intraday_ndays_from_sector
 from ..utils.market.models import SymbolRef, KlineSeries, BoardSnapshot, IntradaySeries
 
 MarketPayload = BoardSnapshot | IntradaySeries | KlineSeries
@@ -73,8 +74,11 @@ class CloudMapDataService:
                 return await self._as_compare_result(market, start_time, end_time)
         elif resolved_sector == "compare-stock":
             return await self._as_compare_result(market, start_time, end_time)
-        elif resolved_sector == "single-stock":
-            raw_data, single_datas = await self.fetch_single_stock_group(market, start_time, end_time)
+        elif is_intraday_sector(resolved_sector):
+            ndays = intraday_ndays_from_sector(resolved_sector)
+            if ndays is None:
+                ndays = 1
+            raw_data, single_datas = await self.fetch_single_stock_group(market, start_time, end_time, ndays=ndays)
             raw_datas = list[IntradaySeries | KlineSeries](single_datas)
         else:
             snap = await port.board(market, limit=100, sort_asc=False)
@@ -83,7 +87,7 @@ class CloudMapDataService:
         return CloudMapDataResult(raw_data, raw_datas, resolved_sector, special_cache_key)
 
     def resolve_sector(self, market: str, sector: Optional[str]) -> Optional[str]:
-        if sector != "single-stock":
+        if not is_intraday_sector(sector):
             if market in market_dict and "b:" in market_dict[market]:
                 return market
             if market in bk_dict:
@@ -246,13 +250,15 @@ class CloudMapDataService:
     async def _fetch_sector_stocks(
         self,
         board_code: str,
+        *,
+        ndays: int = 1,
     ) -> tuple[CloudMapRawData, List[IntradaySeries]]:
         codes = await self._fetch_sector_codes(board_code)
         if not codes:
             return ErroText["notData"], []
 
         port = get_market()
-        results = await asyncio.gather(*[port.intraday(code) for code in codes])
+        results = await asyncio.gather(*[port.intraday(code, ndays=ndays) for code in codes])
         valid: List[IntradaySeries] = []
         for item in results:
             if is_market_error(item):
@@ -268,21 +274,23 @@ class CloudMapDataService:
         market: str,
         start_time: Optional[datetime],
         end_time: Optional[datetime],
+        *,
+        ndays: int = 1,
     ) -> tuple[CloudMapRawData, List[IntradaySeries]]:
         _ = start_time, end_time
         port = get_market()
         market_list = market.split(" ")
         if len(market_list) == 1:
-            series = await port.intraday(market_list[0])
+            series = await port.intraday(market_list[0], ndays=ndays)
             logger.info(f"[SayuStock] 单股结果 {market_list[0]}: type={type(series).__name__}")
             if is_market_error(series):
                 return series.message, []
             if self._is_sector_series(series):
                 board_code = series.symbol.code or market_list[0]
-                return await self._fetch_sector_stocks(board_code)
+                return await self._fetch_sector_stocks(board_code, ndays=ndays)
             return series, []
 
-        tasks = [port.intraday(item) for item in market_list]
+        tasks = [port.intraday(item, ndays=ndays) for item in market_list]
         gathered = await asyncio.gather(*tasks, return_exceptions=True)
         valid_results: List[IntradaySeries] = []
         for idx, item in enumerate(gathered):
