@@ -213,6 +213,7 @@ if not isinstance(raw_data, KlineSeries):
 | S-11 | str 错误当数据 | §9.12 |
 | S-12 | 业务直读 requester | §9.13 |
 | S-15 | CI 导入 / pytest rootdir / pyright venv | §9.16 / [§10](./10-cicd-and-dev-workflow.md) |
+| S-16 | 全天候开盘灯 | `is_market_active_now` 为 `[start, end)`，收盘整点灭灯；港股持续交易 **16:00** 收（不是 15:30）；日股 BJT 08:00-10:30 / 11:30-14:30；时钟必须 `now_bjt()`（Asia/Shanghai），禁止 `datetime.now()` |
 | C-1…C-8 | CI 事故速查表 | [§10.8](./10-cicd-and-dev-workflow.md) |
 | M-1 | 领域模型迁移完成 | [§03](./03-market-data-port.md) |
 

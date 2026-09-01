@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from datetime import datetime
 
@@ -261,6 +262,33 @@ def test_preopen_asia_us_treasury_already_live() -> None:
     )
     assert html.count("[休]") == 1
     assert html.count("tile stale") == 1
+
+
+def _tname_states(html: str) -> dict[str, str]:
+    found = re.findall(r'class="tname (on|off)"[^>]*>([^<]+)</div>', html)
+    return {name: state for state, name in found}
+
+
+def test_timeline_off_at_official_close() -> None:
+    """A 股 15:00、港股 16:00 灭灯；港股 15:30 仍在持续交易。"""
+    at_1500 = _tname_states(build_all_weather_html([], now=datetime(2026, 8, 24, 15, 0)))
+    assert at_1500["A股"] == "off"
+    assert at_1500["港股"] == "on"
+    assert at_1500["日股"] == "off"
+    assert at_1500["韩股"] == "off"
+    at_1530 = _tname_states(build_all_weather_html([], now=datetime(2026, 8, 24, 15, 30)))
+    assert at_1530["A股"] == "off"
+    assert at_1530["港股"] == "on"
+    at_1600 = _tname_states(build_all_weather_html([], now=datetime(2026, 8, 24, 16, 0)))
+    assert at_1600["A股"] == "off"
+    assert at_1600["港股"] == "off"
+
+
+def test_timeline_jp_lunch_is_off() -> None:
+    states = _tname_states(build_all_weather_html([], now=datetime(2026, 8, 24, 11, 0)))
+    assert states["日股"] == "off"
+    assert states["A股"] == "on"
+    assert states["港股"] == "on"
 
 
 def test_preopen_us_price_is_gray_asia_is_live() -> None:

@@ -34,17 +34,31 @@ class Market(Enum):
     EU_INDEX = auto()  # 欧洲指数（SXXP/SX5E/FTSE/CAC/DAX）
 
 
+_BJT = zoneinfo.ZoneInfo("Asia/Shanghai")
+_NY = zoneinfo.ZoneInfo("America/New_York")
+
+
+def now_bjt() -> datetime.datetime:
+    """当前北京时间墙钟（朴素 datetime）。不跟服务器本地时区走。"""
+    return datetime.datetime.now(_BJT).replace(tzinfo=None)
+
+
+def as_naive_bjt(now: Optional[datetime.datetime] = None) -> datetime.datetime:
+    """规范成朴素 BJT：None 取当前北京时间；带 tzinfo 则转到上海。"""
+    if now is None:
+        return now_bjt()
+    if now.tzinfo is None:
+        return now
+    return now.astimezone(_BJT).replace(tzinfo=None)
+
+
 def is_us_daylight_saving(now_bjt: Optional[datetime.datetime] = None) -> bool:
     """美国是否夏令时。决定美股 BJT 开盘 21:30 还是 22:30。
 
     传入 now_bjt（朴素时间视为北京时间）时按该时刻判断，避免进程跨冬夏令仍用启动时 DST。
     """
-    us_tz = zoneinfo.ZoneInfo("America/New_York")
-    if now_bjt is None:
-        return datetime.datetime.now(us_tz).dst() != datetime.timedelta(0)
-    bjt = zoneinfo.ZoneInfo("Asia/Shanghai")
-    aware = now_bjt.replace(tzinfo=bjt) if now_bjt.tzinfo is None else now_bjt
-    return aware.astimezone(us_tz).dst() != datetime.timedelta(0)
+    aware = as_naive_bjt(now_bjt).replace(tzinfo=_BJT)
+    return aware.astimezone(_NY).dst() != datetime.timedelta(0)
 
 
 # 不随夏令时变化的时段（北京时间）。跨天如 21:00→02:30 由生成函数处理。
@@ -55,7 +69,7 @@ _FIXED_SESSIONS: Dict[Market, List[Tuple[str, str]]] = {
     ],
     Market.HK_STOCK: [
         ("09:30", "12:00"),
-        ("13:00", "16:00"),
+        ("13:00", "16:00"),  # 联交所持续交易 16:00 收，不是 15:30
     ],
     Market.CN_FUTURE_DAY: [
         ("09:00", "10:15"),
@@ -90,8 +104,10 @@ _FIXED_SESSIONS: Dict[Market, List[Tuple[str, str]]] = {
     Market.KR_INDEX: [
         ("08:00", "14:30"),
     ],
+    # 东证 09:00-11:30 / 12:30-15:30 JST（2024-11 起后场收到 15:30）
     Market.JP_INDEX: [
-        ("08:00", "14:00"),
+        ("08:00", "10:30"),
+        ("11:30", "14:30"),
     ],
 }
 
@@ -110,7 +126,7 @@ def _dst_varying_sessions(dst: bool) -> Dict[Market, List[Tuple[str, str]]]:
         Market.US_BOND: us_fut,
         Market.COMMODITY_SPOT: [("06:00", "05:15") if dst else ("07:00", "06:15")],
         Market.FX: [("05:00", "04:59") if dst else ("06:00", "05:59")],
-        Market.CA_INDEX: [("22:30", "05:00") if dst else ("23:30", "06:00")],
+        Market.CA_INDEX: us_eq,
         Market.EU_INDEX: [("15:00", "23:30") if dst else ("16:00", "00:30")],
     }
 
@@ -126,6 +142,21 @@ def get_market_sessions(
     if market in dyn:
         return dyn[market]
     return _FIXED_SESSIONS[Market.A_SHARE]
+
+
+def _market_of_code(code: Optional[str]) -> Market:
+    market = _parse_em_code(code) if code else Market.A_SHARE
+    if market == Market.UNKNOWN:
+        return Market.A_SHARE
+    return market
+
+
+def get_sessions_for_code(
+    code: Optional[str] = None,
+    now_bjt: Optional[datetime.datetime] = None,
+) -> List[Tuple[str, str]]:
+    """按东财代码返回 BJT 交易时段。未知代码按 A 股。"""
+    return get_market_sessions(_market_of_code(code), now_bjt)
 
 
 # 兼容旧调用：启动时刻的 DST 快照。跨冬夏令或按历史日判断请用 get_market_sessions。
@@ -366,12 +397,7 @@ def get_trading_datetimes(code: Optional[str] = None) -> List[str]:
     Returns:
         List[str]: 一个包含所有交易分钟的字符串列表，格式为 'YYYY-MM-DD HH:MM'。
     """
-    market = _parse_em_code(code) if code else Market.A_SHARE
-
-    # 如果市场未知，默认返回A股时间
-    if market == Market.UNKNOWN:
-        market = Market.A_SHARE
-
+    market = _market_of_code(code)
     sessions = get_market_sessions(market)
 
     return [item.strftime("%Y-%m-%d %H:%M") for item in _generate_datetime_array(sessions)]
@@ -387,11 +413,8 @@ def get_session_anchor_date(
     会话其实是**昨天**开盘的；若仍用 today 作 base，会把已发生的
     06:00-17:00 数据错误地映射到「次日」。
     """
-    if now_bjt is None:
-        now_bjt = datetime.datetime.now()
-    market = _parse_em_code(code) if code else Market.A_SHARE
-    if market == Market.UNKNOWN:
-        market = Market.A_SHARE
+    now_bjt = as_naive_bjt(now_bjt)
+    market = _market_of_code(code)
     sessions = get_market_sessions(market, now_bjt)
     current_time = now_bjt.time()
     today = now_bjt.date()
@@ -422,11 +445,8 @@ def get_trading_datetimes_bjt(
     - 同一调用中传入不同市场时，各市场的交易时间在 X 轴上能按 BJT 绝对时间正确拼接；
     - 适合多市场对比场景（multi-stock / compare-stock）。
     """
-    if now_bjt is None:
-        now_bjt = datetime.datetime.now()
-    market = _parse_em_code(code) if code else Market.A_SHARE
-    if market == Market.UNKNOWN:
-        market = Market.A_SHARE
+    now_bjt = as_naive_bjt(now_bjt)
+    market = _market_of_code(code)
     sessions = get_market_sessions(market, now_bjt)
     base_day = get_session_anchor_date(code, now_bjt=now_bjt)
     return _generate_datetime_array_with_base(sessions, base_day)
@@ -439,38 +459,54 @@ def is_market_active_now(
     """
     判断某市场在给定 BJT 时刻是否处于交易时段内。
 
+    时段为左闭右开 [start, end)：官方收盘时刻（如 A 股 15:00、港股 16:00）已收盘。
     适用于多市场对比场景：当某市场当前不在交易时段（如日间的美股、夜间的 A 股）
     时，该市场该日**暂未开盘**，其分时数据在 X 轴上会被置空。
     """
-    if now_bjt is None:
-        now_bjt = datetime.datetime.now()
-    market = _parse_em_code(code) if code else Market.A_SHARE
-    if market == Market.UNKNOWN:
-        market = Market.A_SHARE
-    sessions = get_market_sessions(market, now_bjt)
+    now_bjt = as_naive_bjt(now_bjt)
+    market = _market_of_code(code)
+    if market == Market.CRYPTO:
+        return True
+    from .market_holidays import is_market_holiday
 
-    current_time = now_bjt.time()
+    if is_market_holiday(market, now_bjt):
+        return False
+    sessions = get_market_sessions(market, now_bjt)
+    current = now_bjt.time()
+    weekday = now_bjt.weekday()
+    if weekday == 6:
+        return False
+    if weekday == 5:
+        return _in_overnight_tail(current, sessions) and _time_in_sessions(current, sessions, end_closed=False)
+    return _time_in_sessions(current, sessions, end_closed=False)
+
+
+def _time_in_sessions(
+    current: datetime.time,
+    sessions: List[Tuple[str, str]],
+    *,
+    end_closed: bool,
+) -> bool:
+    """end_closed=False 时为 [start, end)，收盘整点不算在交易。"""
     for start_str, end_str in sessions:
         start = datetime.datetime.strptime(start_str, "%H:%M").time()
         end = datetime.datetime.strptime(end_str, "%H:%M").time()
         if start <= end:
-            if start <= current_time <= end:
-                return True
+            hit = start <= current <= end if end_closed else start <= current < end
+        elif end_closed:
+            hit = current >= start or current <= end
         else:
-            # 跨天：now 落在 start~24:00 或 00:00~end 都视为活跃
-            if current_time >= start or current_time <= end:
-                return True
+            hit = current >= start or current < end
+        if hit:
+            return True
     return False
 
 
-def _time_in_sessions(current: datetime.time, sessions: List[Tuple[str, str]]) -> bool:
+def _in_overnight_tail(current: datetime.time, sessions: List[Tuple[str, str]]) -> bool:
     for start_str, end_str in sessions:
         start = datetime.datetime.strptime(start_str, "%H:%M").time()
         end = datetime.datetime.strptime(end_str, "%H:%M").time()
-        if start <= end:
-            if start <= current <= end:
-                return True
-        elif current >= start or current <= end:
+        if start > end and current <= end:
             return True
     return False
 
@@ -486,13 +522,10 @@ def has_session_started_today(
     外汇 24×5：周日全天休，周六仅周五夜盘收到凌晨；节假日见 market_holidays。
     其余市场周日休市；周六仅周五夜盘跨到凌晨的时段仍算开盘。
     """
-    if now_bjt is None:
-        now_bjt = datetime.datetime.now()
+    now_bjt = as_naive_bjt(now_bjt)
     weekday = now_bjt.weekday()
     current = now_bjt.time()
-    market = _parse_em_code(code) if code else Market.A_SHARE
-    if market == Market.UNKNOWN:
-        market = Market.A_SHARE
+    market = _market_of_code(code)
     if market == Market.CRYPTO:
         return True
     from .market_holidays import is_market_holiday
@@ -500,21 +533,12 @@ def has_session_started_today(
     if is_market_holiday(market, now_bjt):
         return False
     sessions = get_market_sessions(market, now_bjt)
-
-    def _in_overnight_tail() -> bool:
-        for start_str, end_str in sessions:
-            start = datetime.datetime.strptime(start_str, "%H:%M").time()
-            end = datetime.datetime.strptime(end_str, "%H:%M").time()
-            if start > end and current <= end:
-                return True
-        return False
-
     if weekday == 6:
         return False
     if weekday == 5:
-        return _in_overnight_tail()
-    if _time_in_sessions(current, sessions):
-        if _in_overnight_tail():
+        return _in_overnight_tail(current, sessions)
+    if _time_in_sessions(current, sessions, end_closed=True):
+        if _in_overnight_tail(current, sessions):
             return weekday in {1, 2, 3, 4, 5}
         return True
     starts = [datetime.datetime.strptime(item[0], "%H:%M").time() for item in sessions]
@@ -535,8 +559,7 @@ def is_within_trading_day_window(
 
     判断依据是 ``get_trading_datetimes_bjt`` 的首尾绝对时间，跨天会话同样适用。
     """
-    if now_bjt is None:
-        now_bjt = datetime.datetime.now()
+    now_bjt = as_naive_bjt(now_bjt)
     times = get_trading_datetimes_bjt(code, now_bjt=now_bjt)
     if not times:
         return False

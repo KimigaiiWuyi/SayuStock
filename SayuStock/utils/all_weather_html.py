@@ -5,12 +5,11 @@ from __future__ import annotations
 import html as html_lib
 from base64 import b64encode
 from pathlib import Path
-from datetime import datetime, timedelta
-from zoneinfo import ZoneInfo
+from datetime import datetime
 from functools import lru_cache
 
 from .constant import bond, whsc, crypto, i_code, commodity
-from .time_range import is_market_active_now, has_session_started_today
+from .time_range import now_bjt, is_market_active_now, get_sessions_for_code, has_session_started_today
 from .market.display import DisplayItem
 
 _BG_PATH = Path(__file__).resolve().parent.parent / "stock_info" / "texture2d" / "bg1.jpg"
@@ -95,9 +94,6 @@ _TRACK_CODE: dict[str, str] = {
     "美股": "100.NDX",
     "加密": "BTC",
 }
-_BJT = ZoneInfo("Asia/Shanghai")
-_NY = ZoneInfo("America/New_York")
-
 _FALLBACK_EMOJI = "🌐"
 _STALE_PRICE = "#9aa7bd"
 
@@ -213,11 +209,6 @@ def _tile_html(item: DisplayItem, now: datetime) -> str:
     )
 
 
-def _us_dst(now: datetime) -> bool:
-    aware = now.replace(tzinfo=_BJT) if now.tzinfo is None else now
-    return aware.astimezone(_NY).dst() != timedelta(0)
-
-
 def _hhmm_pct(hhmm: str, *, close: bool = False) -> float:
     """08:00→次日 08:00 轴上的百分比。close 时 08:00 为 100%。"""
     if close and hhmm == "08:00":
@@ -236,19 +227,26 @@ def _now_pct(now: datetime) -> float:
     return max(0.0, min(100.0, (mins - _AXIS_START_MIN) / _AXIS_SPAN_MIN * 100.0))
 
 
+_TRACK_COLOR: dict[str, str] = {
+    "A股": "#ef4444",
+    "港股": "#d946ef",
+    "日股": "#fb923c",
+    "韩股": "#38bdf8",
+    "欧股": "#a78bfa",
+    "美股": "#60a5fa",
+    "加密": "#fbbf24",
+}
+
+
 def _timeline_tracks(now: datetime) -> list[tuple[str, str, list[tuple[str, str]]]]:
-    dst = _us_dst(now)
-    eu = [("15:00", "23:30")] if dst else [("16:00", "00:30")]
-    us = [("21:30", "04:00")] if dst else [("22:30", "05:00")]
-    return [
-        ("A股", "#ef4444", [("09:30", "11:30"), ("13:00", "15:00")]),
-        ("港股", "#d946ef", [("09:30", "12:00"), ("13:00", "16:00")]),
-        ("日股", "#fb923c", [("08:00", "14:00")]),
-        ("韩股", "#38bdf8", [("08:00", "14:30")]),
-        ("欧股", "#a78bfa", eu),
-        ("美股", "#60a5fa", us),
-        ("加密", "#fbbf24", [("08:00", "08:00")]),
-    ]
+    rows: list[tuple[str, str, list[tuple[str, str]]]] = []
+    for name, code in _TRACK_CODE.items():
+        if name == "加密":
+            segs = [("08:00", "08:00")]
+        else:
+            segs = get_sessions_for_code(code, now)
+        rows.append((name, _TRACK_COLOR[name], segs))
+    return rows
 
 
 def _timeline_html(now: datetime) -> str:
@@ -328,7 +326,7 @@ def build_all_weather_html(
     now: datetime | None = None,
 ) -> str:
     """底图用原 bg1.jpg（分区标题）；时间轴 HTML 覆盖 PNG 上沿。"""
-    as_of = now or datetime.now()
+    as_of = now or now_bjt()
     stamp = as_of.strftime("%Y-%m-%d %H:%M")
     body_sections: list[str] = []
     fallback_y = 487
