@@ -28,6 +28,8 @@ class IntradaySeries:
     points: tuple[IntradayPoint, ...]
     quote: Quote | None
     ndays: int = 1
+    # 多日分时 0 轴：窗口第一天的前收（五天前收盘）。缺省则渲染层用首日收盘。
+    ref_close: float | None = None
 
 
 @dataclass(frozen=True, slots=True)

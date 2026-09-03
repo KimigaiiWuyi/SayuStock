@@ -68,6 +68,8 @@ class SingleStockRenderData:
     day_starts: list[int]
     day_tick_positions: list[int]
     day_tick_labels: list[str]
+    today_change: float
+    ndays_change: float
 
 
 @dataclass(slots=True)
@@ -528,6 +530,7 @@ def _intraday_day_axis(
     prices: pd.Series,
     *,
     code_id: str = "",
+    prev_close: float | None = None,
 ) -> tuple[list[int], list[int], list[str]]:
     """五日分时 X 轴：每个交易日一段，刻度为 MM-DD + 当日涨跌。"""
     starts: list[int] = []
@@ -556,7 +559,7 @@ def _intraday_day_axis(
         else:
             day, start, _end = groups[-1]
             groups[-1] = (day, start, index)
-    prev_last: float | None = None
+    prev_last: float | None = prev_close if prev_close is not None and prev_close != 0 else None
     for key, start, end in groups:
         starts.append(start)
         window = prices.iloc[start : end + 1]
@@ -575,6 +578,45 @@ def _intraday_day_axis(
         tick_pos.append((start + end) // 2)
         tick_lab.append(f"{key.month:02d}-{key.day:02d}\n{chg_text}")
     return starts, tick_pos, tick_lab
+
+
+def _first_session_last_price(price_history_pd: pd.DataFrame, code_id: str) -> float | None:
+    """多日分时窗口里第一天最后一个有效价（该日收盘）。"""
+    dts = _frame_column(price_history_pd, "dt")
+    prices = _frame_column(price_history_pd, "price")
+    first_key: date | None = None
+    last: float | None = None
+    for ts, px in zip(dts, prices, strict=True):
+        if pd.isna(px):
+            continue
+        stamp = _as_timestamp(ts)
+        if stamp is None:
+            continue
+        key = get_session_anchor_date(code_id, now_bjt=_naive_bjt(stamp)) if code_id else stamp.date()
+        if first_key is None:
+            first_key = key
+        elif key != first_key:
+            break
+        last = float(px)
+    return last
+
+
+def _intraday_zero_axis(series: IntradaySeries, price_history_pd: pd.DataFrame) -> float | None:
+    """分时 0 轴：1 日用昨收；多日用窗口前收盘（ref_close），否则首日收盘。"""
+    ndays = series.ndays if series.ndays > 1 else 1
+    if ndays > 1:
+        if series.ref_close is not None and series.ref_close != 0:
+            return float(series.ref_close)
+        code_id = series.symbol.provider_symbol or series.symbol.code
+        return _first_session_last_price(price_history_pd, code_id)
+    quote = series.quote
+    if quote is not None and quote.prev_close is not None and quote.prev_close != 0:
+        return float(quote.prev_close)
+    if quote is not None and quote.open is not None and quote.open != 0:
+        return float(quote.open)
+    if series.points:
+        return float(series.points[0].open or series.points[0].price)
+    return None
 
 
 def _session_rows_from_intraday(
@@ -648,13 +690,11 @@ def build_single_stock_render_data(series: IntradaySeries) -> SingleStockRenderD
     if price_history_pd.empty or priced_only.empty:
         return ErroText["notOpen"]
 
-    quote = series.quote
-    if quote is not None and quote.prev_close is not None and quote.prev_close != 0:
-        open_price = float(quote.prev_close)
-    elif quote is not None and quote.open is not None and quote.open != 0:
-        open_price = float(quote.open)
-    else:
-        open_price = float(series.points[0].open or series.points[0].price)
+    ndays = series.ndays if series.ndays > 1 else 1
+    zero_axis = _intraday_zero_axis(series, price_history_pd)
+    if zero_axis is None:
+        return ErroText["notOpen"]
+    open_price = zero_axis
 
     price_history_pd["percentage_change"] = ((price_history_pd["price"] / open_price) - 1) * 100
 
@@ -702,30 +742,46 @@ def build_single_stock_render_data(series: IntradaySeries) -> SingleStockRenderD
             bar_colors.append("grey")
         last_valid = curr_f
 
-    gained = float(quote.change_pct) if quote is not None and quote.change_pct is not None else 0.0
-    custom_info = int_to_percentage(gained)
+    quote = series.quote
+    today_change = float(quote.change_pct) if quote is not None and quote.change_pct is not None else 0.0
+    last_px = float(priced_only.iloc[-1])
+    ndays_change = ((last_px / open_price) - 1.0) * 100.0 if ndays > 1 else today_change
+    gained = ndays_change if ndays > 1 else today_change
+    if ndays > 1:
+        custom_info = f"五日{int_to_percentage(ndays_change)}  今日{int_to_percentage(today_change)}"
+    else:
+        custom_info = int_to_percentage(gained)
     amount_v = quote.amount if quote is not None else None
     total_amount = number_to_chinese(amount_v) if isinstance(amount_v, float) else 0
     stock_name = series.symbol.display_name or "N/A"
     stock_code = series.symbol.code
     new_price = quote.price if quote is not None else series.points[-1].price
     turnover_rate = quote.turnover_rate if quote is not None else 0
-    ndays = series.ndays if series.ndays > 1 else 1
     name_bit = f"{stock_name} {ndays}日分时" if ndays > 1 else stock_name
-    title_text = (
-        f"【{name_bit} 最新价：{new_price}】 开盘价：{open_price} "
-        f"涨跌幅：{custom_info} 换手率 {turnover_rate}% "
-        f"成交额 {total_amount}"
-    )
+    if ndays > 1:
+        title_text = (
+            f"【{name_bit} 最新价：{new_price}】 "
+            f"五日累计：{int_to_percentage(ndays_change)} "
+            f"今日：{int_to_percentage(today_change)} "
+            f"换手率 {turnover_rate}% 成交额 {total_amount}"
+        )
+    else:
+        title_text = (
+            f"【{name_bit} 最新价：{new_price}】 开盘价：{open_price} "
+            f"涨跌幅：{custom_info} 换手率 {turnover_rate}% "
+            f"成交额 {total_amount}"
+        )
     day_starts: list[int] = []
     day_tick_positions: list[int] = []
     day_tick_labels: list[str] = []
     if ndays > 1:
         code_id = series.symbol.provider_symbol or series.symbol.code
+        axis_prev = series.ref_close if series.ref_close is not None and series.ref_close != 0 else None
         day_starts, day_tick_positions, day_tick_labels = _intraday_day_axis(
             _frame_column(price_history_pd, "dt"),
             price_column,
             code_id=code_id,
+            prev_close=axis_prev,
         )
 
     return SingleStockRenderData(
@@ -749,6 +805,8 @@ def build_single_stock_render_data(series: IntradaySeries) -> SingleStockRenderD
         day_starts=day_starts,
         day_tick_positions=day_tick_positions,
         day_tick_labels=day_tick_labels,
+        today_change=today_change,
+        ndays_change=ndays_change,
     )
 
 
@@ -768,15 +826,6 @@ def build_multi_stock_render_data(
     for series in series_list:
         if not isinstance(series, IntradaySeries) or not series.points:
             continue
-        quote = series.quote
-        open_price = None
-        if quote is not None:
-            open_price = _as_optional_float(quote.prev_close) or _as_optional_float(quote.open)
-        if open_price is None:
-            open_price = _as_optional_float(series.points[0].open) or _as_optional_float(series.points[0].price)
-        if open_price is None:
-            logger.warning(f"[SayuStock] Skipping {series.symbol.name} due to invalid open price.")
-            continue
         rows = _session_rows_from_intraday(
             series,
             now_bjt=now_bjt,
@@ -791,6 +840,10 @@ def build_multi_stock_render_data(
         price_history_pd = price_history_pd.sort_values("dt", kind="mergesort")
         price_history_pd["price"] = _numeric_series(price_history_pd["price"])
         price_history_pd["money"] = _numeric_series(price_history_pd["money"], fill_value=0)
+        open_price = _intraday_zero_axis(series, price_history_pd)
+        if open_price is None:
+            logger.warning(f"[SayuStock] Skipping {series.symbol.name} due to invalid open price.")
+            continue
         price_history_pd["percentage_change"] = ((price_history_pd["price"] / open_price) - 1) * 100
 
         change_column = _frame_column(price_history_pd, "percentage_change")

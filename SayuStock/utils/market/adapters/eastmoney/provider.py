@@ -5,10 +5,11 @@ from __future__ import annotations
 import asyncio
 from typing import Literal
 from datetime import date, timedelta
+from dataclasses import replace
 from collections.abc import Sequence
 
 from ...enums import RankBy, BoardKind, ValueKind, AssetClass, KlinePeriod
-from ...errors import MarketError, not_found, empty_error, unsupported, network_error
+from ...errors import MarketError, not_found, empty_error, unsupported, network_error, is_market_error
 from ...models import (
     Quote,
     SymbolRef,
@@ -183,7 +184,24 @@ class EastMoneyMarketData:
                     return parse_intraday_from_trends_list(trends, symbol, quote, ndays=1)
 
         trends_only = await EASTMONEY_REQUESTER.get_stock_trends(secid, ndays=days)
-        return parse_intraday_from_trends_list(trends_only, symbol, quote, ndays=days)
+        series = parse_intraday_from_trends_list(trends_only, symbol, quote, ndays=days)
+        if days > 1 and isinstance(series, IntradaySeries) and series.points:
+            ref = await self._window_prev_close(query, series.points[0].ts.date())
+            if ref is not None:
+                series = replace(series, ref_close=ref)
+        return series
+
+    async def _window_prev_close(self, query: str, first_day: date) -> float | None:
+        """五日窗口第一天之前的收盘，作为累计涨跌 0 轴。"""
+        start = first_day - timedelta(days=21)
+        kl = await self.kline(query, KlinePeriod.D1, start=start, end=first_day)
+        if is_market_error(kl):
+            return None
+        prev: float | None = None
+        for bar in kl.bars:
+            if bar.ts.date() < first_day and bar.close != 0:
+                prev = bar.close
+        return prev
 
     async def kline(
         self,

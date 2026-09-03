@@ -241,6 +241,33 @@ def compare_text(series_list: list[KlineSeries]) -> str:
     return header + "\n" + "\n".join(blocks)
 
 
+def _intraday_ref_close(series: IntradaySeries) -> float | None:
+    """多日分时 0 轴：窗口前收；缺省则用第一天最后一个有效价。"""
+    if series.ref_close is not None and series.ref_close != 0:
+        return float(series.ref_close)
+    first_day: date | None = None
+    last: float | None = None
+    for point in series.points:
+        if point.price == 0.0:
+            continue
+        day = point.ts.date()
+        if first_day is None:
+            first_day = day
+        elif day != first_day:
+            break
+        last = float(point.price)
+    return last
+
+
+def _intraday_ndays_change_pct(series: IntradaySeries, last_px: float | None) -> float | None:
+    if last_px is None:
+        return None
+    ref = _intraday_ref_close(series)
+    if ref is None or ref == 0:
+        return None
+    return (float(last_px) / ref - 1.0) * 100.0
+
+
 def _intraday_day_close_line(series: IntradaySeries) -> str:
     """五日分时：每个交易日最后一个有效价 + 相对前一日收盘的涨跌。"""
     last_by_day: dict[date, float] = {}
@@ -255,14 +282,14 @@ def _intraday_day_close_line(series: IntradaySeries) -> str:
     if len(order) < 2:
         return ""
     parts: list[str] = []
-    prev: float | None = None
+    prev: float | None = series.ref_close if series.ref_close is not None and series.ref_close != 0 else None
     for day in order:
         last = last_by_day[day]
         label = f"{day.month:02d}-{day.day:02d}"
-        if prev is None:
+        if prev is None or prev == 0:
             parts.append(f"{label} {last}")
         else:
-            pct = (last / prev - 1.0) * 100.0 if prev != 0 else 0.0
+            pct = (last / prev - 1.0) * 100.0
             parts.append(f"{label} {last}({pct:+.2f}%)")
         prev = last
     return "分日收盘: " + "  ".join(parts)
@@ -301,9 +328,27 @@ def single_stock_text(
         return ""
     q = series.quote
     day_line = _intraday_day_close_line(series) if ndays > 1 else ""
+    last_trend = next((p.price for p in reversed(series.points) if p.price != 0.0), None)
+    last_px = q.price if q is not None else last_trend
+    name = series.symbol.display_name
+    if ndays > 1:
+        ndays_pct = _intraday_ndays_change_pct(series, last_trend if last_trend is not None else last_px)
+        ndays_bit = f"五日累计: {ndays_pct:+.2f}%" if ndays_pct is not None else "五日累计: N/A"
+        if q is None:
+            text = f"【{name} {span}行情】\n最新价: {last_px}  {ndays_bit}"
+        else:
+            text = (
+                f"【{q.symbol.display_name} {span}行情】\n"
+                f"最新价: {q.price}  {ndays_bit}  今日涨跌幅: {q.change_pct}%\n"
+                f"最高价: {q.high}  最低价: {q.low}\n"
+                f"换手率: {q.turnover_rate}%  成交额: {q.amount}  "
+                f"成交量: {q.volume}"
+            )
+        if day_line:
+            return text + "\n" + day_line
+        return text
     if q is None:
-        last = series.points[-1].price if series.points else None
-        text = f"【{series.symbol.display_name} {span}行情】\n最新价: {last}"
+        text = f"【{name} {span}行情】\n最新价: {last_px}"
         if day_line:
             return text + "\n" + day_line
         return text

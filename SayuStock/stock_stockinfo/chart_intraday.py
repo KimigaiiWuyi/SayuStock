@@ -95,6 +95,7 @@ def _draw_single_stock_bg_watermark(ax: Axes, stock: SingleStockRenderData) -> N
     change_text = str(stock.custom_info or "").strip() or "—"
     line1 = f"{name}  ·  {code}" if code else name
     line2 = f"{price_text}   {change_text}"
+    line2_size = 42 if stock.ndays > 1 else 58
 
     # 涨 → 主图底部两行；跌 → 主图顶部两行（避开曲线通常聚集的一侧）
     if is_up:
@@ -113,7 +114,15 @@ def _draw_single_stock_bg_watermark(ax: Axes, stock: SingleStockRenderData) -> N
     }
     # 半透明水印：名称用细字、现价用半粗，层次更清楚
     ax.text(0.5, y1, line1, fontsize=40, color=FG_COLOR, alpha=0.42, fontweight=FONT_W_LIGHT, **base)
-    ax.text(0.5, y2, line2, fontsize=58, color=accent, alpha=0.50, fontweight=FONT_W_SEMIBOLD, **base)
+    ax.text(0.5, y2, line2, fontsize=line2_size, color=accent, alpha=0.50, fontweight=FONT_W_SEMIBOLD, **base)
+
+
+def _lock_intraday_xlim(ax: Axes, n_points: int) -> None:
+    """把 X 轴锁到全部分时点（含收盘前空白），避免 matplotlib 按末点 NaN 截断。"""
+    if n_points <= 0:
+        return
+    ax.set_xlim(-0.5, float(n_points) - 0.5)
+    ax.set_autoscalex_on(False)
 
 
 async def to_single_fig(series: IntradaySeries) -> DrawResult:
@@ -244,6 +253,7 @@ def draw_single_stock_chart(series: IntradaySeries) -> DrawResult:
                 ax.set_ybound(0, volume_top)
             if stock.ndays > 1:
                 _apply_intraday_day_separators(ax, starts=stock.day_starts, n_points=len(prices), shade=True)
+        _lock_intraday_xlim(ax, len(prices))
         legend = ax.get_legend()
         if legend is not None:
             legend.get_frame().set_facecolor(BG_COLOR)

@@ -326,3 +326,6 @@ def test_single_stock_five_day_text() -> None:
     assert "5日分时" in text
     assert "分日收盘" in text
     assert "08-26" in text and "09-01" in text
+    assert "五日累计" in text
+    assert "今日涨跌幅" in text
+    assert "开盘价" not in text
