@@ -104,6 +104,14 @@ def _board_kind_for_market(market: str) -> BoardKind:
     return BoardKind.OTHER
 
 
+def _is_bk_market(market: str) -> bool:
+    text = market.strip()
+    if len(text) >= 2 and text[0].lower() == "b" and text[1] == ":":
+        text = text[2:]
+    core = text.split("+", 1)[0].upper()
+    return core.startswith("BK") and len(core) >= 6 and core[2:].isdigit()
+
+
 def _market_key(kind: BoardKind | str, sector: str | None) -> str:
     if isinstance(kind, str) and kind not in {b.value for b in BoardKind}:
         return kind
@@ -251,7 +259,8 @@ class EastMoneyMarketData:
         market = _market_key(kind, sector)
         po = 1 if sort_asc else 0
         pz = limit if limit is not None else 100
-        is_loop = limit is None and market in market_dict
+        # BK 不在 market_dict；limit=None 必须翻页，否则一级行业会被截成 100 只
+        is_loop = limit is None and (market in market_dict or _is_bk_market(market))
         raw = await EASTMONEY_REQUESTER.get_market_list(market, is_loop=is_loop, po=po, pz=pz)
         if isinstance(raw, str):
             return network_error(raw, provider=PROVIDER)

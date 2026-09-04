@@ -9,6 +9,7 @@ from gsuid_core.models import Event
 
 from .get_cloudmap import render_image
 from ..utils.resource_path import DATA_PATH
+from ..utils.sector_resolve import INDUSTRY_MEMBER_CACHE_MINUTES
 from ..stock_config.stock_config import STOCK_CONFIG
 
 sv_stock_cloudmap = SV("大盘云图")
@@ -20,11 +21,18 @@ async def delete_all_data() -> None:
     retention_days = int(STOCK_CONFIG.get_config("stock_cache_retention_days").data)
     expired_before = datetime.datetime.now() - timedelta(days=retention_days)
     logger.info(f"[SayuStock] 开始执行[清理{retention_days}天前缓存数据]")
+    member_expired_before = datetime.datetime.now() - timedelta(minutes=INDUSTRY_MEMBER_CACHE_MINUTES)
     for cache_file in DATA_PATH.iterdir():
-        if cache_file.is_file():
-            file_mod_time = datetime.datetime.fromtimestamp(cache_file.stat().st_mtime)
-            if file_mod_time < expired_before:
+        if not cache_file.is_file():
+            continue
+        file_mod_time = datetime.datetime.fromtimestamp(cache_file.stat().st_mtime)
+        # 行业成分名单单独按 30 天过期，避免被通用 7 天清理误删
+        if cache_file.name.startswith("industry-members_"):
+            if file_mod_time < member_expired_before:
                 cache_file.unlink()
+            continue
+        if file_mod_time < expired_before:
+            cache_file.unlink()
 
     logger.success("[SayuStock] [清理过期缓存数据] 执行完成！")
 
@@ -55,7 +63,7 @@ async def send_cloudmap_img(bot: Bot, ev: Event) -> None:
     "新能源板块怎么样"、"行业板块涨跌"时调用。
 
     Args:
-        text: 行业板块名称，例如 "半导体"、"新能源"、"医药"、"白酒"
+        text: 申万一级/二级/三级行业名，例如 "建筑材料"、"水泥"、"水泥制造"
     """,
 )
 async def send_typemap_img(bot: Bot, ev: Event) -> None:

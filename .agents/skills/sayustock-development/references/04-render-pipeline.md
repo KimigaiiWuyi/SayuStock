@@ -48,8 +48,9 @@ class CloudMapDataResult:
 
 | 条件 | 取数 |
 |------|------|
-| market ∈ 大盘云图/行业云图 | `hotmap` 或 `board(sector)` |
-| 概念云图 | `sector_menu` + `board` |
+| market ∈ 大盘云图 | `hotmap`；带筛选时 `board(sector)` |
+| 行业云图 | 申万名 → 成分代码（`chinese_stocks` L1/L2/L3，缺表才 BK 30 天缓存）∩ `hotmap()` |
+| 概念云图 | `sector_menu("concept")` + `board` |
 | sector 以 `single-stock-kline` 开头 | `kline` + `KlinePeriod` |
 | sector == `compare-stock` | 多标的 `kline(D1_YEAR)`（默认约一年日 K） |
 | sector == `single-stock` | `intraday`；若名含「(板块)」则展开成分股分时 |

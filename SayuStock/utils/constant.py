@@ -7,6 +7,7 @@ class StockInfo(TypedDict):
     name: str
     industry_l1: str
     industry_l2: str
+    industry_l3: str
 
 
 chinese_stocks_path = Path(__file__).parent / "chinese_stocks.json"
@@ -42,7 +43,7 @@ PREFIX_DATA = {
 
 
 ErroText = {
-    "typemap": "❌未找到对应板块, 请重新输入\n📄例如: \n大盘云图沪深A\n大盘云图创业板 \n等等...",
+    "typemap": "❌未找到对应板块, 请重新输入\n📄例如:\n行业云图 水泥\n行业云图 建筑材料\n概念云图 人工智能",
     "notData": "❌不存在该板块或市场, 暂无数据...",
     "notStock": "❌不存在该股票，暂无数据...",
     "notOpen": "❌该股票未开盘，暂无数据...",

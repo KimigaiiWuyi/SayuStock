@@ -132,6 +132,7 @@ uv run pytest test -q
 4. pytest rootdir 上浮到 Core → `No module named 'SayuStock'`。
 5. 对比图默认 `D1_YEAR`（365 天）。
 6. 名称含 `(板块)` 要展开成分股。
+7. 行业云图：`chinese_stocks` 申万三级成分 + 大盘 hotmap；禁止每次翻页拉 BK 行情。
 
 ## Security notes
 

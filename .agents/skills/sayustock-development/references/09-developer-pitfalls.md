@@ -136,6 +136,12 @@ Write test/test_mplchart_background.py
 - `_is_sector` 曾缺失导致 AttributeError；现以名称语义判断  
 - 对比/展开 limit≈13，改数量需评估图密度与 API 压力  
 
+**行业云图不要按 hotmap 的一级名过滤，也不要每次 `board(BK)` 翻页拉行情。**
+东财 `sidemenu` 行业是申万三级扁平 BK（`水泥` flag=2，`水泥制造` flag=3）。
+流程：菜单命中名称 → 成分代码（`chinese_stocks` 申万一/二/三级；缺表才 BK 名单 **30 天**缓存）→
+与大盘 `hotmap()`（5 分钟缓存）按代码求交再出图。匹配逻辑在 `utils/sector_resolve.py`。
+刷新主数据：在 Core 根执行 `uv run python gsuid_core/plugins/SayuStock/SayuStock/utils/update_stocks.py --diff`。  
+
 ## 9.12 错误返回类型（S-11）
 
 Port / data 服务：`str` 表示错误，模型表示成功。

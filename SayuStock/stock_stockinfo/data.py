@@ -19,6 +19,7 @@ from ..utils.market import (
 from ..utils.constant import ErroText, bk_dict, market_dict
 from ..utils.stock_period import is_intraday_sector, intraday_ndays_from_sector
 from ..utils.market.models import SymbolRef, KlineSeries, BoardSnapshot, IntradaySeries
+from ..utils.sector_resolve import fetch_named_board
 
 MarketPayload = BoardSnapshot | IntradaySeries | KlineSeries
 CloudMapRawData = Union[MarketPayload, str]
@@ -56,8 +57,11 @@ class CloudMapDataService:
                 snap = await port.hotmap()
             raw_data: CloudMapRawData = snap.message if is_market_error(snap) else snap
         elif market == "行业云图":
-            snap = await port.hotmap()
-            raw_data = snap.message if is_market_error(snap) else snap
+            if resolved_sector:
+                # 成分名单 30 天缓存（一/二级走本地表）；行情只复用大盘 hotmap
+                resolved_sector, raw_data = await fetch_named_board("industry", resolved_sector)
+            else:
+                raw_data = "行业云图需要后跟行业名称, 例如： 行业云图 水泥"
         elif market == "概念云图":
             if resolved_sector:
                 resolved_sector, raw_data = await self.fetch_concept(resolved_sector)
@@ -95,19 +99,7 @@ class CloudMapDataService:
         return sector
 
     async def fetch_concept(self, sector: str) -> tuple[str, CloudMapRawData]:
-        port = get_market()
-        upper_sector = sector.upper()
-        menu = await port.sector_menu("concept")
-        if is_market_error(menu):
-            return upper_sector, menu.message
-        if upper_sector in menu:
-            snap = await port.board(str(menu[upper_sector]), limit=None, sort_asc=False)
-            return upper_sector, snap.message if is_market_error(snap) else snap
-        for concept_name, code in menu.items():
-            if upper_sector in concept_name:
-                snap = await port.board(str(code), limit=None, sort_asc=False)
-                return concept_name, snap.message if is_market_error(snap) else snap
-        return upper_sector, ErroText["typemap"]
+        return await fetch_named_board("concept", sector)
 
     @staticmethod
     def _split_queries(market: str) -> List[str]:

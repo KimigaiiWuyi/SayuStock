@@ -66,6 +66,7 @@ minutes = int(STOCK_CONFIG.get_config("mapcloud_refresh_minutes").data)
 - 路径：`DATA_PATH` 下 JSON/PNG/HTML  
 - 键生成：`utils/stock/utils.get_file`、`async_file_cache` 装饰器  
 - TTL：`mapcloud_refresh_minutes` 比对 mtime  
+- 行业云图成分代码：`industry-members_{BKxxxx}_*.json`，TTL **30 天**（`INDUSTRY_MEMBER_CACHE_MINUTES`）  
 - 清理：每日 00:20 删超过 `stock_cache_retention_days` 的文件  
 
 ### 装饰器注意
@@ -87,7 +88,11 @@ minutes = int(STOCK_CONFIG.get_config("mapcloud_refresh_minutes").data)
 
 ## 7.6 证券主数据
 
-- `utils/load_data.py` + `chinese_stocks.json`：代码/名称解析辅助  
+- `utils/chinese_stocks.json`：A 股代码 → 名称 / 申万一/二/三级
+- 生成脚本：`SayuStock/utils/update_stocks.py`（东财 `clist` 沪深京A + `sidemenu` flag 分级成分）
+- 刷新：在 **Core 仓库根**用 Core 解释器跑（插件自己的 `.venv` 没有 fastapi）::
+
+  `uv run python gsuid_core/plugins/SayuStock/SayuStock/utils/update_stocks.py --diff`  
 - `get_code_id`（`stock/request_utils.py`）：名称/代码 → secid  
 
 解析失败时 Port 返回 `not_found` / 业务 `ErroText["notStock"]`。

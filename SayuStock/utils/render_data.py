@@ -940,7 +940,8 @@ def build_cloudmap_render_data(
     for stock in all_stocks:
         grouped_by_category[str(stock["category"])].append(stock)
 
-    if market == "大盘云图" or market == "概念云图":
+    # 行业/概念快照已是目标板块成分；hotmap 才按 L1 名过滤，这里不能再筛
+    if market in {"大盘云图", "概念云图", "行业云图"}:
         categories_to_process = list(grouped_by_category.keys())
     elif sector is not None and sector in grouped_by_category:
         categories_to_process = [sector]

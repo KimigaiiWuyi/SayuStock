@@ -4,15 +4,12 @@
 数据源（全部走内置 ``EASTMONEY_REQUESTER``，不依赖 akshare）：
 
 1. ``clist``：``沪深京A`` 全市场分页，拿代码 / 名称 / f100 所属行业
-2. 行业板块菜单（``get_menu(mode=2)``）+ 各板块成分 ``clist``：
-   用板块名覆盖 industry_l1（更贴近云图分类口径）
+2. ``sidemenu_new.json`` 行业板块（``type=2``）按 ``flag`` 分三级：
+   ``1`` 一级、``2`` 二级、``3`` 三级；再分别拉成分 ``clist``
 
 输出字段与 ``constant.StockInfo`` 对齐::
 
-    {code: {"name": str, "industry_l1": str, "industry_l2": str}}
-
-说明：东财行业板块是**一层**分类，不再构造申万二级树；
-``industry_l2`` 优先写 clist 的 f100（个股所属行业），没有则与 l1 相同。
+    {code: {"name": str, "industry_l1": str, "industry_l2": str, "industry_l3": str}}
 """
 
 from __future__ import annotations
@@ -230,27 +227,44 @@ async def fetch_all_base_stocks() -> tuple[dict[str, str], pd.DataFrame, dict[st
 
 
 # ──────────────────────────────────────────────
-# 行业板块 → 成分股（industry_l1）
+# 行业板块 → 成分股（按 sidemenu flag 分三级）
 # ──────────────────────────────────────────────
 
+SIDEMENU_URL = "https://quote.eastmoney.com/center/api/sidemenu_new.json"
 
-async def fetch_industry_map() -> dict[str, str]:
-    """行业板块名作 industry_l1：遍历东财行业菜单 + 成分 clist。"""
-    print("\n[2/2] 东财行业板块菜单 + 成分...")
-    try:
-        menu = await EASTMONEY_REQUESTER.get_menu(2)
-    except Exception as e:
-        print(f"❌ 获取行业菜单失败: {e}")
+
+async def fetch_industry_boards_by_level() -> dict[int, list[tuple[str, str]]]:
+    """sidemenu type=2：flag 1/2/3 → [(板块名, BKxxxx), ...]。"""
+    empty: dict[int, list[tuple[str, str]]] = {1: [], 2: [], 3: []}
+    resp = await EASTMONEY_REQUESTER.stock_request(SIDEMENU_URL)
+    if isinstance(resp, int) or not isinstance(resp, dict):
+        print(f"❌ sidemenu 失败: {resp}")
+        return empty
+    if "bklist" not in resp or not isinstance(resp["bklist"], list):
+        print("❌ sidemenu 无 bklist")
+        return empty
+    by_flag: dict[int, list[tuple[str, str]]] = {1: [], 2: [], 3: []}
+    for item in resp["bklist"]:
+        if not isinstance(item, dict):
+            continue
+        if "type" not in item or item["type"] != 2:
+            continue
+        if "name" not in item or "code" not in item:
+            continue
+        flag_raw = item["flag"] if "flag" in item else 1
+        flag = int(flag_raw) if isinstance(flag_raw, (int, float)) else 1
+        if flag not in by_flag:
+            continue
+        by_flag[flag].append((str(item["name"]), str(item["code"])))
+    return by_flag
+
+
+async def _fill_board_members(boards: list[tuple[str, str]], label: str) -> dict[str, str]:
+    """拉一批板块的成分代码 → 板块名；同股只保留第一次。"""
+    if not boards:
         return {}
-
-    if not menu:
-        print("❌ 行业菜单为空")
-        return {}
-
-    items = list(menu.items())
-    total = len(items)
-    print(f"       共 {total} 个行业板块，开始拉成分股...")
-
+    total = len(boards)
+    print(f"       {label} {total} 个板块，开始拉成分...")
     industry_map: dict[str, str] = {}
     sem = asyncio.Semaphore(INDUSTRY_CONCURRENCY)
     done = 0
@@ -260,32 +274,38 @@ async def fetch_industry_map() -> dict[str, str]:
         nonlocal done
         fs = code if str(code).startswith("b:") else f"b:{code}"
         async with sem:
-            try:
-                rows = await fetch_clist_pages(
-                    fs,
-                    fields="f12,f14",
-                    max_pages=50,
-                    fid="f3",
-                    quiet=True,
-                )
-                for item in rows:
-                    stock_code = _norm_code(item["f12"] if "f12" in item else "")
-                    if not stock_code:
-                        continue
-                    # 先到先得；同股多板块时保留第一次（菜单顺序）
-                    if stock_code not in industry_map:
-                        industry_map[stock_code] = name
-            except Exception as e:
-                logger.warning(f"[update_stocks] 行业 {name}({code}) 失败: {e}")
-            finally:
-                await asyncio.sleep(INDUSTRY_PAUSE_S)
-                async with lock:
-                    done += 1
-                    print(f"\r       行业进度 [{done:03d}/{total}] {name[:12]:<12}", end="", flush=True)
+            rows = await fetch_clist_pages(
+                fs,
+                fields="f12,f14",
+                max_pages=50,
+                fid="f3",
+                quiet=True,
+            )
+            for item in rows:
+                stock_code = _norm_code(item["f12"] if "f12" in item else "")
+                if not stock_code:
+                    continue
+                if stock_code not in industry_map:
+                    industry_map[stock_code] = name
+            await asyncio.sleep(INDUSTRY_PAUSE_S)
+            async with lock:
+                done += 1
+                print(f"\r       {label}进度 [{done:03d}/{total}] {name[:12]:<12}", end="", flush=True)
 
-    await asyncio.gather(*[_one(n, c) for n, c in items])
-    print(f"\n       ✅ 行业映射完成，覆盖 {len(industry_map)} 只股票")
+    await asyncio.gather(*[_one(n, c) for n, c in boards])
+    print(f"\n       ✅ {label}完成，覆盖 {len(industry_map)} 只")
     return industry_map
+
+
+async def fetch_industry_maps() -> tuple[dict[str, str], dict[str, str], dict[str, str]]:
+    """分别返回一级 / 二级 / 三级 代码→板块名。"""
+    print("\n[2/2] 东财行业板块菜单（flag=1/2/3）+ 成分...")
+    by_flag = await fetch_industry_boards_by_level()
+    print(f"       一级 {len(by_flag[1])} / 二级 {len(by_flag[2])} / 三级 {len(by_flag[3])}")
+    l1_map = await _fill_board_members(by_flag[1], "一级")
+    l2_map = await _fill_board_members(by_flag[2], "二级")
+    l3_map = await _fill_board_members(by_flag[3], "三级")
+    return l1_map, l2_map, l3_map
 
 
 # ──────────────────────────────────────────────
@@ -337,6 +357,10 @@ def show_diff(new_mapping: dict[str, dict[str, str]], old_path: str) -> None:
             changes.append(f"一级({old_val.get('industry_l1')}->{new_val.get('industry_l1')})")
         if old_val.get("industry_l2") != new_val.get("industry_l2"):
             changes.append(f"二级({old_val.get('industry_l2')}->{new_val.get('industry_l2')})")
+        old_l3 = old_val["industry_l3"] if "industry_l3" in old_val else ""
+        new_l3 = new_val["industry_l3"] if "industry_l3" in new_val else ""
+        if old_l3 != new_l3:
+            changes.append(f"三级({old_l3}->{new_l3})")
         if changes:
             changed.append(f"{c} " + ", ".join(changes))
 
@@ -381,19 +405,36 @@ async def async_main() -> None:
     base_mapping, detail_df, f100_map = await fetch_all_base_stocks()
 
     # 2. 行业板块映射（可选）
-    board_map: dict[str, str] = {}
+    l1_map: dict[str, str] = {}
+    l2_map: dict[str, str] = {}
+    l3_map: dict[str, str] = {}
     if not args.skip_industry_boards:
-        board_map = await fetch_industry_map()
+        l1_map, l2_map, l3_map = await fetch_industry_maps()
 
-    # 3. 融合：l1 优先板块名，l2 优先 f100，缺省「未知」
+    # 3. 融合：flag 分级优先，缺省退回 clist f100 / 「未知」
     final_mapping: dict[str, dict[str, str]] = {}
     for code, name in base_mapping.items():
-        l1 = board_map.get(code) or f100_map.get(code) or "未知"
-        l2 = f100_map.get(code) or l1
+        if code in l1_map:
+            l1 = l1_map[code]
+        elif code in f100_map:
+            l1 = f100_map[code]
+        else:
+            l1 = "未知"
+        if code in l2_map:
+            l2 = l2_map[code]
+        elif code in f100_map:
+            l2 = f100_map[code]
+        else:
+            l2 = l1
+        if code in l3_map:
+            l3 = l3_map[code]
+        else:
+            l3 = l2
         final_mapping[code] = {
             "name": name,
             "industry_l1": l1,
             "industry_l2": l2,
+            "industry_l3": l3,
         }
 
     def _industry(code: object, field: str) -> str:
@@ -406,6 +447,7 @@ async def async_main() -> None:
 
     detail_df["industry_l1"] = detail_df["code"].map(lambda x: _industry(x, "industry_l1"))
     detail_df["industry_l2"] = detail_df["code"].map(lambda x: _industry(x, "industry_l2"))
+    detail_df["industry_l3"] = detail_df["code"].map(lambda x: _industry(x, "industry_l3"))
 
     if args.diff:
         show_diff(final_mapping, output_path)
