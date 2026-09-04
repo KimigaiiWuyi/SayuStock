@@ -192,6 +192,7 @@ def test_sunday_all_regular_markets_are_closed() -> None:
 
 
 def test_cn_and_us_holidays_close_session() -> None:
+    """国庆 / 美股阵亡将士纪念日休市；退伍军人日美债休、NYSE 开。"""
     pytest.importorskip("holidays")
     assert has_session_started_today("1.000001", datetime(2026, 10, 1, 10, 0)) is False
     assert has_session_started_today("100.NDX", datetime(2026, 5, 25, 23, 0)) is False
@@ -206,8 +207,8 @@ def test_cn_and_us_holidays_close_session() -> None:
 
 
 def test_holidays_generated_for_future_years() -> None:
-    pytest.importorskip("holidays")
     """不靠手写年份表：2027 元旦、美股马丁·路德·金日也应休市。"""
+    pytest.importorskip("holidays")
     assert has_session_started_today("1.000001", datetime(2027, 1, 1, 10, 0)) is False
     assert has_session_started_today("100.NDX", datetime(2027, 1, 18, 23, 0)) is False
     assert has_session_started_today("1.000001", datetime(2027, 8, 23, 10, 0)) is True

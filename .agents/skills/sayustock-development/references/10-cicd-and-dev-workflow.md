@@ -94,13 +94,14 @@ pytest test/ -q -p no:cacheprovider
    - `.` 相对 workspace 根也指不到 Core 包。
    - CI 做法：`grep -v '^-e' … > /tmp/…` 只装依赖；**Core 本体靠目录层级 import，不 `pip install -e`。**
 3. **不要装 playwright**（出图浏览器只在运行期需要，CI 单测 mock / 不截真浏览器）。
-4. 插件侧再装：`pandas mplchart matplotlib plotly pytest`。
+4. 插件侧再装：`pandas mplchart matplotlib plotly pytest holidays`（`holidays` 给全天候休市日；未装则相关用例 skip，basedpyright 报缺导入）。
 
 ### 10.2.4 Typecheck
 
 - 用 **basedpyright**，不用官方 `pyright`：源码里的 `# pyright: ignore[reportAny]` 等是 basedpyright 规则，官方会当成 unknown diagnostic rule 直接炸。
 - 版本钉死（workflow 里写死，如 `1.39.7`），与本地尽量一致。
 - Kronos：`submodules: true`，保证 `..Kronos.model` 可解析；内容已在 `exclude` 里，不计入错误。
+- 插件依赖与 Full suite 对齐，须含 **`holidays`**（`utils/market_holidays.py` 的 `import holidays`，否则 `reportMissingImports`）。
 - **存量类型错误未清零**：job 设了 `continue-on-error: true`。PR 上仍会显示结果，但**暂时不挡合并**。清零后应去掉该行改为强制。
 - 配置优先读 **`pyrightconfig.json`**（与 `pyproject.toml` 的 `[tool.pyright]` 保持同步字段）；**不要**在 `pyrightconfig.json` 写死本机 `venvPath`/`venv`（见 §10.5.3）。
 
@@ -341,3 +342,4 @@ REPO_ROOT = Path(__file__).resolve().parent.parent.parent.parent.parent
 | C-6 | E402 脚本 import | 分顶栏 import + noqa 后置本地 import |
 | C-7 | pre-commit ≠ CI ruff | 版本与 format 检查对齐 |
 | C-8 | parents[N] 仅嵌套可用 | 改 conftest / 双布局验证 |
+| C-9 | typecheck：`Import "holidays" could not be resolved` | Full suite / typecheck 都要 `pip install holidays`；`market_holidays` 的 import 行保留 `reportMissingImports` ignore 给本地未装 |

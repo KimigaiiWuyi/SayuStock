@@ -18,6 +18,7 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent.parent.parent
 sys.path.insert(0, str(REPO_ROOT))
 
+from gsuid_core.bot import Bot, _Bot  # noqa: E402
 from SayuStock.stock_papertrade import db as pt_db, broadcast as bc  # noqa: E402
 
 
@@ -285,14 +286,12 @@ def test_bind_live_ws_returns_none_without_connections(monkeypatch):
 
 
 def test_emit_passes_fallback_bot_into_proactive(monkeypatch):
-    """空 ws_bot_id 时必须把 Bot 实例交给 emitter，否则 Core 会「无可用 Bot」直接 False。"""
-    live = object()
-    monkeypatch.setattr("gsuid_core.gss.gss", SimpleNamespace(active_bot={"ws-live": live}))
+    """空 ws_bot_id 时必须把高层 Bot 交给 emitter，否则 Core 判定无可用 Bot。
 
-    class FakeBot:
-        def __init__(self, raw: object, ev: object) -> None:
-            self.raw = raw
-            self.ev = ev
+    ``live`` 必须是真 ``_Bot``：``Bot.__init__`` 读 ``bot.logger``，``object()`` 会炸。
+    """
+    live = _Bot("ws-live")
+    monkeypatch.setattr("gsuid_core.gss.gss", SimpleNamespace(active_bot={"ws-live": live}))
 
     captured: Dict[str, Any] = {}
 
@@ -300,7 +299,6 @@ def test_emit_passes_fallback_bot_into_proactive(monkeypatch):
         captured.update(kwargs)
         return True
 
-    monkeypatch.setattr("gsuid_core.bot.Bot", FakeBot)
     monkeypatch.setattr(bc, "_call_emitter", fake_call)
     ev = bc.event_for_target(_target("666249732", ws_bot_id=""))
     ok = asyncio.run(
@@ -313,7 +311,9 @@ def test_emit_passes_fallback_bot_into_proactive(monkeypatch):
         )
     )
     assert ok is True
-    assert captured["bot"].raw is live
+    wrapped = captured["bot"]
+    assert isinstance(wrapped, Bot)
+    assert wrapped.bot is live
     assert captured["event"].WS_BOT_ID == "ws-live"
     assert captured["suppress_when_heartbeat_recent"] is False
     assert captured["source"] == "tool"

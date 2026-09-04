@@ -38,6 +38,7 @@ from .chart_base import (
     _frame_column,
     _draw_in_thread,
     _numeric_series,
+    chart_series_xy,
     _datetime_series,
     _apply_month_ticks,
     _axes_top_to_bottom,
@@ -362,38 +363,35 @@ def draw_single_kline_chart(series: KlineSeries, sp: str | None = None) -> DrawR
             ax.axhline(20, color=DOWN_COLOR, linestyle="--", alpha=0.65, linewidth=1.0)
 
             # KDJ 金叉/死叉区域：按 K/D 相对位置把整个副图切成红绿矩形块
-            mapper = chart.mapper
-            if mapper is not None:
-                # stubs 对 series_xy 返回值标注不全，这里按运行时三元组使用
-                xy_raw = mapper.series_xy(prices["kdj_k"], prices["kdj_d"])
-                if xy_raw is not None:
-                    xv = np.asarray(xy_raw[0])
-                    k_yv = np.asarray(xy_raw[1], dtype=float)
-                    d_yv = np.asarray(xy_raw[2], dtype=float)
-                    y_bottom, y_top = ax.get_ylim()
-                    with np.errstate(invalid="ignore"):
-                        k_above_d: list[bool] = list(np.asarray(k_yv >= d_yv, dtype=bool))
-                        d_above_k: list[bool] = list(np.asarray(k_yv < d_yv, dtype=bool))
-                        ax.fill_between(
-                            xv,
-                            y_bottom,
-                            y_top,
-                            where=k_above_d,
-                            facecolor=UP_COLOR,
-                            alpha=0.18,
-                            interpolate=True,
-                            zorder=0.05,
-                        )
-                        ax.fill_between(
-                            xv,
-                            y_bottom,
-                            y_top,
-                            where=d_above_k,
-                            facecolor=DOWN_COLOR,
-                            alpha=0.18,
-                            interpolate=True,
-                            zorder=0.05,
-                        )
+            xy_raw = chart_series_xy(chart, prices["kdj_k"], prices["kdj_d"])
+            if xy_raw is not None and len(xy_raw) >= 3:
+                xv = np.asarray(xy_raw[0])
+                k_yv = np.asarray(xy_raw[1], dtype=float)
+                d_yv = np.asarray(xy_raw[2], dtype=float)
+                y_bottom, y_top = ax.get_ylim()
+                with np.errstate(invalid="ignore"):
+                    k_above_d: list[bool] = list(np.asarray(k_yv >= d_yv, dtype=bool))
+                    d_above_k: list[bool] = list(np.asarray(k_yv < d_yv, dtype=bool))
+                    ax.fill_between(
+                        xv,
+                        y_bottom,
+                        y_top,
+                        where=k_above_d,
+                        facecolor=UP_COLOR,
+                        alpha=0.18,
+                        interpolate=True,
+                        zorder=0.05,
+                    )
+                    ax.fill_between(
+                        xv,
+                        y_bottom,
+                        y_top,
+                        where=d_above_k,
+                        facecolor=DOWN_COLOR,
+                        alpha=0.18,
+                        interpolate=True,
+                        zorder=0.05,
+                    )
         elif index == len(axes) - 1:
             ax.set_ylabel("MACD")
         if index == len(axes) - 1:

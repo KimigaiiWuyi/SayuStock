@@ -9,6 +9,7 @@ from __future__ import annotations
 from datetime import date, datetime
 from zoneinfo import ZoneInfo
 from functools import lru_cache
+from collections.abc import Iterable
 
 from .time_range import Market
 
@@ -19,7 +20,7 @@ _TKY = ZoneInfo("Asia/Tokyo")
 _SEL = ZoneInfo("Asia/Seoul")
 
 try:
-    import holidays as _holidays
+    import holidays as _holidays  # pyright: ignore[reportMissingImports]
 except ImportError:  # pragma: no cover
     _holidays = None
 
@@ -74,28 +75,31 @@ def holiday_local_date(market: Market, now_bjt: datetime) -> date:
     return aware.date()
 
 
+def _calendar_iso_dates(cal: object) -> frozenset[str]:
+    if not isinstance(cal, Iterable):
+        return frozenset()
+    iso: list[str] = []
+    for day in cal:
+        if isinstance(day, datetime):
+            iso.append(day.date().isoformat())
+        elif isinstance(day, date):
+            iso.append(day.isoformat())
+    return frozenset(iso)
+
+
 @lru_cache(maxsize=64)
 def _holiday_dates(cal_id: str, year: int) -> frozenset[str]:
     if _holidays is None:
         return frozenset()
     if cal_id == "US":
-        cal = _holidays.NYSE(years=year)
-    elif cal_id == "US_FED":
-        cal = _holidays.country_holidays("US", years=year)
-    elif cal_id == "EU":
+        return _calendar_iso_dates(_holidays.NYSE(years=year))
+    if cal_id == "US_FED":
+        return _calendar_iso_dates(_holidays.country_holidays("US", years=year))
+    if cal_id == "EU":
         gb = _holidays.country_holidays("GB", years=year)
         de = _holidays.country_holidays("DE", years=year)
-        iso: list[str] = []
-        for cal in (gb, de):
-            for day in cal:
-                if isinstance(day, datetime):
-                    iso.append(day.date().isoformat())
-                elif isinstance(day, date):
-                    iso.append(day.isoformat())
-        return frozenset(iso)
-    else:
-        cal = _holidays.country_holidays(cal_id, years=year)
-    return frozenset(day.isoformat() for day in cal)
+        return _calendar_iso_dates(gb) | _calendar_iso_dates(de)
+    return _calendar_iso_dates(_holidays.country_holidays(cal_id, years=year))
 
 
 # 亚洲上午已开盘、美东仍是前一晚的近 24h 品种。BJT 日期可能才是美国交易日。
@@ -111,10 +115,9 @@ _OVERNIGHT_US = {
 def _date_is_holiday(market: Market, local: date) -> bool:
     if market == Market.FX:
         return (local.month, local.day) in {(1, 1), (12, 25)}
-    cal_id = _MARKET_CAL.get(market)
-    if not cal_id:
+    if market not in _MARKET_CAL:
         return False
-    return local.isoformat() in _holiday_dates(cal_id, local.year)
+    return local.isoformat() in _holiday_dates(_MARKET_CAL[market], local.year)
 
 
 def is_market_holiday(market: Market, now_bjt: datetime) -> bool:

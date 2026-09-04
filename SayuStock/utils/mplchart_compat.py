@@ -7,6 +7,7 @@
   新版默认 ``style="mplchart"`` 是浅色；数据 pane 的 patch 透明，真正底色在
   ``label="root"`` 的轴上。兼容层把 ``bgcolor`` 转成暗色 ``style`` spec。
 - ``chart.add_legends()`` / ``chart.main_axes()``：新版迁到 ``chart.canvas`` 上。
+- ``chart.mapper``：新版改 ``chart.view``；KDJ 填色走 ``chart_series_xy``。
 
 业务代码统一从本模块导入 ``Chart`` / ``Price`` 等符号，即可同时跑通两套版本。
 """
@@ -47,6 +48,7 @@ __all__ = [
     "Price",
     "SMA",
     "Volume",
+    "chart_series_xy",
     "dark_style",
 ]
 
@@ -118,8 +120,8 @@ class Chart(_MplChart):
         color_scheme: Any = (),
         **extra: Any,
     ) -> None:
-        # 新版没有 bgcolor，且默认浅色主题。调用方仍传 bgcolor= 时转成 style。
-        if bgcolor is not None and "bgcolor" not in _CHART_INIT_PARAMS and style is None:
+        # 新版没有 bgcolor / 虽有但已弃用：调用方仍传 bgcolor= 时转成 style。
+        if bgcolor is not None and style is None and "style" in _CHART_INIT_PARAMS:
             style = dark_style(str(bgcolor))
 
         init_kwargs: dict[str, Any] = {
@@ -139,8 +141,11 @@ class Chart(_MplChart):
         }
         # 只透传当前已安装 mplchart 实际支持的参数，避免新版因 bgcolor 等直接 TypeError
         filtered = {key: value for key, value in init_kwargs.items() if key in _CHART_INIT_PARAMS and value is not None}
-        # color_scheme 旧版默认 ()，需要保留空映射语义；新版虽弃用但仍接受
-        if "color_scheme" in _CHART_INIT_PARAMS and "color_scheme" not in filtered:
+        # 新版仍接收 color_scheme / bgcolor 但会 DeprecationWarning；有 style 就不要再传
+        if "style" in _CHART_INIT_PARAMS:
+            filtered.pop("color_scheme", None)
+            filtered.pop("bgcolor", None)
+        elif "color_scheme" in _CHART_INIT_PARAMS and "color_scheme" not in filtered:
             filtered["color_scheme"] = color_scheme
         # normalize / raw_dates 是 bool，False 也要传
         for flag in ("normalize", "raw_dates"):
@@ -166,3 +171,19 @@ class Chart(_MplChart):
         if canvas is None:
             raise AttributeError("chart has no canvas")
         return canvas.main_axes()
+
+
+def chart_series_xy(chart: Chart, *series: object) -> tuple[object, ...] | None:
+    """KDJ 填色等：新版 ``chart.view.series_xy``，旧版 ``chart.mapper.series_xy``。"""
+    src = getattr(chart, "view", None)
+    if src is None:
+        src = getattr(chart, "mapper", None)
+    if src is None:
+        return None
+    fn = getattr(src, "series_xy", None)
+    if not callable(fn):
+        return None
+    raw = fn(*series)
+    if not isinstance(raw, tuple):
+        return None
+    return raw

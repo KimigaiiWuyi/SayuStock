@@ -77,7 +77,8 @@ jobs:
           pip install -r /tmp/gsuid_core_reqs.txt
       - name: Install SayuStock deps
         # playwright 只在出图的运行期需要，CI 不跑浏览器，装它纯属拖时间
-        run: pip install pandas mplchart matplotlib plotly pytest
+        # holidays：全天候/休市日；未装时相关用例 importorskip，basedpyright 也会报缺导入
+        run: pip install pandas mplchart matplotlib plotly pytest "holidays>=0.50"
       - name: Run tests
         working-directory: gsuid_core/gsuid_core/plugins/SayuStock
         run: pytest test/ -q -p no:cacheprovider
@@ -114,7 +115,7 @@ jobs:
         run: |
           grep -v '^-e' gsuid_core/requirements.txt > /tmp/gsuid_core_reqs.txt
           pip install -r /tmp/gsuid_core_reqs.txt
-          pip install pandas mplchart matplotlib plotly basedpyright==1.39.7
+          pip install pandas mplchart matplotlib plotly "holidays>=0.50" basedpyright==1.39.7
       - name: Run basedpyright
         working-directory: gsuid_core/gsuid_core/plugins/SayuStock
         run: basedpyright

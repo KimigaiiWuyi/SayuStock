@@ -85,7 +85,7 @@ def draw_compare_chart(series_list: list[KlineSeries]) -> DrawResult:
             )
         else:
             legend_labels.append(item.name)
-    merged = pd.concat(price_frames, axis=1).sort_index().dropna(how="all")
+    merged = pd.concat(price_frames, axis=1, sort=False).sort_index().dropna(how="all")
     if merged.empty:
         return ErroText["notData"]
     # 日历日对齐后，A 股周末/休市相对加密货币仍是空洞；前向填充才能连成线。

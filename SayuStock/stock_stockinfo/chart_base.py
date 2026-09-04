@@ -53,6 +53,7 @@ from ..utils.mplchart_compat import (  # noqa: E402
     LinePlot,
     Indicator,
     Candlesticks,
+    chart_series_xy,
 )
 
 __all__ = [
@@ -63,6 +64,7 @@ __all__ = [
     "BarPlot",
     "Candlesticks",
     "Chart",
+    "chart_series_xy",
     "Figure",
     "FuncFormatter",
     "Indicator",
