@@ -14,6 +14,7 @@ from SayuStock.utils.market.display import DisplayItem
 from SayuStock.utils.all_weather_html import (
     _STALE_PRICE,
     _FALLBACK_EMOJI,
+    em_secid,
     format_price,
     display_label,
     format_change,
@@ -91,6 +92,21 @@ def test_sparkline_slot_in_tile() -> None:
     assert "sec-title" in html
     assert "sec has-spark" in html
     assert "sec-bar" in html
+
+
+def test_intl_tiles_get_spark_from_secid() -> None:
+    svg = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10"><polyline points="0,5 10,2"/></svg>'
+    items = [_item(n, 1.0, 0.1) for n in i_code]
+    sparks = {em_secid(code): svg for code in i_code.values()}
+    html = build_all_weather_html(
+        [("国际市场", items)],
+        now=datetime(2026, 8, 24, 10, 0),
+        sparklines=sparks,
+    )
+    assert html.count('class="spark"') == 12
+    assert "sec has-spark" in html
+    assert em_secid("i:1.000001") == "1.000001"
+    assert em_secid("100.HSI") == "100.HSI"
 
 
 def test_canvas_grows_when_section_has_spark() -> None:

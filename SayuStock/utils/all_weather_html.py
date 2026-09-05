@@ -175,6 +175,14 @@ def _tile_colors(change_pct: float) -> tuple[str, str]:
     return bg, fg
 
 
+def em_secid(code: str) -> str:
+    """clist 国际市场键是 ``i:100.HSI``；quote / trends2 要去掉 ``i:``。"""
+    text = code.strip()
+    if len(text) >= 2 and text[:2].lower() == "i:":
+        return text[2:]
+    return text
+
+
 def resolve_item_code(item: DisplayItem) -> str:
     if item.name in _CODE_BY_NAME:
         return _CODE_BY_NAME[item.name]
@@ -198,6 +206,16 @@ def _spark_for(item: DisplayItem, sparklines: dict[str, str] | None) -> str:
         return sparklines[item.name]
     if item.code and item.code in sparklines:
         return sparklines[item.code]
+    resolved = resolve_item_code(item)
+    if resolved:
+        if resolved in sparklines:
+            return sparklines[resolved]
+        secid = em_secid(resolved)
+        if secid and secid in sparklines:
+            return sparklines[secid]
+    for key, svg in sparklines.items():
+        if key and (key in item.name or item.name in key):
+            return svg
     return ""
 
 

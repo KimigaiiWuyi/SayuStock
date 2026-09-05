@@ -12,12 +12,13 @@ from offline_cache import cache_dir, load_series, load_board_items
 from test_sparkline import make_crypto_series
 
 from SayuStock.utils.constant import bond, whsc, crypto, i_code, commodity
-from SayuStock.utils.sparkline import sparkline_from_series
+from SayuStock.utils.sparkline import build_sparkline_svg, sparkline_from_series
 from SayuStock.utils.my_stock_html import SPARK_H, SPARK_W, build_my_stock_html, my_stock_canvas_size
 from SayuStock.utils.market.display import DisplayItem, from_quote, pick_display_items
 from SayuStock.utils.all_weather_html import (
     SPARK_H as AW_SPARK_H,
     SPARK_W as AW_SPARK_W,
+    em_secid,
     build_all_weather_html,
     all_weather_canvas_size,
 )
@@ -56,6 +57,16 @@ _SAMPLE_CRYPTO: dict[str, tuple[float, float]] = {
     "SOL": (93.4, 0.35),
     "XRP": (1.484, 3.09),
 }
+
+
+def _walk_spark(price: float, chg: float) -> str:
+    open_px = price / (1.0 + chg / 100.0) if chg != -100 else price
+    n = 48
+    prices = [
+        open_px + (price - open_px) * i / (n - 1) + abs(price) * 0.003 * (1 if i % 2 == 0 else -1) for i in range(n)
+    ]
+    prices[-1] = price
+    return build_sparkline_svg(prices, open_px, up=chg >= 0, width=AW_SPARK_W, height=AW_SPARK_H)
 
 
 def _skip_no_cache() -> Path:
@@ -149,8 +160,30 @@ def test_offline_all_weather_png() -> None:
         if svg:
             sparks[name] = svg
             sparks[crypto[name]] = svg
+    intl_items = pick_display_items(intl, i_code)
+    for item in intl_items:
+        load_id = ""
+        for name, code in i_code.items():
+            if name != item.name and name not in item.name and item.name not in name:
+                continue
+            load_id = em_secid(code)
+            break
+        if not load_id and item.code:
+            load_id = em_secid(item.code)
+        series = load_series(data, load_id) if load_id else None
+        svg = ""
+        if series is not None:
+            svg = sparkline_from_series(series, width=AW_SPARK_W, height=AW_SPARK_H)
+        if not svg:
+            svg = _walk_spark(item.price, item.change_pct)
+        if svg:
+            sparks[item.name] = svg
+            if item.code:
+                sparks[item.code] = svg
+            if load_id:
+                sparks[load_id] = svg
     sections = [
-        ("国际市场", pick_display_items(intl, i_code)),
+        ("国际市场", intl_items),
         ("大宗商品", _section(commodity)),
         ("债券市场", _section(bond)),
         ("外汇市场", _section(whsc)),
@@ -158,7 +191,7 @@ def test_offline_all_weather_png() -> None:
     ]
     html = build_all_weather_html(sections, now=as_of, sparklines=sparks)
     spark_n = html.count('class="spark"')
-    # 加密 4 条是合成的；>=12 需要大宗/债券/外汇缓存分时。CI 空 DATA_PATH 必须 skip。
+    # 加密 4 + 国际 12（缓存或走步合成）；大宗/债/汇仍靠本地 trends。空目录 skip。
     if spark_n < 12:
         pytest.skip(f"全天候分时缓存不足 spark={spark_n}")
     assert "has-spark" in html

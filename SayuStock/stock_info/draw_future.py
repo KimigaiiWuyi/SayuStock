@@ -9,7 +9,14 @@ from gsuid_core.ai_core.trigger_bridge import ai_return
 from ..utils.market import DisplayItem, from_quote, get_market, is_market_error, pick_display_items
 from ..utils.constant import bond, whsc, crypto, i_code, commodity
 from ..utils.sparkline import sparkline_from_series
-from ..utils.all_weather_html import SPARK_H, SPARK_W, CSS_WIDTH, build_all_weather_html, all_weather_canvas_size
+from ..utils.all_weather_html import (
+    SPARK_H,
+    SPARK_W,
+    CSS_WIDTH,
+    em_secid,
+    build_all_weather_html,
+    all_weather_canvas_size,
+)
 
 ItemMap = dict[str, DisplayItem]
 SparkMap = dict[str, str]
@@ -56,6 +63,34 @@ async def _get_items(_d: dict[str, str], sparks: SparkMap | None = None) -> Item
     return result
 
 
+async def _fetch_sparks(table: dict[str, str], sparks: SparkMap) -> None:
+    """只补 trends2 折线，不改格子报价（国际市场报价仍走 clist）。"""
+
+    async def one(name: str, code: str) -> None:
+        await asyncio.sleep(random.uniform(0.2, 1))
+        secid = em_secid(code)
+        if not secid:
+            return
+        series = await get_market().intraday(secid)
+        if is_market_error(series):
+            return
+        svg = sparkline_from_series(series, width=SPARK_W, height=SPARK_H)
+        if not svg:
+            return
+        sparks[name] = svg
+        sparks[code] = svg
+        sparks[secid] = svg
+        q = series.quote
+        if q is not None:
+            sparks[q.symbol.code] = svg
+            sparks[q.symbol.provider_symbol] = svg
+
+    await asyncio.gather(
+        *[one(name, code) for name, code in table.items() if code],
+        return_exceptions=True,
+    )
+
+
 async def draw_future_img() -> str | bytes:
     market = get_market()
     intl = await market.board("国际市场", limit=100, sort_asc=False)
@@ -71,6 +106,7 @@ async def draw_future_img() -> str | bytes:
         _get_items(bond, sparks),
         _get_items(whsc, sparks),
         _get_items(crypto, sparks),
+        _fetch_sparks(i_code, sparks),
         return_exceptions=True,
     )
 
