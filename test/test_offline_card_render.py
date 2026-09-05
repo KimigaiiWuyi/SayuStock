@@ -85,6 +85,35 @@ def _render(html: str, width: int, height: int) -> bytes:
     return asyncio.run(_go())
 
 
+def test_all_weather_crypto_sparks_without_cache() -> None:
+    """不依赖东财 JSON：合成加密分时也应写入 spark 槽（CI 必跑）。"""
+    as_of = datetime(2026, 9, 5, 17, 2)
+    items: list[DisplayItem] = []
+    sparks: dict[str, str] = {}
+    for name, (price, chg) in _SAMPLE_CRYPTO.items():
+        items.append(DisplayItem(name=name, price=price, change_pct=chg, code=crypto[name]))
+        svg = sparkline_from_series(
+            make_crypto_series(name, price, chg, as_of=as_of),
+            width=AW_SPARK_W,
+            height=AW_SPARK_H,
+        )
+        assert svg
+        sparks[name] = svg
+    html = build_all_weather_html([("加密货币", items)], now=as_of, sparklines=sparks)
+    assert "has-spark" in html
+    assert html.count('class="spark"') == 4
+    assert "polyline" in html
+
+
+def test_all_weather_png_skips_when_cache_has_no_series(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setattr("test_offline_card_render.cache_dir", lambda: tmp_path)
+    with pytest.raises(pytest.skip.Exception, match="分时缓存不足"):
+        test_offline_all_weather_png()
+
+
 def test_offline_all_weather_png() -> None:
     data = _skip_no_cache()
     intl = load_board_items(data, "国际市场")
@@ -128,8 +157,12 @@ def test_offline_all_weather_png() -> None:
         ("加密货币", crypto_items),
     ]
     html = build_all_weather_html(sections, now=as_of, sparklines=sparks)
+    spark_n = html.count('class="spark"')
+    # 加密 4 条是合成的；>=12 需要大宗/债券/外汇缓存分时。CI 空 DATA_PATH 必须 skip。
+    if spark_n < 12:
+        pytest.skip(f"全天候分时缓存不足 spark={spark_n}")
     assert "has-spark" in html
-    assert html.count('class="spark"') >= 12
+    assert spark_n >= 12
     assert 'class="sec-title"' in html
     assert "data:image/jpeg" not in html
     assert sparks["BTC"]

@@ -22,6 +22,8 @@ test/
 ├── test_sparkline.py              # 自选分时 SVG
 ├── test_my_stock_html.py          # 自选 HTML 卡片
 ├── test_all_weather_html.py       # 全天候 HTML
+├── test_offline_cache.py          # 空 DATA_PATH 不算行情缓存
+├── test_offline_card_render.py    # 本地缓存出 PNG；无 JSON 则 skip
 ├── test_stock_analysis_unit.py
 ├── test_papertrade_*.py           # 日历/撮合/策略/候选池/账户 scope…
 │                                  # test_papertrade_indicators 进 CI 轻量 job
@@ -53,7 +55,7 @@ ruff check SayuStock/ test/
 ruff format --check SayuStock/ test/
 ```
 
-当前规模约 **460 passed**（本地缓存缺失时 `test_intraday_align` 部分 skip）。  
+当前规模约 **465 passed**（无东财 JSON 时离线 PNG 冒烟 skip；本地缓存缺失时 `test_intraday_align` 部分 skip）。  
 **为什么 Full suite 要嵌套 checkout、为什么不能 `import SayuStock` 触发 `__init__`**：见 [§10](./10-cicd-and-dev-workflow.md)。
 
 ## 8.3 分层测什么
@@ -108,6 +110,7 @@ CI 用 **basedpyright**（钉版本），不要用官方 pyright（见 §10.5.4�
 | indicators | `test_indicators` + `test_render_text` 一致性用例 |
 | papertrade | 对应 `test_papertrade_*` |
 | 自选 / 全天候 HTML、sparkline | `test_sparkline` / `test_my_stock_html` / `test_all_weather_html` |
+| 本地缓存出 PNG | `test_offline_card_render`（无 `*_single-stock*_data.json` 必须 skip） |
 | `chart_base` 相对 import / 末端标注 | `test_end_label_dodge`（collection 即校验 compat 桩） |
 | 大范围重构 | 全量 `pytest test/` + `basedpyright --pythonpath <venv>/python` |
 

@@ -18,17 +18,27 @@ from SayuStock.utils.market.adapters.eastmoney.parse_intraday import (
 )
 
 _DEFAULT_CACHE = Path(r"F:\gsuid_core\data\SayuStock\data")
+_CACHE_GLOB = "*_single-stock*_data.json"
+
+
+def has_quote_cache(path: Path) -> bool:
+    # resource_path 会 mkdir 空 DATA_PATH；空目录不等于有东财 JSON。
+    if not path.is_dir():
+        return False
+    return next(path.glob(_CACHE_GLOB), None) is not None
 
 
 def cache_dir() -> Path | None:
-    if _DEFAULT_CACHE.is_dir():
-        return _DEFAULT_CACHE
+    candidates: list[Path] = [_DEFAULT_CACHE]
     try:
         from SayuStock.utils.resource_path import DATA_PATH
+
+        candidates.append(DATA_PATH)
     except ImportError:
-        return None
-    if DATA_PATH.is_dir():
-        return DATA_PATH
+        pass
+    for path in candidates:
+        if has_quote_cache(path):
+            return path
     return None
 
 

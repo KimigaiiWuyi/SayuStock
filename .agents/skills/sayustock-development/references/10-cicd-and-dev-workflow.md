@@ -344,6 +344,25 @@ ImportError: cannot import name 'chart_series_xy' from
 **正确做法**：价列用 `collections.abc.Sequence[float | None]`（协变）。不要 `cast` /
 `type: ignore`。
 
+### 10.5.12 空 `DATA_PATH` 被当成离线行情缓存
+
+**现象**（Full suite）：
+
+```text
+FAILED test/test_offline_card_render.py::test_offline_all_weather_png
+assert 4 >= 12   # class="spark"
+```
+
+**原因**：`SayuStock/utils/resource_path.py` 在 import 时 `mkdir` `DATA_PATH`。
+`cache_dir()` 若只判断 `is_dir()`，CI runner 上永远「有缓存」。大宗/债券/外汇
+`load_series` 全空，只剩测试里合成的 4 条加密 sparkline。
+
+**正确做法**：
+
+- 有 `*_single-stock*_data.json` 才算缓存（`offline_cache.has_quote_cache`）。
+- 离线 PNG 冒烟在分时不足时 **skip**，不要硬断言 `>= 12`。
+- HTML/spark 结构锁在 `test_all_weather_html` / `test_all_weather_crypto_sparks_without_cache`，不依赖本机 `F:\…\data`。
+
 ## 10.6 改 CI 本身时的注意点
 
 1. **Python 版本**：只动 `env.PYTHON_VERSION` 与 `requires-python` 时两边一起改。  
@@ -380,3 +399,4 @@ ImportError: cannot import name 'chart_series_xy' from
 | C-10 | full suite collection：`cannot import name 'chart_series_xy' from '…mplchart_compat'` | 假包桩对齐 `chart_base` from-import + 模块 `__getattr__`（§10.5.10） |
 | C-11 | typecheck：`list[float]` 不能赋给 `list[float \| None]` | 价列用 `Sequence[float \| None]`（§10.5.11） |
 | C-12 | 本地 basedpyright 几十个 MissingImports，与 CI 不符 | `--pythonpath` 指向 Core 3.12 venv，勿用全局解释器 |
+| C-13 | `test_offline_all_weather_png`：`assert 4 >= 12` spark | 空 DATA_PATH 不是缓存；看 `*_single-stock*_data.json`（§10.5.12） |

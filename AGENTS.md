@@ -118,6 +118,7 @@ basedpyright --pythonpath <Core venv>/python
 - CI 四门全挡合并：ruff、indicators、full pytest、**basedpyright**。本地类型检查：`basedpyright --pythonpath <Core venv>/python`。
 - `list` 不变：`list[float]` 不能当 `list[float | None]` 传入；价列用 `Sequence[float | None]`。
 - 禁止把真人东财 Cookie 写进 fixture。测完 `DATA_PATH` 要 `unlink`。
+- `test_offline_card_render` 是本地出图冒烟：空 `DATA_PATH`（`resource_path` 会 mkdir）不算有缓存，CI 应 skip。
 
 ## 本仓库结构约定
 
@@ -139,6 +140,7 @@ basedpyright --pythonpath <Core venv>/python
 7. 行业云图：`chinese_stocks` 申万三级成分 + 大盘 hotmap；禁止每次翻页拉 BK 行情。
 8. importlib 桩漏 `mplchart_compat` 导出名 → Full suite collection `ImportError`。
 9. 价序列类型用 `Sequence`，不要让 `list[float]` 与 `list[float | None]` 互赋。
+10. 离线出图测：空 `DATA_PATH` 不是缓存；要有 `*_single-stock*_data.json`。
 
 ## Security notes
 
