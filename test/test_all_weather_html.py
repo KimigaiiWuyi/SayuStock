@@ -19,6 +19,7 @@ from SayuStock.utils.all_weather_html import (
     format_change,
     resolve_emoji,
     build_all_weather_html,
+    all_weather_canvas_size,
 )
 
 _TEST_OUTPUT = Path(__file__).resolve().parent.parent / "test_output"
@@ -57,9 +58,11 @@ def test_html_puts_emoji_left_of_names() -> None:
     assert "-0.30%" in html
     assert "2026-08-24 10:00" in html
     assert "width: 1000px" in html
-    assert "height: 2200px" in html
-    assert "data:image/jpeg;base64," in html
+    _, canvas_h = all_weather_canvas_size(sections)
+    assert f"height: {canvas_h}px" in html
+    assert "data:image/jpeg;base64," not in html
     assert "data:image/png;base64," in html
+    assert 'class="sec-title"' in html
     assert "now-line" in html
     assert "日股" in html
     assert "韩股" in html
@@ -72,6 +75,31 @@ def test_html_puts_emoji_left_of_names() -> None:
     assert "#ef4444" in html
     assert "box-shadow:" in html
     assert "border:1px solid #ffffff" in html
+
+
+def test_sparkline_slot_in_tile() -> None:
+    svg = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10"><polyline points="0,5 10,2"/></svg>'
+    html = build_all_weather_html(
+        [("大宗商品", [_item("XAU", 4604.09, 1.88)])],
+        now=datetime(2026, 8, 24, 10, 0),
+        sparklines={"XAU": svg},
+    )
+    assert "has-spark" in html
+    assert 'class="spark"' in html
+    assert "polyline" in html
+    assert "height: 72px" in html
+    assert "sec-title" in html
+    assert "sec has-spark" in html
+    assert "sec-bar" in html
+
+
+def test_canvas_grows_when_section_has_spark() -> None:
+    items = [_item("XAU", 4604.09, 1.88)]
+    sections = [("大宗商品", items)]
+    _, h0 = all_weather_canvas_size(sections)
+    svg = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10"></svg>'
+    _, h1 = all_weather_canvas_size(sections, sparklines={"XAU": svg})
+    assert h1 > h0
 
 
 def test_crypto_section_stays_four_unique() -> None:
@@ -322,7 +350,7 @@ def test_pytakumi_renders_png_header() -> None:
     import asyncio
 
     from gsuid_core.utils.html_render import render_html_to_bytes
-    from SayuStock.utils.all_weather_html import CSS_WIDTH, CSS_HEIGHT
+    from SayuStock.utils.all_weather_html import CSS_WIDTH, all_weather_canvas_size
 
     sections = [
         ("国际市场", _sample_items(i_code)),
@@ -333,13 +361,14 @@ def test_pytakumi_renders_png_header() -> None:
     ]
     html = build_all_weather_html(sections, now=datetime(2026, 8, 24, 10, 0))
     assert "-0.30%" in html
+    width, height = all_weather_canvas_size(sections)
 
     async def _go() -> bytes:
         return await render_html_to_bytes(
             html,
-            max_width=float(CSS_WIDTH * 2),
+            max_width=float(width * 2),
             dpi=192.0,
-            device_height=float(CSS_HEIGHT * 2),
+            device_height=float(height * 2),
             default_font_size=15.0,
             allow_refit=False,
             image_format="png",
@@ -358,4 +387,4 @@ def test_pytakumi_renders_png_header() -> None:
 
     im = Image.open(BytesIO(png))
     ratio = im.size[1] / im.size[0]
-    assert abs(ratio - 2.2) < 0.05, im.size
+    assert abs(ratio - height / width) < 0.05, im.size

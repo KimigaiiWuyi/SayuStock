@@ -1,58 +1,59 @@
 import random
 import asyncio
-from typing import Callable, Optional
 from dataclasses import replace
 
 from gsuid_core.logger import logger
 from gsuid_core.utils.html_render import render_html_to_bytes
 from gsuid_core.ai_core.trigger_bridge import ai_return
 
-from .get_jp_data import get_jpy
 from ..utils.market import DisplayItem, from_quote, get_market, is_market_error, pick_display_items
 from ..utils.constant import bond, whsc, crypto, i_code, commodity
-from ..utils.all_weather_html import CSS_WIDTH, CSS_HEIGHT, build_all_weather_html
+from ..utils.sparkline import sparkline_from_series
+from ..utils.all_weather_html import SPARK_H, SPARK_W, CSS_WIDTH, build_all_weather_html, all_weather_canvas_size
 
 ItemMap = dict[str, DisplayItem]
+SparkMap = dict[str, str]
 
 
-async def __get_item(result: ItemMap, stock: str, display_name: str) -> None:
+async def __get_item(
+    result: ItemMap,
+    stock: str,
+    display_name: str,
+    sparks: SparkMap | None,
+) -> None:
     await asyncio.sleep(random.uniform(0.2, 1))
-    q = await get_market().quote(stock)
-    if is_market_error(q):
+    market = get_market()
+    if sparks is None:
+        q = await market.quote(stock)
+        if is_market_error(q):
+            return
+        item = from_quote(q)
+        if display_name and display_name != item.name:
+            item = replace(item, name=display_name)
+        result[item.name] = item
+        return
+    series = await market.intraday(stock)
+    if is_market_error(series):
+        return
+    q = series.quote
+    if q is None:
         return
     item = from_quote(q)
     # 全天候格子按配置表的键展示/对齐；API 名可能是「黄金/美元」对不上 XAU
     if display_name and display_name != item.name:
         item = replace(item, name=display_name)
     result[item.name] = item
+    svg = sparkline_from_series(series, width=SPARK_W, height=SPARK_H)
+    if svg:
+        sparks[item.name] = svg
+        sparks[stock] = svg
 
 
-async def _get_items(_d: dict[str, str], other_call: Optional[Callable] = None) -> ItemMap:
+async def _get_items(_d: dict[str, str], sparks: SparkMap | None = None) -> ItemMap:
     result: ItemMap = {}
-    tasks = []
-    if other_call:
-        tasks.append(other_call(result))
-    for name, code in _d.items():
-        if code:
-            tasks.append(__get_item(result, code, name))
+    tasks = [__get_item(result, code, name, sparks) for name, code in _d.items() if code]
     await asyncio.gather(*tasks)
     return result
-
-
-async def append_jpy(result: ItemMap) -> None:
-    data = await get_jpy()
-    if data is None:
-        return
-    for k, v in data.items():
-        if not isinstance(v, dict):
-            continue
-        price = v["price"] if "price" in v else 0.0
-        chg = v["change_pct"] if "change_pct" in v else 0.0
-        result[k] = DisplayItem(
-            name=str(v["name"]) if "name" in v else k,
-            price=float(price) if not isinstance(price, str) else 0.0,
-            change_pct=float(chg) if not isinstance(chg, str) else 0.0,
-        )
 
 
 async def draw_future_img() -> str | bytes:
@@ -63,12 +64,13 @@ async def draw_future_img() -> str | bytes:
     from ..utils.market import board_rows_to_items
 
     data_gz = board_rows_to_items(intl.rows)
+    sparks: SparkMap = {}
 
     results = await asyncio.gather(
-        _get_items(commodity),
-        _get_items(bond, append_jpy),
-        _get_items(whsc),
-        _get_items(crypto),
+        _get_items(commodity, sparks),
+        _get_items(bond, sparks),
+        _get_items(whsc, sparks),
+        _get_items(crypto, sparks),
         return_exceptions=True,
     )
 
@@ -90,13 +92,14 @@ async def draw_future_img() -> str | bytes:
         ("加密货币", pick_display_items(data5, crypto)),
     ]
     _ai_return_all_weather(data_gz, data2, data3, data4, data5)
-    html = build_all_weather_html(sections)
+    html = build_all_weather_html(sections, sparklines=sparks)
+    _, height = all_weather_canvas_size(sections, sparks)
     try:
         return await render_html_to_bytes(
             html,
             max_width=float(CSS_WIDTH * 2),
             dpi=192.0,
-            device_height=float(CSS_HEIGHT * 2),
+            device_height=float(height * 2),
             default_font_size=15.0,
             allow_refit=False,
             image_format="png",

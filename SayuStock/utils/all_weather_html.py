@@ -12,16 +12,21 @@ from .constant import bond, whsc, crypto, i_code, commodity
 from .time_range import now_bjt, is_market_active_now, get_sessions_for_code, has_session_started_today
 from .market.display import DisplayItem
 
-_BG_PATH = Path(__file__).resolve().parent.parent / "stock_info" / "texture2d" / "bg1.jpg"
 _FOOTER_PATH = Path(__file__).resolve().parent / "texture2d" / "footer.png"
 
-# 与原 PIL 海报 bg1.jpg 对齐：1000×2200
+# 全 HTML 排版，高度随分区行数 / 是否有分时变
 CSS_WIDTH = 1000
-CSS_HEIGHT = 2200
-_CELL_W = 214
+_HEAD_H = 420
+_SEC_HEAD_H = 44
+_TILE_H = 124
+_TILE_H_SPARK = 160
 _CELL_H = 140
-_GRID_X = 62
-_COL_STEP = 223
+_CELL_H_SPARK = 176
+_FOOT_H = 40
+_FOOT_GAP = 16
+_FOOT_PAD = _FOOT_GAP + _FOOT_H + _FOOT_GAP
+SPARK_W = 168.0
+SPARK_H = 72.0
 
 # 名称左侧国旗 / 资源 emoji（Twemoji COLR）
 ALL_WEATHER_EMOJI: dict[str, str] = {
@@ -71,18 +76,17 @@ _SHORT_NAME: dict[str, str] = {
     "美国2年期国债收益率": "美国2年国债",
 }
 
-# 格子 top —— 与旧 PIL paste y_base 一致；分区标题仍用 bg1.jpg
-_SECTION_Y: dict[str, int] = {
-    "国际市场": 487,
-    "大宗商品": 1007,
-    "债券市场": 1395,
-    "外汇市场": 1773,
-    "加密货币": 1988,
+_SEC_COLOR: dict[str, str] = {
+    "国际市场": "rgb(116,41,48)",
+    "大宗商品": "rgb(70,21,77)",
+    "债券市场": "rgb(76,63,19)",
+    "外汇市场": "rgb(22,73,76)",
+    "加密货币": "rgb(122,64,42)",
 }
+_SEC_COLOR_FALLBACK = "rgb(75,85,104)"
 _TRACK_H = 44
 _TRACK_COUNT = 7
 _PLOT_H = _TRACK_H * _TRACK_COUNT
-_HEAD_H = 420
 _AXIS_START_MIN = 8 * 60
 _AXIS_SPAN_MIN = 24 * 60
 _TRACK_CODE: dict[str, str] = {
@@ -100,8 +104,6 @@ _STALE_PRICE = "#9aa7bd"
 _CODE_BY_NAME: dict[str, str] = {}
 for _table in (i_code, commodity, bond, whsc, crypto):
     _CODE_BY_NAME.update({k: v for k, v in _table.items() if v})
-_CODE_BY_NAME["JP 30Y"] = "JP.BOND"
-_CODE_BY_NAME["JP 10Y"] = "JP.BOND"
 
 
 def resolve_emoji(name: str) -> str:
@@ -189,7 +191,36 @@ def is_stale_quote(item: DisplayItem, now: datetime) -> bool:
     return not has_session_started_today(code, now_bjt=now)
 
 
-def _tile_html(item: DisplayItem, now: datetime) -> str:
+def _spark_for(item: DisplayItem, sparklines: dict[str, str] | None) -> str:
+    if not sparklines:
+        return ""
+    if item.name in sparklines:
+        return sparklines[item.name]
+    if item.code and item.code in sparklines:
+        return sparklines[item.code]
+    return ""
+
+
+def _section_uses_spark(items: list[DisplayItem], sparklines: dict[str, str] | None) -> bool:
+    return any(bool(_spark_for(item, sparklines)) for item in items)
+
+
+def all_weather_canvas_size(
+    sections: list[tuple[str, list[DisplayItem]]],
+    sparklines: dict[str, str] | None = None,
+) -> tuple[int, int]:
+    height = _HEAD_H + _FOOT_PAD
+    for _, items in sections:
+        if not items:
+            continue
+        height += _SEC_HEAD_H
+        rows = max((len(items) + 3) // 4, 1)
+        cell = _CELL_H_SPARK if _section_uses_spark(items, sparklines) else _CELL_H
+        height += rows * cell
+    return CSS_WIDTH, height
+
+
+def _tile_html(item: DisplayItem, now: datetime, spark_svg: str = "") -> str:
     bg, fg = _tile_colors(item.change_pct)
     label = display_label(item.name)
     emoji = resolve_emoji(item.name)
@@ -199,10 +230,13 @@ def _tile_html(item: DisplayItem, now: datetime) -> str:
     tile_cls = "tile stale" if stale else "tile"
     price_color = _STALE_PRICE if stale else fg
     rest = '<span class="rest">[休]</span>' if stale else ""
+    spark = f'<div class="spark">{spark_svg}</div>' if spark_svg else ""
+    has_spark = " has-spark" if spark_svg else ""
     return (
-        f'<div class="{tile_cls}" style="background:{bg}">'
+        f'<div class="{tile_cls}{has_spark}" style="background:{bg}">'
         f'<div class="price {cls}" style="color:{price_color}">{_e(format_price(item.price))}</div>'
         f'<div class="chg {cls}" style="color:{fg}">{_e(format_change(item.change_pct))}</div>'
+        f"{spark}"
         f'<div class="name"><span class="emo">{emoji}</span>'
         f'<span class="{nm_cls}">{_e(label)}</span>{rest}</div>'
         f"</div>"
@@ -307,37 +341,40 @@ def _timeline_html(now: datetime) -> str:
     )
 
 
-def _grid_html(items: list[DisplayItem], grid_y: int, now: datetime) -> str:
+def _section_html(
+    title: str,
+    items: list[DisplayItem],
+    now: datetime,
+    sparklines: dict[str, str] | None,
+) -> str:
     if not items:
         return ""
-    cells: list[str] = []
-    for i, item in enumerate(items):
-        left = (i % 4) * _COL_STEP
-        top = (i // 4) * _CELL_H
-        cells.append(f'<div class="cell" style="left:{left}px;top:{top}px">{_tile_html(item, now)}</div>')
-    rows = (len(items) + 3) // 4
-    grid_h = max(rows, 1) * _CELL_H
-    return f'<div class="grid" style="top:{grid_y}px;height:{grid_h}px">{"".join(cells)}</div>'
+    color = _SEC_COLOR[title] if title in _SEC_COLOR else _SEC_COLOR_FALLBACK
+    spark_sec = " has-spark" if _section_uses_spark(items, sparklines) else ""
+    tiles = "".join(_tile_html(item, now, _spark_for(item, sparklines)) for item in items)
+    return (
+        f'<section class="sec{spark_sec}">'
+        f'<div class="sec-title">'
+        f'<div class="sec-bar" style="background:{color}"></div>'
+        f"<span>{_e(title)}</span>"
+        f'<div class="sec-bar" style="background:{color}"></div>'
+        f"</div>"
+        f'<div class="grid">{tiles}</div>'
+        f"</section>"
+    )
 
 
 def build_all_weather_html(
     sections: list[tuple[str, list[DisplayItem]]],
     *,
     now: datetime | None = None,
+    sparklines: dict[str, str] | None = None,
 ) -> str:
-    """底图用原 bg1.jpg（分区标题）；时间轴 HTML 覆盖 PNG 上沿。"""
+    """时间轴 + 分区标题 + 行情格全部 HTML；高度随内容变。"""
     as_of = now or now_bjt()
     stamp = as_of.strftime("%Y-%m-%d %H:%M")
-    body_sections: list[str] = []
-    fallback_y = 487
-    for title, items in sections:
-        grid_y = _SECTION_Y.get(title)
-        if grid_y is None:
-            grid_y = fallback_y
-            fallback_y += _CELL_H * max((len(items) + 3) // 4, 1)
-        body_sections.append(_grid_html(items, grid_y, as_of))
-    inner = "".join(body_sections)
-    bg_uri = _data_uri(str(_BG_PATH))
+    width, height = all_weather_canvas_size(sections, sparklines)
+    inner = "".join(_section_html(title, items, as_of, sparklines) for title, items in sections)
     footer_uri = _data_uri(str(_FOOTER_PATH))
     return f"""<!DOCTYPE html>
 <html>
@@ -346,26 +383,23 @@ def build_all_weather_html(
 <style>
 * {{ box-sizing: border-box; margin: 0; padding: 0; }}
 body {{
-  width: {CSS_WIDTH}px;
-  height: {CSS_HEIGHT}px;
+  width: {width}px;
+  height: {height}px;
   background: #07091b;
   font-family: "MiSans", "Twemoji Mozilla", "PingFang SC", "Microsoft YaHei", sans-serif;
   color: #e9eef7;
 }}
 .page {{
-  width: {CSS_WIDTH}px;
-  height: {CSS_HEIGHT}px;
-  position: relative;
+  width: {width}px;
+  height: {height}px;
+  background: #07091b;
+  display: flex;
+  flex-direction: column;
   overflow: hidden;
 }}
-.bg {{
-  position: absolute; left: 0; top: 0;
-  width: {CSS_WIDTH}px; height: {CSS_HEIGHT}px;
-}}
 .head {{
-  position: absolute; left: 0; top: 0;
-  width: {CSS_WIDTH}px; height: {_HEAD_H}px;
-  background: #07091b;
+  flex: none;
+  height: {_HEAD_H}px;
   padding: 36px 70px 8px;
 }}
 .topbar {{ display: flex; height: 8px; border-radius: 8px; overflow: hidden; }}
@@ -407,34 +441,55 @@ body {{
 .tick {{
   position: absolute; top: 0; font-size: 12px; color: #8b95a8; font-weight: 400; white-space: nowrap;
 }}
-.grid {{ position: absolute; left: {_GRID_X}px; width: 900px; }}
-.cell {{ position: absolute; width: {_CELL_W}px; height: {_CELL_H}px; }}
+.body {{ flex: none; padding: 0 62px; }}
+.sec-title {{
+  display: flex; align-items: center; gap: 16px; height: {_SEC_HEAD_H}px;
+}}
+.sec-bar {{ flex: 1; height: 20px; }}
+.sec-title span {{
+  flex: none; font-size: 22px; font-weight: 700; color: #ffffff; letter-spacing: 2px;
+}}
+.grid {{
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  column-gap: 9px;
+}}
 .tile {{
-  width: 206px; height: 124px; margin: 8px 4px; border-radius: 0;
+  width: 100%; height: {_TILE_H}px; margin: 8px 0; border-radius: 0;
   display: flex; flex-direction: column; align-items: center; justify-content: center;
 }}
+.sec.has-spark .tile {{ height: {_TILE_H_SPARK}px; }}
 .tile .price {{ font-size: 28px; font-weight: 700; line-height: 1.1; }}
 .tile .chg {{ font-size: 26px; font-weight: 630; line-height: 1.15; margin-top: 2px; }}
+.tile.has-spark .price {{ font-size: 24px; }}
+.tile.has-spark .chg {{ font-size: 20px; margin-top: 2px; }}
+.tile .spark {{
+  width: {SPARK_W:.0f}px; height: {SPARK_H:.0f}px; margin-top: 4px;
+  flex: none; overflow: hidden;
+}}
+.tile .spark svg {{ display: block; width: 100%; height: 100%; }}
 .tile .name {{
   display: flex; align-items: center; justify-content: center; gap: 5px;
   margin-top: 8px;
 }}
+.tile.has-spark .name {{ margin-top: 8px; }}
 .tile .emo {{ font-size: 18px; line-height: 1; flex: none; }}
 .tile .nm {{ font-size: 20px; color: #ffffff; font-weight: 700; line-height: 1.2; }}
 .tile .nm.long {{ font-size: 16px; font-weight: 630; }}
 .tile .rest {{ font-size: 12px; font-weight: 630; color: #fde68a; flex: none; }}
 .tile.stale {{ opacity: 0.6; }}
 .footer {{
-  position: absolute; left: 75px; top: 2135px; width: 850px; height: 40px;
+  flex: none;
+  width: 850px; height: {_FOOT_H}px;
+  margin: {_FOOT_GAP}px 75px {_FOOT_GAP}px;
 }}
 </style>
 </head>
 <body>
 <div class="page">
   <!-- as_of:{_e(stamp)} -->
-  <img class="bg" src="{bg_uri}" width="{CSS_WIDTH}" height="{CSS_HEIGHT}" />
   <div class="head">{_timeline_html(as_of)}</div>
-  {inner}
+  <div class="body">{inner}</div>
   <img class="footer" src="{footer_uri}" width="850" height="40" />
 </div>
 </body>

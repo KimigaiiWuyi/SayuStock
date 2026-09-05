@@ -235,8 +235,11 @@ def _parse_em_code(code: str) -> Market:
         if prefix in ["101", "102"]:
             return Market.COMMODITY
         if prefix == "171":
-            if main_code.upper().startswith("US"):
+            mc = main_code.upper()
+            if mc.startswith("US"):
                 return Market.US_BOND
+            if mc.startswith("JP"):
+                return Market.JP_INDEX
             return Market.BOND
         if prefix in ["109", "113", "114", "115"]:
             return Market.CN_FUTURE_DAY

@@ -7,13 +7,14 @@ from PIL import Image, ImageDraw
 from gsuid_core.logger import logger
 from gsuid_core.models import Event
 from gsuid_core.utils.fonts.fonts import core_font as ss_font
-from gsuid_core.utils.image.convert import convert_img
+from gsuid_core.utils.html_render import render_html_to_bytes
 from gsuid_core.ai_core.trigger_bridge import ai_return
 
-from ..utils.image import get_footer
+from .draw_info import DIFF_MAP
 from ..utils.utils import convert_list, number_to_chinese
-from ..utils.market import Quote, get_market, is_market_error, board_rows_to_items
-from ..stock_info.draw_info import DIFF_MAP
+from ..utils.market import Quote, DisplayItem, get_market, is_market_error, board_rows_to_items
+from ..utils.sparkline import sparkline_from_series
+from ..utils.my_stock_html import SPARK_H, SPARK_W, build_my_stock_html, my_stock_canvas_size
 from ..utils.database.models import SsBind
 
 TEXT_PATH = Path(__file__).parent / "texture2d"
@@ -73,67 +74,34 @@ async def draw_my_stock_img(ev: Event) -> str | bytes:
         return zs_snap.message
     zs_items = board_rows_to_items(zs_snap.rows)
 
-    img = Image.new(
-        "RGBA",
-        (
-            900 if len(uid) < 18 else 1800,
-            (541 + len(uid) * 110 + 60 if len(uid) < 18 else 541 + (((len(uid) - 1) // 2) + 1) * 110 + 60),
-        ),
-        (7, 9, 27),
-    )
+    two_col = len(uid) >= 18
     zyzs = (
-        [
-            "上证指数",
-            "深证成指",
-            "中证A500",
-            "中证2000",
-        ]
-        if len(uid) < 18
-        else [
-            "上证指数",
-            "深证成指",
-            "创业板指",
-            "上证50",
-            "沪深300",
-            "中证A500",
-            "中证2000",
-            "国债指数",
-        ]
+        ["上证指数", "深证成指", "中证A500", "中证2000"]
+        if not two_col
+        else ["上证指数", "深证成指", "创业板指", "上证50", "沪深300", "中证A500", "中证2000", "国债指数"]
     )
-
-    n = 0
-    x0 = 50 if len(uid) < 18 else 100
+    index_items: list[DisplayItem] = []
     for zs_name in zyzs:
         for item in zs_items:
             if zs_name != item.name.split("(")[0].strip() and zs_name not in item.name:
                 continue
-            diff = item.change_pct
-            zs_img = Image.new("RGBA", (200, 140))
-            zs_draw = ImageDraw.Draw(zs_img)
-            if diff >= 0:
-                zsc = (140, 18, 22, 55)
-                zsc2 = (206, 34, 30)
-            else:
-                zsc = (59, 140, 18, 55)
-                zsc2 = (36, 206, 30)
-            zs_draw.rounded_rectangle((15, 13, 185, 127), 0, zsc)
-            zs_draw.text((100, 99), zs_name, (255, 255, 255), ss_font(24), "mm")
-            zs_draw.text((100, 38), f"{item.price}", zsc2, ss_font(30), "mm")
-            zs_draw.text((100, 70), f"{'+' if diff >= 0 else ''}{diff}%", zsc2, ss_font(30), "mm")
-            img.paste(zs_img, (x0 + 200 * n, 308 + 140 * 0), zs_img)
-            n += 1
+            index_items.append(item)
             break
 
     all_p = 0.0
     stock_details: list[dict[str, object]] = []
-    TASK = []
+    quotes: list[tuple[Quote, str] | None] = [None] * len(uid)
+    sparks: dict[str, str] = {}
 
-    async def sg(img: Image.Image, index: int, u: str, alluid: int) -> object:
+    async def sg(index: int, u: str) -> None:
         nonlocal all_p
         query = u[4:] if u.startswith("VIX.") else u
-        q = await market.quote(query)
-        if is_market_error(q):
-            return q.message
+        series = await market.intraday(query)
+        if is_market_error(series):
+            return
+        q = series.quote
+        if q is None:
+            return
         all_p += float(q.change_pct) if q.change_pct is not None else 0.0
         stock_details.append(
             {
@@ -145,54 +113,47 @@ async def draw_my_stock_img(ev: Event) -> str | bytes:
                 "amount": q.amount,
             }
         )
-        bar = draw_bar_from_quote(q, u)
-        if alluid >= 18 and index >= ((alluid - 1) // 2) + 1:
-            x = 900
-            y = 541 + (index - (((alluid - 1) // 2) + 1)) * 110
-        else:
-            x = 0
-            y = 541 + index * 110
-        img.paste(bar, (x, y), bar)
+        quotes[index] = (q, u)
+        svg = sparkline_from_series(series, width=SPARK_W, height=SPARK_H)
+        if svg:
+            sparks[u] = svg
+            sparks[q.symbol.code] = svg
 
-    for index, u in enumerate(uid):
-        TASK.append(sg(img, index, u, len(uid)))
-    await asyncio.gather(*TASK)
+    await asyncio.gather(*[sg(index, u) for index, u in enumerate(uid)])
+    filled = [row for row in quotes if row is not None]
+    if not filled:
+        return "暂无自选行情"
 
     avg_p = all_p / len(uid)
+    title_num = "11"
     for i in DIFF_MAP:
         if avg_p >= i:
             title_num = DIFF_MAP[i]
             break
-    else:
-        title_num = 11
 
-    title = Image.open(TEXT_PATH / f"title{title_num}.png")
-    img.paste(
-        title,
-        (25 + 450 if len(uid) >= 18 else 25, -31),
-        title,
+    html = build_my_stock_html(
+        quotes=filled,
+        index_items=index_items,
+        title_num=title_num,
+        sparklines=sparks,
     )
-
-    bar5 = Image.open(TEXT_PATH / "bar5.png")
-    img.paste(
-        bar5,
-        (25 + 450 if len(uid) >= 18 else 25, 443),
-        bar5,
-    )
-
-    footer = get_footer()
-    img.paste(
-        footer,
-        (25 + 450 if len(uid) >= 18 else 25, img.size[1] - 55),
-        footer,
-    )
-
-    res = await convert_img(img)
-
-    # AI 注入：提取自选股行情文本数据
+    width, height, _ = my_stock_canvas_size(len(filled))
     _ai_return_my_stock(uid, all_p, stock_details)
-
-    return res
+    try:
+        return await render_html_to_bytes(
+            html,
+            max_width=float(width * 2),
+            dpi=192.0,
+            device_height=float(height * 2),
+            default_font_size=15.0,
+            allow_refit=False,
+            image_format="png",
+            lang="zh",
+            root_max_width=float(width),
+        )
+    except (RuntimeError, OSError, ValueError) as e:
+        logger.exception(f"[SayuStock] 我的自选 HTML 出图失败: {e}")
+        return "自选出图失败"
 
 
 def _ai_return_my_stock(
@@ -213,13 +174,13 @@ def _ai_return_my_stock(
             )
             result += "\n个股行情:\n"
             for s in sorted_details:
-                change = s.get("change", 0)
+                change = s["change"] if "change" in s else 0
                 sign = "+" if isinstance(change, (int, float)) and change >= 0 else ""
-                amount = s.get("amount", "N/A")
+                amount = s["amount"] if "amount" in s else "N/A"
                 if isinstance(amount, (int, float)):
-                    from ..utils.utils import number_to_chinese
+                    from ..utils.utils import number_to_chinese as _n2c
 
-                    amount = number_to_chinese(amount)
+                    amount = _n2c(amount)
                 result += (
                     f"  {s['name']}({s['code']}): "
                     f"最新价 {s['price']}  {sign}{change}%  "
