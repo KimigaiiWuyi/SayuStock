@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
+
 from .render_data import _session_rows_from_intraday
 from .market.models import IntradaySeries
 
@@ -29,7 +31,7 @@ def sparkline_from_series(
         fill_session_future=True,
         fill_session_gaps=True,
     )
-    prices = _prices_from_rows(rows)
+    prices: Sequence[float | None] = _prices_from_rows(rows)
     if sum(1 for p in prices if p is not None) < 2:
         prices = [p.price for p in series.points]
     prev = _ref_close(series)
@@ -38,7 +40,7 @@ def sparkline_from_series(
 
 
 def build_sparkline_svg(
-    prices: list[float | None] | tuple[float | None, ...],
+    prices: Sequence[float | None],
     prev_close: float | None,
     *,
     up: bool,
@@ -131,7 +133,7 @@ def _ref_close(series: IntradaySeries) -> float | None:
     return None
 
 
-def _is_up(series: IntradaySeries, prices: list[float | None], prev: float | None) -> bool:
+def _is_up(series: IntradaySeries, prices: Sequence[float | None], prev: float | None) -> bool:
     q = series.quote
     if q is not None and q.change_pct is not None:
         return q.change_pct >= 0

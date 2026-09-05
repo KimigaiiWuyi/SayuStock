@@ -186,6 +186,9 @@ if not isinstance(raw_data, KlineSeries):
 | 无 `[tool.pytest.ini_options]` | Full suite：`No module named 'SayuStock'` | 保留 `pythonpath = [".", "test"]`，防止 rootdir 上浮到 Core |
 | `pyrightconfig` 写死 `.venv` | basedpyright exit 3，「0 errors」仍失败 | 删除 `venvPath`/`venv` |
 | 用官方 pyright | unknown diagnostic rule | 统一 **basedpyright** |
+| importlib 桩漏导出名 | Full suite collection：`cannot import name '…' from '_end_label_dodge_test.utils.mplchart_compat'` | 桩覆盖 `chart_base` 的 from-import，并留模块 `__getattr__`；见 [§10.5.10](./10-cicd-and-dev-workflow.md) |
+| `list[float]` 赋给 `list[float \| None]` | basedpyright `reportArgumentType`（list 不变） | 价列参数用 `Sequence[float \| None]` |
+| 本地 basedpyright 几十个 MissingImports | 没走 Core venv | `basedpyright --pythonpath <Core venv>/python` |
 | 脚本 E402 | pre-commit / lint 红 | 路径补丁后的 import 加 `# noqa: E402` |
 | 对比图默认窗口 | 用户觉得「只有一个月」 | 对比默认 `KlinePeriod.D1_YEAR`（365 天），勿改回 `D1_RECENT`（50 天） |
 | 场外基金当 K 线 | `个股 日k 720001` 只有一根柱 | 东财 `150.*` 无真 K 线；走天天基金净值，命令层改 `compare-stock` |
@@ -199,7 +202,7 @@ if not isinstance(raw_data, KlineSeries):
 5. 新模块是否被 `__init__.py` import？  
 6. `@ai_tools` docstring 是否紧贴 def？  
 7. 模拟盘是否只写 SQLModel？  
-8. ruff / **basedpyright** / 相关 pytest 是否绿？  
+8. ruff / **basedpyright**（Core venv `--pythonpath`）/ 相关 pytest 是否绿？typecheck **挡合并**。  
 9. 新测试是否在**扁平（无 Core）与嵌套**下都能 collection？（至少本地跑一遍 CI indicators 三件套 + `pytest test/`）  
 10. 是否更新了本 SKILL 对应章节（若改了不变量 / CI 约定）？  
 
@@ -219,9 +222,9 @@ if not isinstance(raw_data, KlineSeries):
 | S-10 | 板块展开 | §9.11 |
 | S-11 | str 错误当数据 | §9.12 |
 | S-12 | 业务直读 requester | §9.13 |
-| S-15 | CI 导入 / pytest rootdir / pyright venv | §9.16 / [§10](./10-cicd-and-dev-workflow.md) |
+| S-15 | CI 导入 / pytest rootdir / pyright venv / 假包桩 / list 不变性 | §9.16 / [§10](./10-cicd-and-dev-workflow.md) |
 | S-16 | 全天候开盘灯 | `is_market_active_now` 为 `[start, end)`，收盘整点灭灯；港股持续交易 **16:00** 收（不是 15:30）；日股 BJT 08:00-10:30 / 11:30-14:30；时钟必须 `now_bjt()`（Asia/Shanghai），禁止 `datetime.now()` |
-| C-1…C-8 | CI 事故速查表 | [§10.8](./10-cicd-and-dev-workflow.md) |
+| C-1…C-12 | CI 事故速查表 | [§10.8](./10-cicd-and-dev-workflow.md) |
 | M-1 | 领域模型迁移完成 | [§03](./03-market-data-port.md) |
 
 ## 9.19 与 GsCore 坑的交叉

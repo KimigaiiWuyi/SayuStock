@@ -66,6 +66,8 @@ def _ensure_pkg() -> None:
             sys.modules["gsuid_core.utils.fonts.fonts"] = fonts_mod
 
     compat = ModuleType(f"{PKG_NAME}.utils.mplchart_compat")
+    # from-import 漏符号会在 collection 直接 ImportError。
+    # 模块 __getattr__ 兜住以后 compat 新增的导出名。
     for name in (
         "SMA",
         "Pane",
@@ -78,8 +80,17 @@ def _ensure_pkg() -> None:
         "LinePlot",
         "Indicator",
         "Candlesticks",
+        "chart_series_xy",
+        "dark_style",
     ):
         setattr(compat, name, MagicMock(name=name))
+
+    def _compat_getattr(name: str) -> MagicMock:
+        mock = MagicMock(name=name)
+        setattr(compat, name, mock)
+        return mock
+
+    compat.__getattr__ = _compat_getattr
     sys.modules[f"{PKG_NAME}.utils.mplchart_compat"] = compat
 
 

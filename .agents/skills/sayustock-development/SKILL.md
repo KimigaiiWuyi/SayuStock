@@ -78,7 +78,7 @@ description: >
 - **模拟盘落库 SQLModel**：禁止用 `record_*` / `state_set` 拼第二套账本。
 - **插件加载只 import 各包 `__init__.py`**：兄弟模块的 `@sv` / `@ai_tools` 必须在 `__init__.py` 里**显式 import** 才会生效。
 - **测试双布局**：扁平（无 Core，CI 指标门）与嵌套（`…/plugins/SayuStock`，全量 CI）都要能过；依赖 `test/conftest.py` 包壳，勿让单测执行 `SayuStock/__init__.py` 的 Plugins 链。
-- **CI 四门**：lint（ruff）→ indicators（轻量）→ full pytest → basedpyright（暂不挡合并）；细节见 [十](./references/10-cicd-and-dev-workflow.md)。
+- **CI 四门全挡合并**：lint（ruff）→ indicators（轻量）→ full pytest → basedpyright；细节见 [十](./references/10-cicd-and-dev-workflow.md)。
 
 ## 仓库路径约定
 

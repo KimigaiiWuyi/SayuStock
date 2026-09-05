@@ -86,9 +86,7 @@ jobs:
   typecheck:
     name: Typecheck (pyright)
     runs-on: ubuntu-latest
-    # 存量类型错误尚未清零（见 pyproject [tool.pyright]），先不卡合并，
-    # 只把结果挂在 PR 上；等基线归零后去掉这行改为强制。
-    continue-on-error: true
+    # 类型基线已归零；本 job 失败挡合并。勿再加 continue-on-error。
     steps:
       - name: Checkout gsuid_core
         uses: actions/checkout@v4

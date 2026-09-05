@@ -75,6 +75,7 @@
 uv run ruff check SayuStock test
 uv run ruff format --check SayuStock test
 uv run pytest test -q
+basedpyright --pythonpath <Core venv>/python
 ```
 
 - `testpaths = ["test"]`，`pythonpath = [".", "test"]`。
@@ -113,6 +114,9 @@ uv run pytest test -q
 - 扁平（无 Core）与嵌套（`plugins/SayuStock`）都要能 collection。
 - `test/conftest.py` 包壳：不要执行 `SayuStock/__init__.py` 的 Plugins 链。
 - 改 `ai_return`：`test_ai_text_delivery.py`。分时：`test_intraday_align.py`。模拟盘：`test_papertrade_*.py`。
+- 改 `chart_base` 的 compat 导入：`test_end_label_dodge.py` 用假包加载该文件，桩必须能解析每一个 from-import。
+- CI 四门全挡合并：ruff、indicators、full pytest、**basedpyright**。本地类型检查：`basedpyright --pythonpath <Core venv>/python`。
+- `list` 不变：`list[float]` 不能当 `list[float | None]` 传入；价列用 `Sequence[float | None]`。
 - 禁止把真人东财 Cookie 写进 fixture。测完 `DATA_PATH` 要 `unlink`。
 
 ## 本仓库结构约定
@@ -133,6 +137,8 @@ uv run pytest test -q
 5. 对比图默认 `D1_YEAR`（365 天）。
 6. 名称含 `(板块)` 要展开成分股。
 7. 行业云图：`chinese_stocks` 申万三级成分 + 大盘 hotmap；禁止每次翻页拉 BK 行情。
+8. importlib 桩漏 `mplchart_compat` 导出名 → Full suite collection `ImportError`。
+9. 价序列类型用 `Sequence`，不要让 `list[float]` 与 `list[float | None]` 互赋。
 
 ## Security notes
 

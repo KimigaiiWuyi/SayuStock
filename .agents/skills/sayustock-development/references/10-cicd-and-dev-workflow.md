@@ -50,7 +50,7 @@ Python：**3.12**（与 `requires-python = "==3.12.*"` 对齐）
 | `lint` | Lint (ruff) | B 扁平 | `ruff==0.14.8` | `ruff check` + `ruff format --check` | **挡** |
 | `indicators` | Indicator math & AI text | B 扁平 | `pandas numpy pytest` | 只跑指标/文字相关用例 | **挡** |
 | `test` | Full test suite | A 嵌套 | Core `requirements.txt`（去 `-e`）+ 插件绘图依赖 | `pytest test/` | **挡** |
-| `typecheck` | Typecheck (pyright) | A 嵌套 + Kronos submodule | 同上 + **basedpyright==1.39.7** | `basedpyright` | 暂不挡（`continue-on-error: true`） |
+| `typecheck` | Typecheck (pyright) | A 嵌套 + Kronos submodule | 同上 + **basedpyright==1.39.7** | `basedpyright` | **挡** |
 
 ### 10.2.1 Lint
 
@@ -102,8 +102,13 @@ pytest test/ -q -p no:cacheprovider
 - 版本钉死（workflow 里写死，如 `1.39.7`），与本地尽量一致。
 - Kronos：`submodules: true`，保证 `..Kronos.model` 可解析；内容已在 `exclude` 里，不计入错误。
 - 插件依赖与 Full suite 对齐，须含 **`holidays`**（`utils/market_holidays.py` 的 `import holidays`，否则 `reportMissingImports`）。
-- **存量类型错误未清零**：job 设了 `continue-on-error: true`。PR 上仍会显示结果，但**暂时不挡合并**。清零后应去掉该行改为强制。
+- **类型基线已归零，本 job 挡合并。** 不要把 `continue-on-error: true` 加回去。
 - 配置优先读 **`pyrightconfig.json`**（与 `pyproject.toml` 的 `[tool.pyright]` 保持同步字段）；**不要**在 `pyrightconfig.json` 写死本机 `venvPath`/`venv`（见 §10.5.3）。
+- 本地必须让 basedpyright 用 **Core 的 3.12 venv**（里面才有 sqlmodel / httpx / gsuid_core 依赖）。CI 的 setup-python + pip 已把包装进 runner 解释器，所以 workflow 里是裸 `basedpyright`。本机若直接跑全局 basedpyright，会误报几十个 `reportMissingImports`，**不能**拿来当 CI 对照：
+
+  ```powershell
+  basedpyright --pythonpath F:\gsuid_core\.venv\Scripts\python.exe
+  ```
 
 ## 10.3 本地开发流程（对齐 CI）
 
@@ -130,8 +135,8 @@ python -m pytest test/test_indicators.py test/test_papertrade_indicators.py test
 # 全量单测
 python -m pytest test/ -q
 
-# 类型检查（与 CI 同命令）
-basedpyright
+# 类型检查（与 CI 同解释器；勿用全局 basedpyright）
+basedpyright --pythonpath F:\gsuid_core\.venv\Scripts\python.exe
 ```
 
 `pyproject.toml` 已配置：
@@ -155,16 +160,17 @@ pythonpath = [".", "test"]   # "." → SayuStock 包；"test" → kline_fixtures
 | market parse / Port | `test/market/` | test |
 | 任意业务 + 导入路径 | 全量 `pytest test/` | test |
 | 风格 / import 顺序 | ruff | lint |
-| 类型注解 / 公共 API | basedpyright | typecheck（目前不挡合并） |
+| 类型注解 / 公共 API | basedpyright（Core venv） | typecheck（挡合并） |
 
 ### 10.3.3 提交前检查清单
 
 1. `pre-commit run --all-files`（或至少 ruff check + format）  
 2. 相关 pytest 绿（改指标必跑 indicators 三件套）  
-3. 未把本机路径写死进测试（如 `F:\…`）  
-4. 未在 `pyrightconfig.json` 加仅本机存在的 `venv`  
-5. 新测试若 `import SayuStock.*`，依赖 `conftest` 包壳，**不要**假设 `SayuStock/__init__.py` 会成功执行  
-6. 脚本直跑需要补 `sys.path` 时：stdlib/三方 import 放顶部，本地包 import 后置并 `# noqa: E402`（见 `utils/update_stocks.py`）
+3. **basedpyright 绿**（`--pythonpath` 指向 Core 3.12 venv）  
+4. 未把本机路径写死进测试（如 `F:\…`）  
+5. 未在 `pyrightconfig.json` 加仅本机存在的 `venv`  
+6. 新测试若 `import SayuStock.*`，依赖 `conftest` 包壳，**不要**假设 `SayuStock/__init__.py` 会成功执行  
+7. 脚本直跑需要补 `sys.path` 时：stdlib/三方 import 放顶部，本地包 import 后置并 `# noqa: E402`（见 `utils/update_stocks.py`）
 
 ## 10.4 `test/conftest.py` 契约（写测试必读）
 
@@ -306,9 +312,37 @@ REPO_ROOT = Path(__file__).resolve().parent.parent.parent.parent.parent
 
 ### 10.5.9 Typecheck 绿了但 exit ≠ 0
 
-- 有类型错误 → exit 1（当前 job 不挡合并，但仍应逐步消）。  
+- 有类型错误 → exit 1，**挡合并**。  
 - 缺 venv → exit 3（配置问题，必须修，见 §10.5.3）。  
-- 勿把「0 errors」和「exit 0」当成一回事。
+- 勿把「0 errors」和「exit 0」当成一回事。  
+- 本机全局 basedpyright 报几十个 MissingImports、CI 却只有 sparkline 两条：解释器不是 Core venv（见 §10.2.4）。
+
+### 10.5.10 importlib 桩漏 `mplchart_compat` 导出名
+
+**现象**（Full suite collection）：
+
+```text
+ImportError: cannot import name 'chart_series_xy' from
+'_end_label_dodge_test.utils.mplchart_compat'
+```
+
+**原因**：`test_end_label_dodge.py` 用假包名加载 `chart_base.py`，并手搓 `mplchart_compat`。
+`chart_base` 的 `from ..utils.mplchart_compat import Chart, …, chart_series_xy` 每加一个
+名字，桩白名单漏了就在 **collection** 炸，一条用例都跑不到。
+
+**正确做法**：白名单与 `chart_base` 的 from-import 对齐；模块级 `__getattr__` 对未知名返回
+`MagicMock`，避免下次 compat 新增导出名再红 CI。
+
+### 10.5.11 `list[float]` 不能赋给 `list[float | None]`
+
+**现象**：basedpyright `reportArgumentType`，提示 list 不变、改用 `Sequence`。
+
+**原因**：`prices = _prices_from_rows(...)` 是 `list[float | None]`，再赋
+`[p.price for p in series.points]`（`list[float]`）后，联合类型无法传入
+`list[float | None]` 参数。
+
+**正确做法**：价列用 `collections.abc.Sequence[float | None]`（协变）。不要 `cast` /
+`type: ignore`。
 
 ## 10.6 改 CI 本身时的注意点
 
@@ -317,7 +351,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent.parent.parent.parent
 3. **新增依赖 Core 的测**：只进 Full suite；确保 `conftest` 路径足够，勿在测试里 `pip` 装东西。  
 4. **钉版本**：ruff、basedpyright 与 pre-commit / 本地文档同步 bump。  
 5. **submodules**：只有 typecheck（或真要解析 Kronos 源码）需要 `submodules: true`；全量测试默认不必，省时间。  
-6. **`continue-on-error`**：仅 typecheck 历史债；新加的挡合并门不要默认 continue。  
+6. **不要**给挡合并的 job 加 `continue-on-error`。typecheck 基线已归零，保持强制。  
 7. **密钥**：CI 不注入东财 Cookie；依赖 fixture 的 parse 测，禁止要求真网。
 
 ## 10.7 与章节交叉引用
@@ -343,3 +377,6 @@ REPO_ROOT = Path(__file__).resolve().parent.parent.parent.parent.parent
 | C-7 | pre-commit ≠ CI ruff | 版本与 format 检查对齐 |
 | C-8 | parents[N] 仅嵌套可用 | 改 conftest / 双布局验证 |
 | C-9 | typecheck：`Import "holidays" could not be resolved` | Full suite / typecheck 都要 `pip install holidays`；`market_holidays` 的 import 行保留 `reportMissingImports` ignore 给本地未装 |
+| C-10 | full suite collection：`cannot import name 'chart_series_xy' from '…mplchart_compat'` | 假包桩对齐 `chart_base` from-import + 模块 `__getattr__`（§10.5.10） |
+| C-11 | typecheck：`list[float]` 不能赋给 `list[float \| None]` | 价列用 `Sequence[float \| None]`（§10.5.11） |
+| C-12 | 本地 basedpyright 几十个 MissingImports，与 CI 不符 | `--pythonpath` 指向 Core 3.12 venv，勿用全局解释器 |

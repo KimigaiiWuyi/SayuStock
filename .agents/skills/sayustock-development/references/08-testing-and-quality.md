@@ -19,10 +19,13 @@ test/
 ├── test_ai_text_delivery.py       # 冷/热缓存都发 ai_return
 ├── test_intraday_align.py         # 跨天分时轴
 ├── test_indicators.py             # 进 CI 轻量 job
+├── test_sparkline.py              # 自选分时 SVG
+├── test_my_stock_html.py          # 自选 HTML 卡片
+├── test_all_weather_html.py       # 全天候 HTML
 ├── test_stock_analysis_unit.py
 ├── test_papertrade_*.py           # 日历/撮合/策略/候选池/账户 scope…
 │                                  # test_papertrade_indicators 进 CI 轻量 job
-└── test_end_label_dodge.py
+└── test_end_label_dodge.py        # 末端标注避让；假包加载 chart_base
 ```
 
 ## 8.2 怎么跑
@@ -50,7 +53,7 @@ ruff check SayuStock/ test/
 ruff format --check SayuStock/ test/
 ```
 
-当前规模约 **230+ passed**（本地缓存缺失时 `test_intraday_align` 部分 skip）。  
+当前规模约 **460 passed**（本地缓存缺失时 `test_intraday_align` 部分 skip）。  
 **为什么 Full suite 要嵌套 checkout、为什么不能 `import SayuStock` 触发 `__init__`**：见 [§10](./10-cicd-and-dev-workflow.md)。
 
 ## 8.3 分层测什么
@@ -72,8 +75,10 @@ ruff format --check SayuStock/ test/
 ```powershell
 ruff check SayuStock/ test/
 ruff format --check SayuStock/ test/
-basedpyright   # CI 用 basedpyright，不要用官方 pyright（见 §10.5.4）
+basedpyright --pythonpath <Core venv>/python   # 须指向装了 Core 依赖的 3.12；见 §10.2.4
 ```
+
+CI 用 **basedpyright**（钉版本），不要用官方 pyright（见 §10.5.4）。typecheck **挡合并**。
 
 配置要点（细节见 [§10.2.4](./10-cicd-and-dev-workflow.md) / [§10.5.3](./10-cicd-and-dev-workflow.md)）：
 
@@ -102,7 +107,9 @@ basedpyright   # CI 用 basedpyright，不要用官方 pyright（见 §10.5.4）
 | ai_return / 缓存 | `test_ai_text_delivery` |
 | indicators | `test_indicators` + `test_render_text` 一致性用例 |
 | papertrade | 对应 `test_papertrade_*` |
-| 大范围重构 | 全量 `pytest test/` |
+| 自选 / 全天候 HTML、sparkline | `test_sparkline` / `test_my_stock_html` / `test_all_weather_html` |
+| `chart_base` 相对 import / 末端标注 | `test_end_label_dodge`（collection 即校验 compat 桩） |
+| 大范围重构 | 全量 `pytest test/` + `basedpyright --pythonpath <venv>/python` |
 
 ## 8.7 Fixtures 约定
 
