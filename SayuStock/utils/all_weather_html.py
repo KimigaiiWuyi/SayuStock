@@ -252,11 +252,11 @@ def _tile_html(item: DisplayItem, now: datetime, spark_svg: str = "") -> str:
     has_spark = " has-spark" if spark_svg else ""
     return (
         f'<div class="{tile_cls}{has_spark}" style="background:{bg}">'
-        f'<div class="price {cls}" style="color:{price_color}">{_e(format_price(item.price))}</div>'
-        f'<div class="chg {cls}" style="color:{fg}">{_e(format_change(item.change_pct))}</div>'
-        f"{spark}"
         f'<div class="name"><span class="emo">{emoji}</span>'
         f'<span class="{nm_cls}">{_e(label)}</span>{rest}</div>'
+        f'<div class="chg {cls}" style="color:{fg}">{_e(format_change(item.change_pct))}</div>'
+        f"{spark}"
+        f'<div class="price {cls}" style="color:{price_color}">{_e(format_price(item.price))}</div>'
         f"</div>"
     )
 
@@ -477,20 +477,19 @@ body {{
   display: flex; flex-direction: column; align-items: center; justify-content: center;
 }}
 .sec.has-spark .tile {{ height: {_TILE_H_SPARK}px; }}
-.tile .price {{ font-size: 28px; font-weight: 700; line-height: 1.1; }}
+.tile .name {{
+  display: flex; align-items: center; justify-content: center; gap: 5px;
+  margin-bottom: 2px;
+}}
 .tile .chg {{ font-size: 26px; font-weight: 630; line-height: 1.15; margin-top: 2px; }}
-.tile.has-spark .price {{ font-size: 24px; }}
-.tile.has-spark .chg {{ font-size: 20px; margin-top: 2px; }}
 .tile .spark {{
   width: {SPARK_W:.0f}px; height: {SPARK_H:.0f}px; margin-top: 4px;
   flex: none; overflow: hidden;
 }}
 .tile .spark svg {{ display: block; width: 100%; height: 100%; }}
-.tile .name {{
-  display: flex; align-items: center; justify-content: center; gap: 5px;
-  margin-top: 8px;
-}}
-.tile.has-spark .name {{ margin-top: 8px; }}
+.tile .price {{ font-size: 28px; font-weight: 700; line-height: 1.1; margin-top: 4px; }}
+.tile.has-spark .chg {{ font-size: 20px; }}
+.tile.has-spark .price {{ font-size: 24px; }}
 .tile .emo {{ font-size: 18px; line-height: 1; flex: none; }}
 .tile .nm {{ font-size: 20px; color: #ffffff; font-weight: 700; line-height: 1.2; }}
 .tile .nm.long {{ font-size: 16px; font-weight: 630; }}

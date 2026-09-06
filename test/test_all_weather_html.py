@@ -55,6 +55,8 @@ def test_html_puts_emoji_left_of_names() -> None:
     assert 'class="nm"' in html
     assert html.index("🇨🇳") < html.index("上证指数")
     assert html.index("🛢️") < html.index("NYMEX原油")
+    assert html.index('class="name"') < html.index('class="chg')
+    assert html.index('class="chg') < html.index('class="price')
     assert "+0.04%" in html
     assert "-0.30%" in html
     assert "2026-08-24 10:00" in html
@@ -87,6 +89,9 @@ def test_sparkline_slot_in_tile() -> None:
     )
     assert "has-spark" in html
     assert 'class="spark"' in html
+    assert html.index('class="name"') < html.index('class="chg')
+    assert html.index('class="chg') < html.index('class="spark"')
+    assert html.index('class="spark"') < html.index('class="price')
     assert "polyline" in html
     assert "height: 72px" in html
     assert "sec-title" in html
