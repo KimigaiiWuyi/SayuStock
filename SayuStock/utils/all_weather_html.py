@@ -18,15 +18,15 @@ _FOOTER_PATH = Path(__file__).resolve().parent / "texture2d" / "footer.png"
 CSS_WIDTH = 1000
 _HEAD_H = 420
 _SEC_HEAD_H = 44
-_TILE_H = 124
-_TILE_H_SPARK = 160
-_CELL_H = 140
-_CELL_H_SPARK = 176
+_TILE_H = 132
+_TILE_H_SPARK = 176
+_CELL_H = 148
+_CELL_H_SPARK = 192
 _FOOT_H = 40
 _FOOT_GAP = 16
 _FOOT_PAD = _FOOT_GAP + _FOOT_H + _FOOT_GAP
 SPARK_W = 168.0
-SPARK_H = 72.0
+SPARK_H = 32.0
 
 # 名称左侧国旗 / 资源 emoji（Twemoji COLR）
 ALL_WEATHER_EMOJI: dict[str, str] = {
@@ -474,26 +474,29 @@ body {{
 }}
 .tile {{
   width: 100%; height: {_TILE_H}px; margin: 8px 0; border-radius: 0;
+  padding: 8px 6px;
   display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 6px;
 }}
-.sec.has-spark .tile {{ height: {_TILE_H_SPARK}px; }}
+.sec.has-spark .tile {{ height: {_TILE_H_SPARK}px; padding: 12px 6px; gap: 12px; }}
 .tile .name {{
-  display: flex; align-items: center; justify-content: center; gap: 5px;
-  margin-bottom: 2px;
+  display: flex; align-items: center; justify-content: center; gap: 6px;
 }}
-.tile .chg {{ font-size: 26px; font-weight: 630; line-height: 1.15; margin-top: 2px; }}
+.tile .chg {{ font-size: 32px; font-weight: 700; line-height: 1.15; }}
 .tile .spark {{
-  width: {SPARK_W:.0f}px; height: {SPARK_H:.0f}px; margin-top: 4px;
+  width: {SPARK_W:.0f}px; height: {SPARK_H:.0f}px;
   flex: none; overflow: hidden;
 }}
-.tile .spark svg {{ display: block; width: 100%; height: 100%; }}
-.tile .price {{ font-size: 28px; font-weight: 700; line-height: 1.1; margin-top: 4px; }}
-.tile.has-spark .chg {{ font-size: 20px; }}
-.tile.has-spark .price {{ font-size: 24px; }}
-.tile .emo {{ font-size: 18px; line-height: 1; flex: none; }}
-.tile .nm {{ font-size: 20px; color: #ffffff; font-weight: 700; line-height: 1.2; }}
-.tile .nm.long {{ font-size: 16px; font-weight: 630; }}
-.tile .rest {{ font-size: 12px; font-weight: 630; color: #fde68a; flex: none; }}
+.tile .spark svg {{
+  display: block; width: {SPARK_W:.0f}px; height: {SPARK_H:.0f}px;
+}}
+.tile .price {{ font-size: 24px; font-weight: 630; line-height: 1.1; }}
+.tile.has-spark .chg {{ font-size: 28px; }}
+.tile.has-spark .price {{ font-size: 22px; }}
+.tile .emo {{ font-size: 22px; line-height: 1; flex: none; }}
+.tile .nm {{ font-size: 24px; color: #ffffff; font-weight: 700; line-height: 1.2; }}
+.tile .nm.long {{ font-size: 20px; font-weight: 630; }}
+.tile .rest {{ font-size: 14px; font-weight: 630; color: #fde68a; flex: none; }}
 .tile.stale {{ opacity: 0.6; }}
 .footer {{
   flex: none;

@@ -93,7 +93,7 @@ def test_sparkline_slot_in_tile() -> None:
     assert html.index('class="chg') < html.index('class="spark"')
     assert html.index('class="spark"') < html.index('class="price')
     assert "polyline" in html
-    assert "height: 72px" in html
+    assert "height: 32px" in html
     assert "sec-title" in html
     assert "sec has-spark" in html
     assert "sec-bar" in html
