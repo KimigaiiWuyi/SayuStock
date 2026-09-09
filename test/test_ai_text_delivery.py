@@ -226,7 +226,8 @@ def test_kronos_ai_text_sent_on_cold_and_warm_cache(monkeypatch: pytest.MonkeyPa
     got: list[str] = []
     monkeypatch.setattr(dm, "ai_return", lambda t: got.append(t))
 
-    cache = get_file("1.600000", "png", "single-stock-ai", None)
+    sector = f"single-stock-ai-{dm.kronos_run_config().cache_tag}"
+    cache = get_file("1.600000", "png", sector, None)
     cache.unlink(missing_ok=True)
 
     class FakeBot:

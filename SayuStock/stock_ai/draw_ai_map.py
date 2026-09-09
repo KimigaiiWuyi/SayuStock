@@ -11,6 +11,7 @@ import asyncio
 from typing import Any, Union, cast
 from pathlib import Path
 from contextlib import contextmanager
+from dataclasses import dataclass
 from collections.abc import Iterator
 
 import numpy as np
@@ -30,6 +31,7 @@ from ..utils.constant import ErroText
 from ..utils.load_data import get_full_security_code
 from ..utils.stock.utils import async_file_cache
 from ..utils.market.models import KlineSeries
+from ..stock_config.stock_config import STOCK_CONFIG
 from ..utils.stock.request_utils import get_code_id
 from ..utils.market.convert.dataframe import kline_to_df
 
@@ -37,6 +39,56 @@ NOW_QUEUE: list[str] = []
 
 base_dir = Path(__file__).parent
 kronos_dir = base_dir.parent / "Kronos"
+
+
+@dataclass(frozen=True)
+class KronosRunConfig:
+    """Kronos 预测运行配置（网页端可切换，改动即时生效）。"""
+
+    tokenizer: str
+    model: str
+    device: str
+
+    @property
+    def cache_tag(self) -> str:
+        """模型+Tokenizer 标签，进缓存文件名：切换配置即换缓存。"""
+        return f"{self.tokenizer}-{self.model}".replace("/", "-")
+
+
+def kronos_run_config() -> KronosRunConfig:
+    """从 STOCK_CONFIG 读取 Kronos 运行配置。"""
+    return KronosRunConfig(
+        tokenizer=STOCK_CONFIG.get_config("kronos_tokenizer").data,
+        model=STOCK_CONFIG.get_config("kronos_model").data,
+        device=STOCK_CONFIG.get_config("kronos_device").data,
+    )
+
+
+def _resolve_kronos_device(configured: str) -> str:
+    """校验配置的预测设备；GPU 不可用/序号越界时回退并告警。
+
+    依赖 torch，只能在 Kronos（连带 torch）惰性导入之后调用。
+    """
+    if configured == "cpu":
+        return "cpu"
+
+    import torch
+
+    if not configured.startswith("cuda"):
+        logger.warning(f"[SayuStock] 未知的AI预测设备 {configured!r}，已回退到CPU")
+        return "cpu"
+    count = torch.cuda.device_count()
+    if count == 0:
+        logger.warning(
+            f"[SayuStock] AI预测设备 {configured} 不可用：未检测到可用GPU"
+            "（请确认已安装CUDA版PyTorch且驱动正常），已回退到CPU"
+        )
+        return "cpu"
+    parts = configured.split(":", 1)
+    if len(parts) == 2 and parts[1].isdigit() and int(parts[1]) >= count:
+        logger.warning(f"[SayuStock] AI预测设备 {configured} 超出GPU数量（共{count}块），已回退到cuda:0")
+        return "cuda:0"
+    return configured
 
 
 @contextmanager
@@ -105,10 +157,10 @@ async def draw_ai_kline_with_forecast(market: str, bot: Bot) -> str | bytes:
     # 同一只票，AI 就一个字都收不到。
     _ai_return_kronos_data(series, df)
 
-    await bot.send("[SayuStock] 模型预测中，预计将会持续3分钟，请稍后...")
+    await bot.send("[SayuStock] 模型预测中，预计约3分钟（视模型与设备配置而定），请稍后...")
     NOW_QUEUE.append(sec_id)
     try:
-        fig_or_path = await _draw_ai_kline_with_forecast(sec_id, df, series)
+        fig_or_path = await _draw_ai_kline_with_forecast(sec_id, df, series, kronos_run_config().cache_tag)
     except Exception as e:
         logger.error(f"[SayuStock] 模型预测出现错误: {e}")
         return f"模型预测出现错误: {e}"
@@ -127,7 +179,7 @@ async def draw_ai_kline_with_forecast(market: str, bot: Bot) -> str | bytes:
 
 @async_file_cache(
     market="{sec_id}",
-    sector="single-stock-ai",
+    sector="single-stock-ai-{model_tag}",
     suffix="png",
     minutes=150,
 )
@@ -135,12 +187,14 @@ async def _draw_ai_kline_with_forecast(
     sec_id: str,
     df: pd.DataFrame,
     series: KlineSeries,
+    model_tag: str,
 ) -> str | Path | Image.Image:
     """只负责出图（Kronos 预测约 3 分钟，故缓存 150 分钟）。
 
     **不要在这里调 ai_return**：命中缓存时装饰器直接返回文件、本函数根本不执行，
     文字会丢。发文字请留在未被缓存的 ``draw_ai_kline_with_forecast`` 里。
-    ``df`` / ``series`` 由调用方传入以免重复取数；缓存键只取 ``{sec_id}``。
+    ``df`` / ``series`` 由调用方传入以免重复取数；缓存键取 ``{sec_id}`` +
+    ``{model_tag}``（Tokenizer+模型），网页端切换配置后立即换用新缓存。
     """
     _ = sec_id
     return await asyncio.to_thread(gdf, df, series)
@@ -235,12 +289,15 @@ def gdf(df: pd.DataFrame, series: KlineSeries) -> str | Image.Image:
     with temp_sys_path(str(kronos_dir)):
         from ..Kronos.model import Kronos, KronosPredictor, KronosTokenizer
 
-    tokenizer = KronosTokenizer.from_pretrained("NeoQuasar/Kronos-Tokenizer-base")
-    model = Kronos.from_pretrained("NeoQuasar/Kronos-mini")
+    run_cfg = kronos_run_config()
+    device = _resolve_kronos_device(run_cfg.device)
+    logger.info(f"[SayuStock] Kronos预测配置: tokenizer={run_cfg.tokenizer}, model={run_cfg.model}, device={device}")
+    tokenizer = KronosTokenizer.from_pretrained(run_cfg.tokenizer)
+    model = Kronos.from_pretrained(run_cfg.model)
     predictor = KronosPredictor(
         model,
         tokenizer,
-        device="cpu",
+        device=device,
         max_context=512,
     )
 
