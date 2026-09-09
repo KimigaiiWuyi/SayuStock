@@ -1,4 +1,5 @@
 import io
+import ssl
 from typing import List, TypedDict
 
 import pandas as pd
@@ -9,6 +10,11 @@ from gsuid_core.logger import logger
 from ..constant import ErroText
 
 URL = "https://1.optbbs.com/d/csv/d/{}.csv"
+
+# 1.optbbs.com 运行 nginx/1.0.15(2012 年版本), 仅支持 RSA 密钥交换的旧版套件;
+# OpenSSL 3.x 默认安全级别禁用此类套件, 需降至 SECLEVEL=1 才能完成 TLS 握手。
+_VIX_SSL_CTX = ssl.create_default_context()
+_VIX_SSL_CTX.set_ciphers("DEFAULT:@SECLEVEL=1")
 
 
 class VixTrendRow(TypedDict):
@@ -26,7 +32,7 @@ async def get_vix_data(vix_name: str) -> List[VixTrendRow] | str:
     url = URL.format(vix_name)
     async with aiohttp.ClientSession() as session:
         try:
-            async with session.get(url) as response:
+            async with session.get(url, ssl=_VIX_SSL_CTX) as response:
                 response.raise_for_status()
                 content_text = await response.text(encoding="utf-8-sig")
                 sio = io.StringIO(content_text)
