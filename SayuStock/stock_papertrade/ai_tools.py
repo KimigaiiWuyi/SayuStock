@@ -660,15 +660,15 @@ async def papertrade_holdings_image(
     ctx: RunContext[ToolContext],
     account_name: str = "",
 ) -> str:
-    """把 AI **模拟盘当前持仓**渲染成「模拟盘自选」风格的**简化版持仓图**并发出。
+    """把 AI **模拟盘当前持仓**渲染成「模拟盘自选」HTML 持仓图并发出。
 
     与用户命令「**模拟盘自选**」/「**模拟盘持仓**」同一张图（也可不经 agent、直接发该命令）。
-    模拟盘是命名账户：任意群调用同一个盘名都出同一份持仓图。
+    模拟盘是命名账户：任意群调用同一个盘名都出同一份持仓图。省略盘名 = 默认盘。
 
     ⚠️ **这是简化快照，不是完整账户报告**：
-    - **有**：账户摘要（现金 / 总资产 / 持仓市值 / 浮盈 / 累计盈亏）、
+    - **有**：账户摘要（现金 / 总资产 / 持仓市值 / 浮盈 / 累计 / 仓位环）、
       每只持仓的数量 / 成本 / 现价 / 市值、**今日涨跌幅**、**持仓收益率（相对成本）**、
-      顶部宽基指数参考。
+      当日分时折线、图例、顶部宽基指数。
     - **没有**：交易流水、决策日志、候选池、群友关注、风控模式细节、历史净值曲线。
       需要完整数据请分别调 ``papertrade_account_query`` /
       ``papertrade_position_list`` / ``papertrade_trade_list`` /
@@ -684,7 +684,6 @@ async def papertrade_holdings_image(
         account_name: 盘名。留空 = 默认盘。
     """
     from gsuid_core.segment import MessageSegment
-    from gsuid_core.ai_core.trigger_bridge import ai_return
 
     from .render import build_holdings_snapshot_image
 
@@ -705,15 +704,8 @@ async def papertrade_holdings_image(
     if isinstance(result, str):
         return result
 
-    try:
-        ai_return(
-            f"【模拟盘自选·简化版】模拟盘「{acc.name}」持仓图已发送：含今日涨跌与持仓浮盈，不含交易流水/决策日志。"
-        )
-    except Exception as e:
-        _gslogger.debug(f"[SayuStock][PaperTrade] holdings_image ai_return 失败: {e}")
-
     await bot.send(MessageSegment.image(result))
-    return "✅ 已发送【模拟盘自选】简化版持仓图（今日涨跌+持仓浮盈，不含交易记录）。可再补一句点评，勿复述整表。"
+    return "✅ 已发送【模拟盘自选】持仓图（今日涨跌+持仓浮盈+分时，不含交易记录）。可再补一句点评，勿复述整表。"
 
 
 @ai_tools(

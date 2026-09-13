@@ -67,12 +67,16 @@ def kronos_run_config() -> KronosRunConfig:
 def _resolve_kronos_device(configured: str) -> str:
     """校验配置的预测设备；GPU 不可用/序号越界时回退并告警。
 
-    依赖 torch，只能在 Kronos（连带 torch）惰性导入之后调用。
+    torch 是 Kronos 预测的可选依赖，未安装时回退 CPU；不要写进 CI 必装清单。
     """
     if configured == "cpu":
         return "cpu"
 
-    import torch
+    try:
+        import torch  # pyright: ignore[reportMissingImports]
+    except ImportError:
+        logger.warning("[SayuStock] 未安装 torch，AI预测已回退到CPU")
+        return "cpu"
 
     if not configured.startswith("cuda"):
         logger.warning(f"[SayuStock] 未知的AI预测设备 {configured!r}，已回退到CPU")

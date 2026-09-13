@@ -7,9 +7,10 @@
      不递归加载兄弟文件，所以这里必须显式 import 才能让装饰器生效。
 
 模块分工：
-- ``sv.py``: 所有 SV 实例集中处（``sv_papertrade`` pm=3、``sv_papertrade_admin`` pm=0）
+- ``sv.py``: SV 集中处（``sv_papertrade`` pm=3、``sv_papertrade_watchlist`` pm=6、
+  ``sv_papertrade_admin`` pm=0）
 - ``permissions.py``: 权限校验 helpers（``user_pm_level`` / ``check_admin``）
-- ``commands.py``: 业务命令（``sv_papertrade`` 注册，含建盘/改名/策略/播报订阅）
+- ``commands.py``: 业务命令（``sv_papertrade`` 建盘/策略/订阅；``sv_papertrade_watchlist`` 自选图）
 - ``admin.py``: master-only 压测 / 清库命令（``sv_papertrade_admin`` 注册）
 - ``account_scope.py``: 盘名解析 / 账户解析 / 写入授权
 - ``broadcast.py``: 一个盘 → 多个群的成交播报扇出
@@ -119,7 +120,7 @@ _register_recurring_gates()
 
 # ── SV 实例 + 子模块导入触发装饰器 ───────────────────────────────
 from . import db, admin, ai_tools, commands  # noqa: E402,F401
-from .sv import sv_papertrade, sv_papertrade_admin  # noqa: E402,F401
+from .sv import sv_papertrade, sv_papertrade_admin, sv_papertrade_watchlist  # noqa: E402,F401
 from .admin import send_dry_run, send_clear_all, send_heal_ledger  # noqa: E402,F401
 
 # 兼容旧 import 路径：业务命令从 commands 模块再 re-export 出去

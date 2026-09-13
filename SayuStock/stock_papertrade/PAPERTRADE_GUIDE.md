@@ -87,7 +87,7 @@ SayuStock 插件里的"模拟盘"长期能力：
 | `模拟盘列表` | 所有盘的盘名 / 策略 / 状态 / 现金 / 收益；也可调 `papertrade_account_list` |
 | `模拟盘策略列表` | 列可用策略与可调参数 |
 | `模拟盘查看 <盘名>` | 完整账户视图（含最近交易）；也可调 `papertrade_account_query` + `papertrade_position_list` |
-| `模拟盘自选 <盘名>` / `模拟盘持仓 <盘名>` | **简化版持仓图**（今日涨跌 + 持仓浮盈；无流水）。命令直出图，也可调 `papertrade_holdings_image` |
+| `模拟盘自选` / `模拟盘持仓` `[盘名]` | **持仓图**（今日涨跌 + 持仓浮盈 + 分时 + 图例）。省略盘名或写「默认」= 默认盘。也可调 `papertrade_holdings_image` |
 | `模拟盘收益 <盘名> 日/月/年/总` | 调 `papertrade_trade_list` + `aggregate_pnl` |
 | `模拟盘记录 <盘名>` | 调 `papertrade_trade_list(limit=20)` |
 | `模拟盘排行` / `模拟盘查询 <盘名>` | 跨盘排行 / 单盘明细（限群主 / 管理员） |
@@ -122,7 +122,7 @@ SayuStock 插件里的"模拟盘"长期能力：
 
 ### 用户问"现在还持有啥？" / "模拟盘自选" / "模拟盘持仓"
 1. **优先**：出图 —— 命令「模拟盘自选」/「模拟盘持仓」或工具 `papertrade_holdings_image` / trigger `send_holdings`
-   （简化版：今日涨跌 + 持仓浮盈，无流水）
+   （今日涨跌 + 持仓浮盈 + 分时；省略盘名=默认盘）
 2. 要数字明细：`papertrade_position_list` + `papertrade_account_query`
 3. 用你的口吻点评一两句即可，勿复述整表
 

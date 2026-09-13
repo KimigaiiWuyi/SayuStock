@@ -21,6 +21,7 @@ test/
 ├── test_indicators.py             # 进 CI 轻量 job
 ├── test_sparkline.py              # 自选分时 SVG
 ├── test_my_stock_html.py          # 自选 HTML 卡片
+├── test_paper_holdings_html.py    # 模拟盘自选 HTML 卡片
 ├── test_all_weather_html.py       # 全天候 HTML
 ├── test_offline_cache.py          # 空 DATA_PATH 不算行情缓存
 ├── test_offline_card_render.py    # 本地缓存出 PNG；无 JSON 则 skip

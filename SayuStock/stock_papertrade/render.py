@@ -1,21 +1,31 @@
-"""模拟盘 PIL 渲染（账户视图 / 持仓简图 / 排行）。"""
+"""模拟盘渲染：账户视图 / 排行走 PIL；持仓简图走 HTML。"""
 
 from __future__ import annotations
 
-from pathlib import Path
-from dataclasses import dataclass
+import asyncio
+import datetime as _dt
 
 from PIL import Image, ImageDraw, ImageFont
 
+from gsuid_core.logger import logger
 from gsuid_core.utils.fonts.fonts import core_font as ss_font
+from gsuid_core.utils.html_render import render_html_to_bytes
 from gsuid_core.utils.image.convert import convert_img
+from gsuid_core.ai_core.trigger_bridge import ai_return
 
 from . import db
 from ..utils.image import get_footer
-from ..utils.market import get_market, is_market_error, board_rows_to_items
+from ..utils.market import DisplayItem, get_market, is_market_error, board_rows_to_items
+from ..utils.sparkline import sparkline_from_series
+from ..utils.paper_holdings_html import (
+    SPARK_H,
+    SPARK_W,
+    HoldingBarRow,
+    build_paper_holdings_html,
+    paper_holdings_canvas_size,
+)
+from ..utils.database.papertrade_models import SayuPaperPosition
 
-# 与「我的自选」共用纹理（涨跌条 / 标题情绪图）
-_MY_STOCK_TEX = Path(__file__).resolve().parent.parent / "stock_info" / "texture2d"
 _DIFF_MAP: dict[float, str] = {
     3.3: "1",
     2.7: "2",
@@ -179,23 +189,8 @@ async def draw_account_view(account_id: int) -> bytes:
 
 
 # ============================================================
-# 1b) 持仓简图（仿「我的自选」条卡 + 持仓浮盈）
+# 1b) 持仓简图（HTML，对齐「我的自选」+ 仓位摘要 / 图例 / 分时）
 # ============================================================
-@dataclass(frozen=True)
-class HoldingBarRow:
-    """单只持仓条数据（简化快照用，不含流水）。"""
-
-    code: str
-    name: str
-    qty: int
-    avg_cost: float
-    current_price: float
-    day_change_pct: float | None
-    unrealized_pnl: float
-    unrealized_pnl_pct: float
-    market_value: float
-
-
 def _title_num_for_avg(avg_p: float) -> str:
     for thr, num in _DIFF_MAP.items():
         if avg_p >= thr:
@@ -203,212 +198,103 @@ def _title_num_for_avg(avg_p: float) -> str:
     return "11"
 
 
-def _fit_text(
-    draw: ImageDraw.ImageDraw,
-    text: str,
-    font: ImageFont.FreeTypeFont,
-    max_width: int,
-) -> str:
-    """单行文本超出 max_width 时用省略号截断。"""
-    if not text:
-        return text
-    bbox = draw.textbbox((0, 0), text, font=font)
-    if bbox[2] - bbox[0] <= max_width:
-        return text
-    ell = "…"
-    lo, hi = 0, len(text)
-    while lo < hi:
-        mid = (lo + hi + 1) // 2
-        candidate = text[:mid] + ell
-        bb = draw.textbbox((0, 0), candidate, font=font)
-        if bb[2] - bb[0] <= max_width:
-            lo = mid
-        else:
-            hi = mid - 1
-    return text[:lo] + ell if lo else ell
+async def _load_index_items() -> list[DisplayItem]:
+    market = get_market()
+    zs_snap = await market.board("主要指数", limit=100, sort_asc=False)
+    if is_market_error(zs_snap):
+        return []
+    zs_items = board_rows_to_items(zs_snap.rows)
+    wanted = ["上证指数", "深证成指", "中证A500", "中证2000"]
+    out: list[DisplayItem] = []
+    for zs_name in wanted:
+        for item in zs_items:
+            if zs_name != item.name.split("(")[0].strip() and zs_name not in item.name:
+                continue
+            out.append(item)
+            break
+    return out
 
 
-def _draw_holding_bar(row: HoldingBarRow) -> Image.Image:
-    """仿 draw_bar_from_quote：右侧今日涨跌，中间持仓收益率。"""
-    day = row.day_change_pct
-    if day is None:
-        # 无日涨跌时用持仓盈亏着色
-        paint = row.unrealized_pnl_pct
-    else:
-        paint = day
+def _fallback_price(position: SayuPaperPosition) -> float:
+    if position.last_quote_price is not None:
+        return float(position.last_quote_price)
+    return float(position.avg_cost or 0.0)
 
-    if paint > 0:
-        bar = Image.open(_MY_STOCK_TEX / "myup.png")
-        sub_color = (213, 102, 102)
-    elif paint == 0:
-        bar = Image.open(_MY_STOCK_TEX / "myeq.png")
-        sub_color = (240, 240, 240)
-    else:
-        bar = Image.open(_MY_STOCK_TEX / "mydown.png")
-        sub_color = (175, 231, 170)
 
-    b_title = (row.name or row.code).split(" (")[0]
-    # 副标题可用宽度约到中间「持仓%」列（x≈520）
-    s_title = (
-        f"({row.code}) {row.qty}股  成本 {row.avg_cost:.2f}  现价 {row.current_price:.2f}  市值 {row.market_value:,.0f}"
+async def _fetch_holding_row(position: SayuPaperPosition) -> tuple[HoldingBarRow, str, float | None]:
+    price = _fallback_price(position)
+    day_chg: float | None = None
+    spark = ""
+    live: float | None = None
+    query = position.secid or position.stock_code
+    if query:
+        series = await get_market().intraday(query)
+        if not is_market_error(series):
+            quote = series.quote
+            if quote is not None:
+                if quote.price > 0:
+                    price = float(quote.price)
+                    live = price
+                if quote.change_pct is not None:
+                    day_chg = float(quote.change_pct)
+            svg = sparkline_from_series(series, width=SPARK_W, height=SPARK_H)
+            if svg:
+                spark = svg
+    cost = float(position.avg_cost or 0.0)
+    qty = int(position.qty)
+    mv = price * qty
+    unreal = (price - cost) * qty if cost else 0.0
+    unreal_pct = (unreal / (cost * qty) * 100.0) if cost and qty else 0.0
+    row = HoldingBarRow(
+        code=position.stock_code,
+        name=position.stock_name or position.stock_code,
+        qty=qty,
+        avg_cost=cost,
+        current_price=round(price, 4),
+        day_change_pct=day_chg,
+        unrealized_pnl=round(unreal, 2),
+        unrealized_pnl_pct=round(unreal_pct, 4),
+        market_value=round(mv, 2),
     )
-    if day is None:
-        day_label = "今日 —"
-    else:
-        day_label = f"+{day:.2f}%" if day >= 0 else f"{day:.2f}%"
-    hold_label = f"持{row.unrealized_pnl_pct:+.2f}%"
-
-    draw = ImageDraw.Draw(bar)
-    title_font = ss_font(32)
-    sub_font = ss_font(18)
-    draw.text((82, 40), _fit_text(draw, b_title, title_font, 420), (255, 255, 255), title_font, "lm")
-    draw.text((82, 75), _fit_text(draw, s_title, sub_font, 430), sub_color, sub_font, "lm")
-    # 中间：持仓收益（相对成本）；右侧：今日涨跌（相对昨收）
-    draw.text((580, 55), hold_label, (240, 240, 240), ss_font(26), "mm")
-    draw.text((758, 55), day_label, (255, 255, 255), ss_font(26), "mm")
-    return bar
+    return row, spark, live
 
 
-# 持仓简图垂直布局（对齐「我的自选」：bar5 高 90，条卡高 110）
-_HS_INDEX_Y = 308
-_HS_SUMMARY_Y = 448
-_HS_SUMMARY_H = 100
-_HS_BAR5_GAP = 8  # 摘要 → 「我的持仓」banner
-_HS_BAR5_H = 90
-_HS_ROW_H = 110
-_HS_FOOTER_PAD = 60
-
-
-def _holdings_layout(n_rows: int) -> tuple[int, int, int]:
-    """返回 (canvas_h, bar5_y, rows_y0)。"""
-    bar5_y = _HS_SUMMARY_Y + _HS_SUMMARY_H + _HS_BAR5_GAP
-    rows_y0 = bar5_y + _HS_BAR5_H + 8
-    body_h = rows_y0 + max(n_rows, 1) * _HS_ROW_H + _HS_FOOTER_PAD
-    return body_h, bar5_y, rows_y0
-
-
-async def draw_holdings_snapshot(
-    *,
+def _ai_return_holdings(
     account_name: str,
     cash: float,
     initial_cash: float,
     holdings: list[HoldingBarRow],
-) -> bytes:
-    """简化版模拟盘持仓图（风格对齐「我的自选」，**不含**交易记录）。
-
-    顶部：宽基指数 + 账户摘要（现金/总资产/浮盈）。
-    列表：每只持仓条同时展示 **今日涨跌** 与 **持仓收益率**。
-    """
-    n = len(holdings)
-    body_h, bar5_y, rows_y0 = _holdings_layout(n)
-    img = Image.new("RGBA", (900, body_h), (7, 9, 27))
-
-    # —— 宽基指数（与我的自选一致，失败则跳过）——
-    market = get_market()
-    zs_snap = await market.board("主要指数", limit=100, sort_asc=False)
-    if not is_market_error(zs_snap):
-        zs_items = board_rows_to_items(zs_snap.rows)
-        zyzs = ["上证指数", "深证成指", "中证A500", "中证2000"]
-        ni = 0
-        for zs_name in zyzs:
-            for item in zs_items:
-                if zs_name != item.name.split("(")[0].strip() and zs_name not in item.name:
-                    continue
-                diff = float(item.change_pct)
-                zs_img = Image.new("RGBA", (200, 140))
-                zs_draw = ImageDraw.Draw(zs_img)
-                if diff >= 0:
-                    zsc, zsc2 = (140, 18, 22, 55), (206, 34, 30)
-                else:
-                    zsc, zsc2 = (59, 140, 18, 55), (36, 206, 30)
-                zs_draw.rounded_rectangle((15, 13, 185, 127), 0, zsc)
-                zs_draw.text((100, 99), zs_name, (255, 255, 255), ss_font(24), "mm")
-                zs_draw.text((100, 38), f"{item.price}", zsc2, ss_font(30), "mm")
-                zs_draw.text(
-                    (100, 70),
-                    f"{'+' if diff >= 0 else ''}{diff}%",
-                    zsc2,
-                    ss_font(30),
-                    "mm",
-                )
-                img.paste(zs_img, (50 + 200 * ni, _HS_INDEX_Y), zs_img)
-                ni += 1
-                break
-
-    # —— 账户摘要条（两行指标，避免单行撑破 850 宽）——
-    pos_value = sum(h.market_value for h in holdings)
-    total_equity = cash + pos_value
-    total_unreal = sum(h.unrealized_pnl for h in holdings)
-    total_unreal_pct = (total_unreal / pos_value * 100) if pos_value else 0.0
-    total_pnl = total_equity - initial_cash
-    total_pnl_pct = (total_pnl / initial_cash * 100) if initial_cash else 0.0
-    day_vals = [h.day_change_pct for h in holdings if h.day_change_pct is not None]
-    avg_day = sum(day_vals) / len(day_vals) if day_vals else 0.0
-
-    summary = Image.new("RGBA", (850, _HS_SUMMARY_H), (20, 24, 48, 220))
-    sd = ImageDraw.Draw(summary)
-    sd.rounded_rectangle((0, 0, 849, _HS_SUMMARY_H - 1), 8, (20, 24, 48, 220))
-    head_font = ss_font(22)
-    line_font = ss_font(17)
-    # 左右各留 20px
-    max_text_w = 810
-    head = _fit_text(sd, f"模拟盘持仓简图 · {account_name}", head_font, max_text_w)
-    line1 = _fit_text(
-        sd,
-        f"总资产 {total_equity:,.0f}  ·  现金 {cash:,.0f}  ·  持仓市值 {pos_value:,.0f}",
-        line_font,
-        max_text_w,
-    )
-    line2 = _fit_text(
-        sd,
-        f"浮盈 {total_unreal:+,.0f}({total_unreal_pct:+.2f}%)  ·  "
-        f"累计 {total_pnl:+,.0f}({total_pnl_pct:+.2f}%)  ·  "
-        f"持仓 {n} 只",
-        line_font,
-        max_text_w,
-    )
-    sd.text((20, 18), head, (255, 210, 120), head_font, "lm")
-    sd.text((20, 50), line1, (220, 220, 230), line_font, "lm")
-    sd.text((20, 76), line2, (200, 210, 220), line_font, "lm")
-    img.paste(summary, (25, _HS_SUMMARY_Y), summary)
-
-    # —— 标题情绪图（按持仓等权日均涨跌）——
-    title_num = _title_num_for_avg(avg_day)
-    title_path = _MY_STOCK_TEX / f"title{title_num}.png"
-    if title_path.is_file():
-        title = Image.open(title_path)
-        img.paste(title, (25, -31), title)
-
-    # —— 「我的持仓」banner：必须在摘要下方，持仓条再在其下 ——
-    bar5_path = _MY_STOCK_TEX / "bar5.png"
-    if bar5_path.is_file():
-        bar5 = Image.open(bar5_path)
-        img.paste(bar5, (25, bar5_y), bar5)
-
-    # —— 持仓条 ——
-    if not holdings:
-        empty = Image.new("RGBA", (850, 90), (30, 30, 40, 200))
-        ed = ImageDraw.Draw(empty)
-        ed.text((425, 45), "（当前无持仓）", (160, 160, 170), ss_font(28), "mm")
-        img.paste(empty, (25, rows_y0), empty)
-    else:
-        for i, row in enumerate(holdings):
-            bar = _draw_holding_bar(row)
-            img.paste(bar, (0, rows_y0 + i * _HS_ROW_H), bar)
-
-    footer = get_footer()
-    img.paste(footer, (25, img.size[1] - 55), footer)
-    return await convert_img(img)
+) -> None:
+    """有图必有文字：持仓语义先于出图交给 AI。"""
+    try:
+        pos_value = sum(h.market_value for h in holdings)
+        equity = cash + pos_value
+        unreal = sum(h.unrealized_pnl for h in holdings)
+        unreal_pct = (unreal / pos_value * 100.0) if pos_value else 0.0
+        pnl = equity - initial_cash
+        pnl_pct = (pnl / initial_cash * 100.0) if initial_cash else 0.0
+        lines = [
+            f"【模拟盘自选】{account_name} 总资产 {equity:,.0f} 现金 {cash:,.0f} 持仓 {len(holdings)} 只",
+            f"浮盈 {unreal:+.0f}({unreal_pct:+.2f}%) 累计 {pnl:+.0f}({pnl_pct:+.2f}%)",
+        ]
+        ranked = sorted(holdings, key=lambda h: h.unrealized_pnl_pct, reverse=True)
+        for row in ranked:
+            day = "—" if row.day_change_pct is None else f"{row.day_change_pct:+.2f}%"
+            lines.append(
+                f"  {row.name}({row.code}) {row.qty}股 成本 {row.avg_cost:.2f} "
+                f"现价 {row.current_price:.2f} 今{day} 持{row.unrealized_pnl_pct:+.2f}%"
+            )
+        ai_return("\n".join(lines))
+    except (TypeError, ValueError) as e:
+        logger.warning(f"[SayuStock] ai_return 模拟盘自选失败: {e}")
 
 
 async def build_holdings_snapshot_image(account_id: int) -> bytes | str:
-    """按账户拉持仓 + 刷价，渲染「模拟盘自选」简图。
+    """按账户拉持仓 + 分时，渲染「模拟盘自选」HTML 简图。
 
     Returns:
         图片 bytes；盘不存在等业务错误返回 str。
     """
-    from .quote_service import quote_service
-
     acc = await db.PaperAccountRepo.get_by_id(account_id)
     if not acc:
         from . import account_scope as _scope
@@ -416,63 +302,61 @@ async def build_holdings_snapshot_image(account_id: int) -> bytes | str:
         return _scope.not_opened_message()
 
     positions = await db.PaperPositionRepo.list_by_account(account_id)
-    secids = [p.secid for p in positions if p.secid]
-    details = await quote_service.get_details_batch(secids) if secids else {}
 
-    # 顺带写回 DB 报价（与 ai_tools._get_enriched_positions 一致，失败忽略）
-    import datetime as _dt
+    async def _all_rows() -> list[tuple[HoldingBarRow, str, float | None]]:
+        if not positions:
+            return []
+        return list(await asyncio.gather(*[_fetch_holding_row(p) for p in positions]))
 
-    now = _dt.datetime.now()
+    index_items, fetched = await asyncio.gather(_load_index_items(), _all_rows())
+    rows: list[HoldingBarRow] = []
+    sparks: dict[str, str] = {}
     writes: list[dict] = []
-    for p in positions:
-        if not p.secid:
-            continue
-        d = details.get(p.secid)
-        if d is not None and d.price is not None and d.price > 0:
-            writes.append({"stock_code": p.stock_code, "price": float(d.price), "at": now})
+    now = _dt.datetime.now()
+    for position, (row, spark, live) in zip(positions, fetched):
+        rows.append(row)
+        if spark:
+            sparks[row.code] = spark
+            if position.secid:
+                sparks[position.secid] = spark
+        if live is not None:
+            writes.append({"stock_code": position.stock_code, "price": live, "at": now})
     if writes:
         try:
             await db.PaperPositionRepo.bulk_set_quote(writes, account_id)
-        except Exception:
-            pass
+        except (OSError, RuntimeError, ValueError) as e:
+            logger.debug(f"[SayuStock][PaperTrade] 持仓报价回写跳过: {e}")
 
-    rows: list[HoldingBarRow] = []
-    for p in positions:
-        d = details.get(p.secid) if p.secid else None
-        if d is not None and d.price is not None and d.price > 0:
-            price = float(d.price)
-        elif p.last_quote_price is not None:
-            price = float(p.last_quote_price)
-        else:
-            price = float(p.avg_cost or 0.0)
-        day_chg: float | None = None
-        if d is not None and d.change_pct is not None:
-            day_chg = float(d.change_pct)
-        cost = float(p.avg_cost or 0.0)
-        qty = int(p.qty)
-        mv = price * qty
-        unreal = (price - cost) * qty if cost else 0.0
-        unreal_pct = (unreal / (cost * qty) * 100) if cost and qty else 0.0
-        rows.append(
-            HoldingBarRow(
-                code=p.stock_code,
-                name=p.stock_name or p.stock_code,
-                qty=qty,
-                avg_cost=cost,
-                current_price=round(price, 4),
-                day_change_pct=day_chg,
-                unrealized_pnl=round(unreal, 2),
-                unrealized_pnl_pct=round(unreal_pct, 4),
-                market_value=round(mv, 2),
-            )
-        )
-
-    return await draw_holdings_snapshot(
+    day_vals = [h.day_change_pct for h in rows if h.day_change_pct is not None]
+    avg_day = sum(day_vals) / len(day_vals) if day_vals else 0.0
+    _ai_return_holdings(acc.name, float(acc.cash), float(acc.initial_cash), rows)
+    html = build_paper_holdings_html(
         account_name=acc.name,
+        strategy_id=acc.strategy_id,
+        enabled=int(acc.enabled or 0) == 1,
         cash=float(acc.cash),
         initial_cash=float(acc.initial_cash),
         holdings=rows,
+        index_items=index_items,
+        title_num=_title_num_for_avg(avg_day),
+        sparklines=sparks,
     )
+    width, height = paper_holdings_canvas_size(len(rows))
+    try:
+        return await render_html_to_bytes(
+            html,
+            max_width=float(width * 2),
+            dpi=192.0,
+            device_height=float(height * 2),
+            default_font_size=15.0,
+            allow_refit=False,
+            image_format="png",
+            lang="zh",
+            root_max_width=float(width),
+        )
+    except (RuntimeError, OSError, ValueError) as e:
+        logger.exception(f"[SayuStock] 模拟盘自选 HTML 出图失败: {e}")
+        return "模拟盘自选出图失败"
 
 
 # ============================================================

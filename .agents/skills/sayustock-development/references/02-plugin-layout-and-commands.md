@@ -72,6 +72,7 @@ from . import commands, admin, ai_tools  # noqa: F401
 | `sv_analysis` | 技术分析、股票卡片、选股、组合体检 | `stock_analysis/*` |
 | `sv_stock_kronos` | 模型预测 | `draw_ai_map` |
 | `sv_papertrade` | 模拟盘建盘/列表/策略/订阅/查看/收益/记录… | `papertrade/commands` |
+| `sv_papertrade_watchlist` | 模拟盘自选 / 持仓（pm=6，省略盘名=默认盘） | `papertrade/commands` + HTML |
 | `sv_papertrade_admin` | 模拟盘清盘 / master 压测 | `papertrade/admin` |
 | `sv_stock_subscribe` | 订阅新闻 | `stock_news` |
 | `sv_stock_help` | 股票帮助 | `get_help` |

@@ -1,7 +1,9 @@
-"""用户命令（``sv_papertrade`` 注册，pm=3）。
+"""用户命令。
 
-**模拟盘是命名的盘，不是群的财产**。凡是针对某个盘的命令都必须带盘名，
-无参只回用法，不会落到默认盘。播报订阅由「模拟盘推送」系列命令独立管理。
+管理命令挂 ``sv_papertrade``（pm=3）；「模拟盘自选 / 持仓」挂
+``sv_papertrade_watchlist``（pm=6），任何人可查，空盘名回落默认盘。
+
+其它针对某个盘的命令仍必须带盘名，无参只回用法。
 
 命令一览：
 
@@ -16,7 +18,8 @@
 | ``模拟盘策略 <盘名> <策略id>`` | 管理员 | 切换策略 |
 | ``模拟盘推送添加/删除 <盘名>`` | 管理员 | 本群订阅/退订该盘的成交播报 |
 | ``模拟盘推送列表`` | 所有人 | 本群订阅了哪些盘 |
-| ``模拟盘查看/持仓/自选/收益/记录 <盘名>`` | 所有人 | 查询 |
+| ``模拟盘自选/持仓 [盘名]`` | 所有人 | 持仓简图；省略盘名=默认盘 |
+| ``模拟盘查看/收益/记录 <盘名>`` | 所有人 | 查询（必须带盘名） |
 | ``模拟盘排行`` | 管理员 | 跨盘收益排行 |
 | ``模拟盘查询 <盘名>`` | 管理员 | 单盘明细 |
 """
@@ -28,7 +31,7 @@ from gsuid_core.bot import Bot
 from gsuid_core.models import Event
 
 from . import db as _db, strategies as _strat, cross_group as _cross, account_scope as _scope
-from .sv import sv_papertrade
+from .sv import sv_papertrade, sv_papertrade_watchlist
 from .render import draw_leaderboard, draw_account_view, build_holdings_snapshot_image
 from .permissions import check_admin
 from .trading_calendar import is_trading_time, is_a_share_trading_day
@@ -61,6 +64,15 @@ async def _require_named_account(bot: Bot, raw_name: str, usage: str) -> SayuPap
         await bot.send(usage)
         return None
     return await _resolve_or_complain(bot, name)
+
+
+async def _resolve_query_account(bot: Bot, raw_name: str) -> SayuPaperAccount | None:
+    """只读查询：空盘名回落默认盘；写了名字则精确/包含匹配。"""
+    acc = await _scope.resolve_account(name=raw_name, fallback_default=True)
+    if acc is None:
+        await bot.send(_scope.not_opened_message(name=raw_name))
+        return None
+    return acc
 
 
 async def _subscribe_current_group(ev: Event, account_id: int) -> None:
@@ -799,47 +811,35 @@ async def send_view(bot: Bot, ev: Event) -> list[str] | None:
     await bot.send(await draw_account_view(acc.id or 0))
 
 
-@sv_papertrade.on_fullmatch(("模拟盘自选", "模拟盘持仓"), block=True)
-@sv_papertrade.on_prefix(
+@sv_papertrade_watchlist.on_fullmatch(("模拟盘自选", "模拟盘持仓"), block=True)
+@sv_papertrade_watchlist.on_prefix(
     ("模拟盘自选", "模拟盘持仓"),
     block=True,
-    to_ai="""查看 AI 模拟盘当前持仓的简化版卡片图（类似「我的自选」）。
+    to_ai="""查看 AI 模拟盘当前持仓的卡片图（类似「我的自选」，含分时折线与图例）。
 
     当用户问「模拟盘自选」「模拟盘持仓」「模拟盘持仓图」「你持仓怎么样发张图」「仓位图」时调用。
-    图上含：账户摘要（现金/总资产/浮盈）、每只持仓的数量/成本/现价、
-    **今日涨跌** 与 **持仓收益率**。
+    图上含：账户摘要（现金/总资产/浮盈/仓位环）、每只持仓的数量/成本/现价、
+    **今日涨跌**、**持仓收益率**、当日分时。
+
+    省略盘名（直接发「模拟盘自选」）或写「默认」= 默认模拟盘。
 
     ⚠️ 这是**简化版**：不含交易流水、决策日志、候选池；完整账本请用
     papertrade_account_query / papertrade_position_list / papertrade_trade_list，
     或命令「模拟盘查看」「模拟盘记录」。
 
     Args:
-        text: 盘名（必填）
+        text: 盘名，可省略；省略或「默认」= 默认模拟盘
     """,
 )
 async def send_holdings(bot: Bot, ev: Event) -> list[str] | None:
-    """用户命令：模拟盘自选 / 模拟盘持仓 → 持仓简图（无需 agent）。"""
+    """用户命令：模拟盘自选 / 模拟盘持仓 → HTML 持仓简图（无需 agent）。"""
     from gsuid_core.logger import logger
-    from gsuid_core.ai_core.trigger_bridge import ai_return
 
     logger.info("[SayuStock] 开始执行[模拟盘自选/模拟盘持仓]")
-    acc = await _require_named_account(bot, ev.text, f"⚠️ 用法：{ev.command} <盘名>")
+    acc = await _resolve_query_account(bot, ev.text or "")
     if acc is None:
         return None
-
-    result = await build_holdings_snapshot_image(acc.id or 0)
-    if isinstance(result, str):
-        return await bot.send(result)
-
-    # 有图必有文字：trigger 桥接 / 多模态模型可读
-    try:
-        ai_return(
-            f"【模拟盘自选·简化版】已出「{acc.name}」持仓图：含今日涨跌与持仓浮盈，"
-            "不含交易流水/决策日志。完整数据见「模拟盘查看」「模拟盘记录」。"
-        )
-    except Exception:
-        pass
-    await bot.send(result)
+    await bot.send(await build_holdings_snapshot_image(acc.id or 0))
 
 
 # 周期 → 起始时间的映射。ytd 单独走 since_calc（= 今年 1/1 至今，不是 now-365d，

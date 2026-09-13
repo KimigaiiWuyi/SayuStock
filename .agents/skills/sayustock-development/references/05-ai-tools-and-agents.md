@@ -124,10 +124,11 @@ ai_entity(KnowledgeBase(id=…, content=PAPERTRADE_GUIDE.md, …))
 | 用户命令 | **`模拟盘自选`** / **`模拟盘持仓`**（`send_holdings`，`to_ai` 桥接，**无需 agent**） |
 | `@ai_tools` | `papertrade_holdings_image`（与命令同一渲染） |
 
-- **简化版**：账户摘要 + 持仓条（**今日涨跌** + **持仓收益率**）；**无**流水 / 决策日志。  
-- **渲染**：`render.build_holdings_snapshot_image` → `draw_holdings_snapshot`；纹理复用 `stock_info/texture2d`。  
-- **有图必有文字**：命令 / 工具内 `ai_return`。  
+- **简化版**：账户摘要（仓位环 + 指标卡）+ 持仓条（**今日涨跌** + **持仓收益率** + 分时）+ 图例；**无**流水 / 决策日志。
+- **渲染**：`render.build_holdings_snapshot_image` → `utils/paper_holdings_html.py`（pytakumi）；纹理复用 `stock_info/texture2d`。
+- **有图必有文字**：`build_holdings_snapshot_image` 出图前 `ai_return`。
 - 完整账本：`模拟盘查看` / `模拟盘记录` 或 JSON 工具。
+- 命令挂 `sv_papertrade_watchlist`（pm=6）；省略盘名 = 默认盘。
 
 ## 5.8 加工具 checklist
 

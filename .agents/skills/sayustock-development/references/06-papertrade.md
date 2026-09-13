@@ -19,7 +19,7 @@
 ```
 stock_papertrade/
 ├── __init__.py          # ai_alias / KB / gate 注册 + import 子模块
-├── sv.py                # sv_papertrade (pm=3) / sv_papertrade_admin (pm=0)
+├── sv.py                # sv_papertrade (pm=3) / watchlist (pm=6) / admin (pm=0)
 ├── commands.py          # 用户命令（建盘/改名/删除/启停/策略/订阅/查询）
 ├── admin.py             # 清盘 + master 压测（dry-run 用独立临时盘）
 ├── permissions.py
@@ -36,7 +36,7 @@ stock_papertrade/
 ├── candidate_pool.py    # 候选池
 ├── trading_calendar.py  # A 股交易日/时段
 ├── proactive.py         # 主动播报等
-├── render.py            # 账户/收益图
+├── render.py            # 账户/排行 PIL；持仓简图走 paper_holdings_html
 ├── ai_tools.py          # @ai_tools 读写
 └── PAPERTRADE_GUIDE.md  # 注入人格的操作指南
 ```
@@ -83,15 +83,16 @@ WebConsole：`SayuPaper*Admin` 注册到管理后台。
 | 模拟盘改名 / 删除 / 停用 / 启用 | 盘生命周期 | 群主/管理 |
 | 模拟盘策略列表 / 模拟盘策略切换 &lt;盘名&gt; &lt;策略id&gt; | 策略管理（切换会重建心跳树） | 列表任何人 / 切换管理 |
 | 模拟盘推送添加｜删除｜列表 | 当前群订阅/退订某盘的成交播报 | 增删管理 / 列表任何人 |
-| 模拟盘列表 / 查看 &lt;盘名&gt; / 持仓 &lt;盘名&gt; / 收益 &lt;盘名&gt; / 记录 &lt;盘名&gt; | 只读查询 | 任何人 |
+| 模拟盘列表 / 查看 &lt;盘名&gt; / 收益 &lt;盘名&gt; / 记录 &lt;盘名&gt; | 只读查询 | 任何人（仍挂管理 SV） |
+| 模拟盘自选 / 持仓 [盘名] | HTML 持仓简图（图例 + 分时）；空盘名=默认盘 | 任何人（``sv_papertrade_watchlist`` pm=6） |
 | 模拟盘排行 / 模拟盘查询 &lt;盘名&gt; | 跨盘排行 / 单盘明细 | 管理 |
 | 模拟盘清盘 &lt;盘名&gt; / 模拟盘对账 / 模拟盘模拟测试 | 运维 | master（pm=0） |
 | 宏观事件 / 宏观事件刷新 | 查看宏观事件表 / 立即联网复核（`stock_macro/commands.py`） | 任何人 / 管理 |
 
 权限 helpers：`permissions.user_pm_level` / `check_admin`。
 
-针对某个盘的用户命令**必须带盘名**（`_require_named_account`），无参只回用法，
-不回落到「默认模拟盘」。列表 / 排行 / 初始化默认盘除外。
+针对某个盘的管理 / 查看 / 收益 / 记录命令**必须带盘名**（`_require_named_account`），
+无参只回用法。``模拟盘自选`` / ``模拟盘持仓`` 例外：空盘名回落默认盘。
 
 ⚠️ **`on_prefix` 不匹配"只有关键词、没有参数"的消息**（`_check_prefix` 显式排除了
 fullmatch）。带参命令若也想支持裸发（给用法提示），必须**同时**叠一个 `on_fullmatch`；

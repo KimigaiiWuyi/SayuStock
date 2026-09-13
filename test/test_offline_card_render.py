@@ -22,6 +22,13 @@ from SayuStock.utils.all_weather_html import (
     build_all_weather_html,
     all_weather_canvas_size,
 )
+from SayuStock.utils.paper_holdings_html import (
+    SPARK_H as PH_SPARK_H,
+    SPARK_W as PH_SPARK_W,
+    HoldingBarRow,
+    build_paper_holdings_html,
+    paper_holdings_canvas_size,
+)
 
 _TEST_OUTPUT = Path(__file__).resolve().parent.parent / "test_output"
 _WATCH = [
@@ -260,3 +267,70 @@ def test_offline_my_stock_png() -> None:
     (_TEST_OUTPUT / "my_stock_spark.png").write_bytes(png_spark)
     assert png_base[:8] == b"\x89PNG\r\n\x1a\n"
     assert png_spark[:8] == b"\x89PNG\r\n\x1a\n"
+
+
+def test_offline_paper_holdings_png() -> None:
+    data = _skip_no_cache()
+    zs = load_board_items(data, "主要指数")
+    wanted = ["上证指数", "深证成指", "中证A500", "中证2000"]
+    index_items: list[DisplayItem] = []
+    for name in wanted:
+        for item in zs:
+            if name != item.name.split("(")[0].strip() and name not in item.name:
+                continue
+            index_items.append(item)
+            break
+
+    rows: list[HoldingBarRow] = []
+    sparks: dict[str, str] = {}
+    cash = 718885.0
+    for secid in _WATCH:
+        series = load_series(data, secid)
+        if series is None or series.quote is None:
+            continue
+        q = series.quote
+        price = float(q.price)
+        day = float(q.change_pct) if q.change_pct is not None else 0.0
+        qty = 200
+        cost = price / (1.0 + day / 100.0) if day != -100 else price
+        mv = price * qty
+        unreal = (price - cost) * qty
+        unreal_pct = (unreal / (cost * qty) * 100.0) if cost else 0.0
+        code = q.symbol.code or secid
+        rows.append(
+            HoldingBarRow(
+                code=code,
+                name=q.symbol.name or code,
+                qty=qty,
+                avg_cost=round(cost, 4),
+                current_price=round(price, 4),
+                day_change_pct=day,
+                unrealized_pnl=round(unreal, 2),
+                unrealized_pnl_pct=round(unreal_pct, 4),
+                market_value=round(mv, 2),
+            )
+        )
+        svg = sparkline_from_series(series, width=PH_SPARK_W, height=PH_SPARK_H)
+        if svg:
+            sparks[code] = svg
+    if len(rows) < 4:
+        pytest.skip("持仓缓存不足")
+
+    html = build_paper_holdings_html(
+        account_name="默认模拟盘",
+        strategy_id="multi_factor",
+        enabled=True,
+        cash=cash,
+        initial_cash=1_000_000.0,
+        holdings=rows,
+        index_items=index_items,
+        title_num="5",
+        sparklines=sparks,
+    )
+    assert "图例" in html
+    assert 'class="donut-svg"' in html
+    width, height = paper_holdings_canvas_size(len(rows))
+    png = _render(html, width, height)
+    _TEST_OUTPUT.mkdir(parents=True, exist_ok=True)
+    (_TEST_OUTPUT / "paper_holdings.png").write_bytes(png)
+    assert png[:8] == b"\x89PNG\r\n\x1a\n"

@@ -110,6 +110,7 @@ jobs:
         # （reportAny / reportUnusedParameter 等）是 basedpyright 独有规则，
         # 官方 pyright 会当成 unknown diagnostic rule 直接报错。
         # 版本与本地开发环境保持一致。
+        # 不要装 torch：Kronos 预测可选，draw_ai_map 惰性 import 已忽略缺包。
         run: |
           grep -v '^-e' gsuid_core/requirements.txt > /tmp/gsuid_core_reqs.txt
           pip install -r /tmp/gsuid_core_reqs.txt
