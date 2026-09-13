@@ -192,6 +192,10 @@ SayuStock 插件里的"模拟盘"长期能力：
     主人 @ 问"为什么买/卖/没动 XX"时走这个）
   - `papertrade_watchlist_list` — 群友关注表（决策 agent 也用作候选源）
 - 通用辅助：`stock_financials`（财报 + 行业类型）/ `stock_indicators`（MA/MACD/RSI/BOLL 等技术指标）/ `stock_is_trading_day`（交易日 + 交易时段）
+- 宏观事件表（全局一张，不分盘）：`macro_event_list`（进行中 / 已定论的关税战、地缘、央行、油价类大事 +
+  最新进展 + 操作含义）/ `macro_event_upsert`（登记或更新进展、标记盖棺定论）。主人问「现在有什么大事 /
+  关税战怎么样了 / 为什么最近不买」先查它，再看 `papertrade_decision_list` 里 reason 开头那句
+  「宏观:{档位}|{相}|{依据}」。
 
 **仅子代理可见**（category="default" + visible_when）：
 - 写操作：`papertrade_decision_insert`（写决策日志）/ `papertrade_trade_insert`（写流水 + 改现金 + **随成交原子改持仓** + 累计 principal）/ `papertrade_position_upsert`（**只刷新已有持仓报价**，不能建仓/改股数）/ `papertrade_match_order`（撮合计算 fee，不写库）
@@ -200,6 +204,11 @@ SayuStock 插件里的"模拟盘"长期能力：
 的 buy 会先过**该盘策略的 `gate_buy`**：缺入场价/止损价、评分不够、止损太宽、
 量比/换手率不满足……**一律拒绝落库**并返回具体原因。收到拒绝就按原因补数据或改 hold，
 **不要**换个说法重试同一笔——闸是按数值判的，不看措辞。
+
+⚠️ **宏观硬闸（2026-09 加，多因子盘）**：buy 的快照 JSON 顶层还必须有 `macro_regime`
+（进攻 / 中性 / 防御）和 `macro_note`（≥8 字依据）；宏观事件表里有严重度 ≥4 的 risk_off
+进行中事件时，`macro_regime` 不许写「进攻」。这是为了让决策先看宏观再看个股——
+主人问「为什么最近只买高股息 / 一直不买」时，答案通常就在 `macro_event_list` 里。
 
 ⚠️ **成交价规则（2026-07-06）**：`papertrade_match_order` **永远按撮合此刻的实时
 行情价成交**——传入的 `price` 只是参考价，可不传；候选池里记的入池价 / 指标快照
@@ -244,7 +253,8 @@ SayuStock 插件里的"模拟盘"长期能力：
 ## 六、当用户问"模拟盘能帮我赚钱吗？"
 
 回答模板：
-> "不能保证赚钱哦~ 这是模拟盘，AI 用技术面 + 基本面 + 舆情 + 风控综合判断，长期可能跑赢指数也可能跑输。
+> "不能保证赚钱哦~ 这是模拟盘，AI 先看宏观（钱多钱少 / 成长价值相 / 有什么大事）定仓位档位，
+> 再用技术面 + 基本面 + 舆情 + 风控选票，长期可能跑赢指数也可能跑输。
 > 真实投资请自己判断，本柚不提供投资建议。"
 
 ## 七、初始化时的处理顺序
@@ -268,16 +278,17 @@ SayuStock 插件里的"模拟盘"长期能力：
 
 | 情形 | 是否推群 | 谁推 / 推什么 |
 |---|---|---|
-| 真成交 buy | ✅ 冒泡 | **系统自动**在 `papertrade_trade_insert` 成功那一刻推一行 `🟢 买入 名称(代码) N 股 @¥价`（多笔多行） |
-| 真成交 sell | ✅ 冒泡 | **系统自动**推一行 `🔴 卖出 …（±¥已实现盈亏）` |
+| 真成交 buy | ✅ 冒泡 | **系统自动**在 `papertrade_trade_insert` 成功那一刻推 `🟢 买入 名称(代码) N 股 @¥价`，下一行 `原因：…`（来自本笔 `reason`） |
+| 真成交 sell | ✅ 冒泡 | **系统自动**推 `🔴 卖出 …（±¥已实现盈亏）` + 一行原因 |
 | hold / 无成交 | ❌ 静默 | 群里零打扰；决策照常落库 |
 | 决策推理 / 候选池轮换 / 账户仓位汇总 | ❌ **永不主动播报** | 只落库；主人 @ 早柚问时，早柚用 `papertrade_decision_list` / `papertrade_trade_list` 读库回答 |
 
 机制：
 
 1. **成交冒泡是系统级确定性行为**：`papertrade_trade_insert` 一成功就调
-   `ai_tools._broadcast_fill` → `emit_proactive_message` 推那一行冒泡，buy/sell 都推、
-   **永不遗漏、也永不重复**，且**不依赖决策代理写什么**——保证"全部买卖都在群里公布"。
+   `broadcast.broadcast_fill` → `emit_proactive_message` 推成交行 + 一行原因，buy/sell
+   都推、**永不遗漏、也永不重复**。原因来自本笔 `reason`（空则只推成交行），不依赖
+   决策代理最终输出——保证"全部买卖都在群里公布"。
 2. **决策代理最终永远只输出 `<<NO_BROADCAST>>`**：框架 kanban `_run_one_task_node` +
    `_strip_no_broadcast` 据此**跳过 relay/notify**（人格转译推群），所以决策推理 / 候选池
    汇总 / 全 hold 简报**绝不会**被推到群里。init-time 立即决策同理——

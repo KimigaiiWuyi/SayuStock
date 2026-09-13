@@ -18,7 +18,8 @@ from SayuStock.stock_papertrade.strategies.volume_extremum import (  # noqa: E40
 MULTI = "multi_factor"
 VOLUME = "volume_extremum"
 
-_GOOD_MULTI = {"plan_stop_pct": -0.08, "roe": 15.2}
+_MACRO_OK = {"macro_regime": "中性", "macro_note": "油价回落但关税战仍在进行"}
+_GOOD_MULTI = {"plan_stop_pct": -0.08, "roe": 15.2, **_MACRO_OK}
 _GOOD_VOLUME_BUY = {
     "plan_stop_pct": -0.05,
     "rel_volume": 2.4,
@@ -108,7 +109,10 @@ def test_volume_prompt_says_functions_not_agent():
 
 def test_multi_factor_prompt_still_requires_stop():
     strategy, params = reg.resolve_with_params(MULTI)
-    assert "plan_stop_pct" in strategy.prompt_block(params)
+    block = strategy.prompt_block(params)
+    assert "plan_stop_pct" in block
+    assert "macro_regime" in block and "macro_event_list" in block
+    assert "防御档" in block and "进攻档" in block
 
 
 def test_strategies_use_different_research_tools():
@@ -120,6 +124,11 @@ def test_strategies_use_different_research_tools():
     assert "stock_financials" not in vol.decision_tools()
     assert "papertrade_trade_insert" in multi.decision_tools()
     assert "papertrade_trade_insert" in vol.decision_tools()
+    # 宏观事件表所有盘都能读；登记 / 更新只给多因子盘
+    assert "macro_event_list" in multi.decision_tools()
+    assert "macro_event_list" in vol.decision_tools()
+    assert "macro_event_upsert" in multi.decision_tools()
+    assert "macro_event_upsert" not in vol.decision_tools()
 
 
 def test_kanban_task_mentions_strategy_tools():
@@ -193,11 +202,35 @@ def test_month_bottom_then_daily_confirms():
     assert full.close_percentile is not None and full.close_percentile <= 0.15
 
 
-def test_multi_factor_only_gates_plan_stop():
-    assert _gate(MULTI, {"plan_stop_pct": -0.08}, score=0.01) == ""
-    assert _gate(MULTI, {"stop_pct": -0.08}, score=0.01) == ""
-    assert _gate(MULTI, {"stop_price": 780.15}, score=0.01) == ""
-    assert _gate(MULTI, {"roe": 1.0}) != ""
+def test_multi_factor_gates_plan_stop_and_macro():
+    assert _gate(MULTI, {"plan_stop_pct": -0.08, **_MACRO_OK}, score=0.01) == ""
+    assert _gate(MULTI, {"stop_pct": -0.08, **_MACRO_OK}, score=0.01) == ""
+    assert _gate(MULTI, {"stop_price": 780.15, **_MACRO_OK}, score=0.01) == ""
+    # 止损仍是第一道闸
+    assert "plan_stop" in _gate(MULTI, {"roe": 1.0, **_MACRO_OK})
+    # 有止损没宏观档位 → 拒，且理由告诉模型该填什么
+    no_regime = _gate(MULTI, {"plan_stop_pct": -0.08})
+    assert "macro_regime" in no_regime and "macro_event_list" in no_regime
+    # 档位有了但依据太短 → 拒
+    short_note = _gate(MULTI, {"plan_stop_pct": -0.08, "macro_regime": "进攻", "macro_note": "涨"})
+    assert "macro_note" in short_note
+    # 同义写法可被归一
+    assert _gate(MULTI, {"plan_stop_pct": -0.08, "macro_regime": "risk_off", "macro_note": "油价冲高美债飙升"}) == ""
+    # 卖出不卡宏观
+    assert _gate(MULTI, {"rsi": 90}, side="sell") == ""
+
+
+def test_multi_factor_rejects_offense_when_severe_risk_off_open():
+    from SayuStock.stock_papertrade.strategy import MACRO_SEVERE_FLAG_KEY, MACRO_SEVERE_TITLES_KEY
+
+    severe = {MACRO_SEVERE_FLAG_KEY: True, MACRO_SEVERE_TITLES_KEY: "中美关税战(sev4)"}
+    base = {"plan_stop_pct": -0.08, "macro_note": "关税战进行中但个股超跌"}
+    rejected = _gate(MULTI, {**base, **severe, "macro_regime": "进攻"})
+    assert "中美关税战" in rejected and "进攻" in rejected
+    assert _gate(MULTI, {**base, **severe, "macro_regime": "防御"}) == ""
+    assert _gate(MULTI, {**base, **severe, "macro_regime": "中性"}) == ""
+    # 表里没有高危事件时进攻放行
+    assert _gate(MULTI, {**base, MACRO_SEVERE_FLAG_KEY: False, "macro_regime": "进攻"}) == ""
 
 
 def test_volume_buy_uses_structure_fields():

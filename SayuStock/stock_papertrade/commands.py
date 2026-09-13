@@ -262,9 +262,9 @@ async def _kick_immediate_decision(ev: Event, account: SayuPaperAccount) -> None
     """fire-and-forget 立即触发一次 ``papertrade_decision_agent``。
 
     播报口径：**成交播报完全交给 ``papertrade_trade_insert`` 工具**在成交那一刻
-    确定性推一行简洁冒泡（见 ``broadcast.broadcast_fill``）；决策代理最终只输出
-    ``<<NO_BROADCAST>>``、推理只落库。所以这里 await 完 capagent 即结束——不再拍
-    快照 / 算 Δ / 拼"操盘播报"结构化文本推群（避免把决策理由 / 账户汇总泄漏到群里）。
+    确定性推成交行 + 一行原因（见 ``broadcast.broadcast_fill``）；决策代理最终只
+    输出 ``<<NO_BROADCAST>>``、完整推理只落库。所以这里 await 完 capagent 即结束
+    ——不再拍快照 / 算 Δ / 拼账户汇总推群。
     """
     from gsuid_core.logger import logger
 

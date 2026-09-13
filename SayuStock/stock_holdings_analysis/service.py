@@ -55,8 +55,9 @@ def build_analysis_task(symbols: List[str], *, user_id: str, day: date) -> str:
     lines.extend(
         [
             "",
-            "必须覆盖维度：技术面 / 新闻与事件 / 情绪面 / 资金面 / 基本面；",
-            "给出每只综合评级与建议，以及组合层面的简要结论。",
+            "先做宏观定调：macro_event_list(status=open) + 快讯 + 大盘 → 宏观三问 → 档位/相/依据；",
+            "再覆盖维度：技术面 / 新闻与事件 / 情绪面 / 资金面 / 基本面；",
+            "每只标注宏观顺风或逆风，给出综合评级与建议，以及组合层面（风格暴露是否匹配档位）的简要结论。",
             "榜单与增速/ROE 仅辅助，禁止单指标定论。",
             "最终消息只返回 Markdown 正文，不要过程句，不要出图。",
         ]
@@ -148,7 +149,7 @@ async def run_holdings_analysis_command(bot: Bot, ev: Event) -> None:
 
     success = False
     try:
-        prefix_msgs: list[str] = ["⏳ 持仓分析进行中（技术/新闻/情绪/资金/基本面），请稍候…"]
+        prefix_msgs: list[str] = ["⏳ 持仓分析进行中（宏观定调 + 技术/新闻/情绪/资金/基本面），请稍候…"]
         if resolved.cap_warning:
             prefix_msgs.append(f"ℹ️ {resolved.cap_warning}")
         prefix_msgs.append(

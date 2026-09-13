@@ -30,6 +30,7 @@ Core 的 `trigger_bridge` 会把触发器包装成工具；执行时用 `MockBot
 |------|------------|
 | `stock_ai_func/ai_tools.py` | 大盘概览、板块热力、新闻、VIX、涨跌幅、加密、搜索… |
 | `stock_papertrade/ai_tools.py` | `capability_domain="AI模拟盘"` 账户/持仓/持仓简图/交易/指标… |
+| `stock_macro/ai_tools.py` | `capability_domain="宏观事件"`：`macro_event_list` / `macro_event_refresh_due` / `macro_event_upsert`（全局事件表，不分盘） |
 
 ```python
 from gsuid_core.ai_core.register import ai_tools
@@ -74,8 +75,18 @@ async def get_vix_index(ctx: RunContext[ToolContext], …) -> str:
 | `papertrade_pool_refresh_agent` | 候选池轮换 |
 | `papertrade_snapshot_agent` | 收盘净值快照 |
 | `papertrade_reporter_agent` | 月度等复盘 |
+| `macro_event_agent`（`stock_macro/agent.py`） | 定时 / 手动联网复核宏观事件表、登记新大事；不下单 |
 
 决策代理最终输出纪律：**用户侧播报由系统冒泡**；agent 侧常以 `<<NO_BROADCAST>>` 收尾（以源码为准）。
+
+### 宏观定调（三份代理共用）
+
+`stock_macro/prompts.py` 是唯一来源：`MACRO_QUICK_CHECK`（三问）/ `MACRO_POSITION_RULES`（三档）/
+`MACRO_CHEATSHEET`（12 条结论）/ `MACRO_REASON_TEMPLATE`（reason 写法 + buy 必填字段）。
+`PAPERTRADE_DECISION_PROMPT`、`STOCK_AGENT_PROMPT`、`HOLDINGS_ANALYSIS_PROMPT` 都拼它，改规则只改这一处。
+完整框架在运行时 Skill `SayuStock/skills/macro-regime-analysis/`（`ai_skill` 注册，模型可 `load_skill`），
+其 `references/*.md` 由 `stock_macro/knowledge.py` 按 `## ` 小节切成 `KnowledgeBase` 实体（一节一向量，
+避开本地嵌入 512 token 截断）经 `ai_entity` 注册，`search_cognition("宏观定调 …")` 可召回。
 
 ## 5.5 实体与别名
 

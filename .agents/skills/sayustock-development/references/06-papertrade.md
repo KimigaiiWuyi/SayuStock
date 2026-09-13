@@ -55,6 +55,7 @@ stock_papertrade/
 | `SayuPaperAgentPool` | 候选池（`account_id`） |
 | `SayuPaperWatchlist` | 观察列表（`account_id`） |
 | `SayuPaperBroadcastTarget` | 播报订阅：`account_id` × `group_id`，**必须含 `ws_bot_id` / `bot_self_id`** |
+| `SayuMacroEvent`（`macro_models.py`） | **全局一张**宏观重大事件：`slug` 唯一、`status` open/settled、`severity` 1~5、`direction`、`result`、`last_checked_at`；不按 `account_id` 分区 |
 
 子表里保留的 `group_id` / `bot_id` **只是建盘原群的排障字段**，不参与查询路由。
 
@@ -85,6 +86,7 @@ WebConsole：`SayuPaper*Admin` 注册到管理后台。
 | 模拟盘列表 / 查看 &lt;盘名&gt; / 持仓 &lt;盘名&gt; / 收益 &lt;盘名&gt; / 记录 &lt;盘名&gt; | 只读查询 | 任何人 |
 | 模拟盘排行 / 模拟盘查询 &lt;盘名&gt; | 跨盘排行 / 单盘明细 | 管理 |
 | 模拟盘清盘 &lt;盘名&gt; / 模拟盘对账 / 模拟盘模拟测试 | 运维 | master（pm=0） |
+| 宏观事件 / 宏观事件刷新 | 查看宏观事件表 / 立即联网复核（`stock_macro/commands.py`） | 任何人 / 管理 |
 
 权限 helpers：`permissions.user_pm_level` / `check_admin`。
 
@@ -102,19 +104,33 @@ fullmatch）。带参命令若也想支持裸发（给用法提示），必须**
 
 - `trading_calendar.py`：`is_a_share_trading_day` / `is_trading_time` / `trading_day_summary`  
 - `__init__.py` 注册 **recurring gate**：非交易日不进 decision/pool/snapshot  
-- 决策节奏约 30 分钟（交易时段内）；快照约 15:35；月报复盘约每月 1 日（以代码/配置为准）
+- 决策节奏写在建树时的 `recurring_trigger` 快照（现状 `cron:0,30 9-11,13-15 * * 1-5`）；
+  `SayuPaperAccount.frequency_minutes` **不驱动调度**。改代码里的 cron **不会**自动改老盘，
+  必须重建心跳树（换策略 / 启用 / 初始化补挂）才换新间隔。
 
 ## 6.6 决策与撮合流水线
 
 ```
-候选池 → 行情(quote_service / Port)
+宏观定档（macro_event_list + 宏观三问 → 进攻/中性/防御，决定仓位上限）
+      → 候选池 → 行情(quote_service / Port)
       → 指标(indicators)
       → 财报/新闻(可选工具)
-      → strategy 评分 (-1~+1) + 风控门
+      → strategy 评分 (-1~+1) + 风控门 + **宏观硬闸**（多因子 buy 须带 macro_regime/macro_note；
+        表内有 severity≥4 risk_off 事件时不得标进攻）
       → matcher / trade_executor
       → db **同一 session** 写流水+现金+持仓（禁止 LLM 并行 upsert 改股数）
       → 系统侧成交冒泡（非 agent 闲聊；流水失败则不播报、不建仓）
 ```
+
+宏观层的代码在 `stock_macro/`（不在本包）：`SayuMacroEvent` 全局表 + `macro_event_*` 工具 +
+`prompts.py`（三问 / 三档 / 速查表，三份代理 prompt 共用）+ APScheduler 定时联网复核
+（08:40 / 12:40 / 20:40，`macro_event_agent`）。`ai_tools._gate_entry` 在 buy 侧把
+`MacroEventRepo.list_open_severe()` 的结果注入 `_macro_severe_*` 内部键，
+`strategy.macro_gate_reason` 据此拒掉与表矛盾的「进攻」。
+
+**生效面**：`PAPERTRADE_DECISION_PROMPT` 与 `decision_tools()` 是 AgentNode 注册期常量，
+重启即对所有老盘生效；`prompt_block` / `research_phases` 是建树快照，只有重建心跳树
+（换策略 / 启用 / 初始化补挂）才更新。改宏观规则优先改 `stock_macro/prompts.py`。
 
 风控参数（单票仓位、日交易次数、止损、回撤熔断、现金缓冲）在 `strategy.py` 按模式
 （平衡/激进/保守）声明；**用户命令不应暴露改参入口**（产品设计）。

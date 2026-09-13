@@ -5,6 +5,7 @@
 - :func:`decide_action`     决策树：基于 score + 持仓 + 模式 → 买/卖/持
 - :func:`apply_risk_check`  风控检查（单日交易次数 / 回撤熔断等）
 - :func:`indicators_have_entry_stop`  buy 决策 indicators 是否含止损计划
+- :func:`macro_gate_reason`  buy 的宏观硬闸（macro_regime / macro_note / 高危事件不许进攻）
 - :func:`parse_llm_json_object` / :func:`normalize_plan_indicators`  止损 JSON
 - :data:`MODE_RULES`         三种风控模式的规则矩阵
 - :data:`MODE_THRESHOLDS`    各模式对应的 score 门槛
@@ -100,6 +101,60 @@ def indicators_have_entry_stop(indicators: dict[str, object]) -> bool:
     if price is not None and price > 0:
         return True
     return False
+
+
+# 宏观事件硬闸注入的内部键（``ai_tools._gate_entry`` 写入，LLM 不该自己填）
+MACRO_SEVERE_FLAG_KEY: str = "_macro_severe_risk_off"
+MACRO_SEVERE_TITLES_KEY: str = "_macro_severe_titles"
+MACRO_NOTE_MIN_LEN: int = 8
+
+
+def macro_regime_of(indicators: Mapping[str, object]) -> str:
+    """读 buy 快照里的 ``macro_regime``，归一到 进攻/中性/防御；缺失或不合法返回 ``""``。"""
+    from ..stock_macro.prompts import normalize_macro_regime
+
+    ind = normalize_plan_indicators(indicators)
+    return normalize_macro_regime(ind.get("macro_regime"))
+
+
+def macro_note_of(indicators: Mapping[str, object]) -> str:
+    ind = normalize_plan_indicators(indicators)
+    raw = ind.get("macro_note")
+    return raw.strip() if isinstance(raw, str) else ""
+
+
+def macro_gate_reason(indicators: Mapping[str, object]) -> str:
+    """多因子 buy 的宏观硬闸；放行返回 ``""``。
+
+    三条：``macro_regime`` 必须是三档之一；``macro_note`` 至少 8 字；表里有高危
+    risk_off 事件进行中时不得标「进攻」。理由都写成「缺什么、该填什么」。
+    """
+    from ..stock_macro.prompts import MACRO_REGIME_VALUES, MACRO_REGIME_OFFENSE
+
+    regime = macro_regime_of(indicators)
+    if not regime:
+        return (
+            "⚠️ buy 须在 indicators/snapshot JSON 顶层写 macro_regime（只能是 "
+            f"{'/'.join(MACRO_REGIME_VALUES)} 之一）：先 macro_event_list + 宏观三问定档，"
+            "再补字段重试；已拒绝落库"
+        )
+    note = macro_note_of(indicators)
+    if len(note) < MACRO_NOTE_MIN_LEN:
+        return (
+            f"⚠️ buy 须在 indicators/snapshot JSON 顶层写 macro_note（≥{MACRO_NOTE_MIN_LEN} 字的"
+            "宏观依据，如「油价站上100且关税战open」）；已拒绝落库，请补全后重试"
+        )
+    ind = normalize_plan_indicators(indicators)
+    severe_raw = ind.get(MACRO_SEVERE_FLAG_KEY)
+    severe = severe_raw if isinstance(severe_raw, bool) else False
+    if severe and regime == MACRO_REGIME_OFFENSE:
+        titles_raw = ind.get(MACRO_SEVERE_TITLES_KEY)
+        titles = titles_raw if isinstance(titles_raw, str) and titles_raw else "高危事件"
+        return (
+            f"⚠️ 宏观事件表有进行中的高危 risk_off 事件（{titles}），buy 不得标 macro_regime=进攻；"
+            "请改为 中性 或 防御 并按三档仓位缩小买入数量后重试；已拒绝落库"
+        )
+    return ""
 
 
 # ============================================================

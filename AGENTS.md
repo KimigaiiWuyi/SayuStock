@@ -29,15 +29,16 @@
 ├── doc/  docs/  examples/  plans/
 ├── .agents/skills/sayustock-development/
 └── SayuStock/
-    ├── __init__.py                     # Plugins + 显式 import 四包
+    ├── __init__.py                     # Plugins + 显式 import 五包
     ├── __full__.py / version.py
     ├── stock_*/                        # 功能子包（下表）
+    ├── skills/                         # 运行时 AI Skill（ai_skill 注册；非 .agents/skills 开发文档）
     ├── utils/                          # market / render_data / indicators / db
     ├── Kronos/                         # vendored，pyright exclude
     └── tools/gen_A.py
 ```
 
-内层 `__init__.py` 显式 import：`stock_agent`、`stock_analysis`、`stock_papertrade`、`stock_holdings_analysis`。
+内层 `__init__.py` 显式 import：`stock_agent`、`stock_macro`、`stock_analysis`、`stock_papertrade`、`stock_holdings_analysis`。
 
 | 子包 | 职责 |
 |------|------|
@@ -51,6 +52,7 @@
 | `stock_ai_func/` | `@ai_tools` |
 | `stock_ai/` | Kronos 预测出图 |
 | `stock_agent/` | `stock_agent` AgentNode |
+| `stock_macro/` | 宏观事件表 `SayuMacroEvent` + 宏观三问/三档提示词 + 知识库/技能注册 + 定时联网复核 |
 | `stock_papertrade/` | 模拟盘 SQLModel |
 | `stock_news/` / `_help/` / `_config/` / `_status/` | 新闻、帮助、配置、状态 |
 | `utils/market/` | MarketDataPort + eastmoney / okx / vix |
@@ -106,6 +108,8 @@ basedpyright --pythonpath <Core venv>/python
 - `ai_return` / `_emit_ai_text` 在缓存命中 return **之前**。
 - 指标单源 `utils/indicators.py`；渲染计算单源 `utils/render_data.py`。
 - 模拟盘只写 SQLModel，禁止 `record_*` / `state_set` 第二套账本。
+- 宏观提示词单源 `stock_macro/prompts.py`（决策 / 持仓 / 研究代理共用）；宏观事件表全局一张，不按盘分区。
+- 决策代理 prompt / 工具清单是注册期常量（重启对所有老盘生效）；`prompt_block` 是建树快照（重建心跳树才更新）。
 - 新 `@sv` / `@ai_tools` 必须在包 `__init__.py` 显式 import。
 - `@ai_tools` docstring 紧贴 `def`。
 

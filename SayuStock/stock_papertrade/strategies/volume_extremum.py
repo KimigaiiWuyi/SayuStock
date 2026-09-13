@@ -71,6 +71,8 @@ class VolumeExtremumStrategy(Strategy):
             "【量能极值额外纪律】顶底/放量由系统用月K+日K函数判定，"
             "不要自己编分位和量比；可用 papertrade_volume_scan 查看结果；"
             "不要为交差去扫财报/榜单。止损卖必须 snapshot.stop_triggered=true。"
+            "宏观定档（Phase 3）仍要做，但本策略硬闸不卡 macro_regime：档位只决定"
+            "买入数量（防御档单票 ≤5%、进攻档 ≤15%），结构不满足照样 hold。"
         )
 
     def research_phases(self) -> str:

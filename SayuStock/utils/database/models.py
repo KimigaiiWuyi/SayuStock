@@ -10,6 +10,9 @@ from gsuid_core.utils.database.base_models import Bind, Type, T_Bind
 from . import papertrade_migration  # noqa: F401,E402
 from ..utils import convert_list
 
+# 宏观重大事件表（全局一张；新表由 create_all 自动建，老库零迁移）
+from .macro_models import SayuMacroEvent, SayuMacroEventAdmin  # noqa: F401
+
 # 导入 模拟盘 8 张表 + WebConsole 注册
 from .papertrade_models import (  # noqa: F401
     SayuPaperTrade,

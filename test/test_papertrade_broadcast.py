@@ -210,6 +210,55 @@ def test_fill_line_falls_back_to_code_when_name_missing():
     assert "600519" in line
 
 
+def test_fill_line_appends_one_line_reason():
+    line = bc.format_fill_line(
+        account_name="放量盘",
+        side="buy",
+        stock_code="600519",
+        stock_name="贵州茅台",
+        qty=100,
+        price=1600.0,
+        realized_pnl=0.0,
+        reason="宏观中性，估值回落且量能确认，止损 -8%。",
+    )
+    assert line.startswith("[放量盘] 🟢 买入")
+    assert "\n原因：宏观中性，估值回落且量能确认，止损 -8%。" in line
+
+
+def test_fill_line_omits_reason_when_blank():
+    line = bc.format_fill_line(
+        account_name="放量盘",
+        side="buy",
+        stock_code="600519",
+        stock_name="贵州茅台",
+        qty=100,
+        price=1600.0,
+        realized_pnl=0.0,
+        reason="  \n  ",
+    )
+    assert "原因" not in line
+    assert "\n" not in line
+
+
+def test_fill_line_collapses_and_truncates_reason():
+    raw = "第一行\n第二行  " + ("很长" * 80)
+    line = bc.format_fill_line(
+        account_name="放量盘",
+        side="sell",
+        stock_code="600519",
+        stock_name="贵州茅台",
+        qty=100,
+        price=1700.0,
+        realized_pnl=9800.0,
+        reason=raw,
+    )
+    _, note = line.split("\n原因：", 1)
+    assert "\n" not in note
+    assert note.startswith("第一行 第二行")
+    assert note.endswith("…")
+    assert len(note) == bc.REASON_MAX_CHARS
+
+
 # ============================================================
 # 4) broadcast_fill
 # ============================================================
@@ -227,10 +276,12 @@ def test_broadcast_fill_pushes_a_line_per_group():
             qty=100,
             price=1600.0,
             realized_pnl=0.0,
+            reason="宏观中性，估值回落。",
         ),
     )
     assert sent == 2
     assert all("[放量盘]" in c["message"] for c in emitter.calls)
+    assert all("原因：宏观中性，估值回落。" in c["message"] for c in emitter.calls)
     # 成交播报是关键信息，不能被"最近有心跳"抑制掉
     assert all(c["suppress"] is False for c in emitter.calls)
     assert all("papertrade_fill:放量盘:600519:buy" == c["trigger_reason"] for c in emitter.calls)

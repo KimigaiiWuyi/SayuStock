@@ -34,12 +34,25 @@ from ..utils.database.papertrade_models import (
 
 ProactiveSource = Literal["heartbeat", "scheduled_task", "kanban", "tool"]
 
+# 群聊冒泡只带一行原因；超长截断，避免模型把整段 reasoning 灌进群。
+REASON_MAX_CHARS: int = 120
+
 __all__ = [
+    "REASON_MAX_CHARS",
     "event_for_target",
     "broadcast_text",
     "broadcast_fill",
     "format_fill_line",
 ]
+
+
+def _one_line_reason(reason: str) -> str:
+    text = " ".join(reason.split())
+    if not text:
+        return ""
+    if len(text) <= REASON_MAX_CHARS:
+        return text
+    return f"{text[: REASON_MAX_CHARS - 1]}…"
 
 
 def event_for_target(target: SayuPaperBroadcastTarget) -> Event:
@@ -196,18 +209,25 @@ def format_fill_line(
     price: float,
     realized_pnl: float,
     show_account: bool = True,
+    reason: str = "",
 ) -> str:
     """成交冒泡文案。
 
     多盘之后**必须带盘名前缀**：同一个群可能同时订阅 2 个盘的播报，不带前缀
     用户看到两条"🟢 买入 XX"根本分不清是哪个策略下的手。
+    有 ``reason`` 时另起一行「原因：…」，空串则只推成交行。
     """
     name: str = stock_name or stock_code
     prefix: str = f"[{account_name}] " if show_account and account_name else ""
     if side == "sell":
         sign: str = "+" if realized_pnl >= 0 else "-"
-        return f"{prefix}🔴 卖出 {name}({stock_code}) {qty} 股 @¥{price:.2f}（{sign}¥{abs(realized_pnl):,.0f}）"
-    return f"{prefix}🟢 买入 {name}({stock_code}) {qty} 股 @¥{price:.2f}"
+        head = f"{prefix}🔴 卖出 {name}({stock_code}) {qty} 股 @¥{price:.2f}（{sign}¥{abs(realized_pnl):,.0f}）"
+    else:
+        head = f"{prefix}🟢 买入 {name}({stock_code}) {qty} 股 @¥{price:.2f}"
+    note = _one_line_reason(reason)
+    if not note:
+        return head
+    return f"{head}\n原因：{note}"
 
 
 async def broadcast_fill(
@@ -219,8 +239,9 @@ async def broadcast_fill(
     qty: int,
     price: float,
     realized_pnl: float,
+    reason: str = "",
 ) -> int:
-    """成交后的确定性播报（buy/sell 都推，一行冒泡）。
+    """成交后的确定性播报（buy/sell 都推：成交行 + 可选原因行）。
 
     这是**系统级播报**，不依赖决策代理的最终输出（代理最终永远只出
     ``<<NO_BROADCAST>>``）。每次 ``papertrade_trade_insert`` 成功即调一次。
@@ -235,6 +256,7 @@ async def broadcast_fill(
         qty=qty,
         price=price,
         realized_pnl=realized_pnl,
+        reason=reason,
     )
     return await broadcast_text(
         account.id,

@@ -40,7 +40,12 @@ from gsuid_core.ai_core.register import ai_tools
 from gsuid_core.ai_core.planning.runtime import PlanRunContext, get_plan_context
 
 from . import db, broadcast, strategies, account_scope
-from .strategy import parse_llm_json_object, normalize_plan_indicators
+from .strategy import (
+    MACRO_SEVERE_FLAG_KEY,
+    MACRO_SEVERE_TITLES_KEY,
+    parse_llm_json_object,
+    normalize_plan_indicators,
+)
 from .indicators import compute_indicators
 from ..utils.market import KlinePeriod, get_market, is_market_error
 from .quote_service import quote_service
@@ -260,7 +265,11 @@ async def _gate_entry(
     source: str,
     side: str,
 ) -> str:
-    """落库硬闸。量能盘的顶底/放量在这里用日 K 函数算，覆盖 Agent 传入值。"""
+    """落库硬闸。量能盘的顶底/放量在这里用日 K 函数算，覆盖 Agent 传入值。
+
+    buy 侧再把宏观事件表里「进行中 + risk_off + 高危」的事实注入 indicators
+    （``_macro_severe_*`` 内部键），让 ``macro_gate_reason`` 能拒掉与表矛盾的「进攻」。
+    """
     from .strategies.base import _is_stop_triggered
     from .strategies.volume_extremum import VolumeExtremumStrategy, load_structure
 
@@ -269,6 +278,13 @@ async def _gate_entry(
     # 止损卖必须先放行：load_structure 失败会短路，把 stop_triggered 旁路锁死
     if str(side).strip().lower() == "sell" and _is_stop_triggered(merged):
         return ""
+    if str(side).strip().lower() == "buy":
+        from ..stock_macro.repo import MacroEventRepo
+        from ..stock_macro.ai_tools import severe_risk_off_titles
+
+        severe = await MacroEventRepo.list_open_severe()
+        merged[MACRO_SEVERE_FLAG_KEY] = bool(severe)
+        merged[MACRO_SEVERE_TITLES_KEY] = severe_risk_off_titles(severe)
     if strategy.id == VolumeExtremumStrategy.id:
         measured = await load_structure(stock_code, params, intent=side)
         if isinstance(measured, str):
@@ -933,6 +949,10 @@ async def papertrade_decision_insert(
                        非法 JSON 会降级为空；**不要**把大段中文塞进 reason 冒充计划。
                        **buy 硬门**：必须含可解析 ``plan_stop_pct``(<0) 或
                        ``plan_stop_price``(>0)，否则拒绝落库。
+                       **buy 宏观硬门（多因子盘）**：还必须含 ``macro_regime``
+                       （进攻/中性/防御）与 ``macro_note``（≥8 字依据）；宏观事件表有
+                       severity≥4 的 risk_off 进行中事件时不得标进攻。
+                       reason 开头建议写「宏观:{档位}|{相}|{依据}」。
 
       - ``score``    —— -1.0 ~ +1.0；buy → +，sell → -，hold → 0。
 
@@ -1055,6 +1075,10 @@ async def papertrade_trade_insert(
     必须含可解析 ``plan_stop_pct``(<0) 或 ``plan_stop_price``(>0)；也接受
     ``stop_pct`` / ``stop_price`` 别名。尾部多余字段会忽略，不再因 JSON 写坏整笔拒单。
 
+    **buy 宏观硬门（多因子盘）**：同一 JSON 顶层还必须带 ``macro_regime``
+    （进攻 / 中性 / 防御）与 ``macro_note``（≥8 字宏观依据）；宏观事件表里有
+    severity≥4 的 risk_off 进行中事件时不得标进攻。与 decision_insert 写同一份 JSON 即可。
+
     **持仓随成交原子写入**：成功后无需再调 ``papertrade_position_upsert`` 改股数。
     """
     # 交易执行统一走 TradeExecutor 抽象层（实时价偏差校验 / A 股 T+1 / 写流水
@@ -1108,6 +1132,7 @@ async def papertrade_trade_insert(
             qty=qty,
             price=price,
             realized_pnl=realized_pnl,
+            reason=reason,
         )
     return result.message
 

@@ -9,6 +9,8 @@ __all__ = [
     "BOOK_READ_TOOLS",
     "BOOK_WRITE_TOOLS",
     "CALENDAR_TOOLS",
+    "MACRO_READ_TOOLS",
+    "MACRO_WRITE_TOOLS",
     "CORE_DECISION_TOOLS",
     "MULTIFACTOR_RESEARCH_TOOLS",
     "VOLUME_RESEARCH_TOOLS",
@@ -33,7 +35,11 @@ BOOK_WRITE_TOOLS: tuple[str, ...] = (
 
 CALENDAR_TOOLS: tuple[str, ...] = ("stock_is_trading_day",)
 
-CORE_DECISION_TOOLS: tuple[str, ...] = BOOK_READ_TOOLS + BOOK_WRITE_TOOLS + CALENDAR_TOOLS
+# 宏观事件表：所有策略都要能读（档位决定仓位上限），登记 / 更新只给多因子盘
+MACRO_READ_TOOLS: tuple[str, ...] = ("macro_event_list",)
+MACRO_WRITE_TOOLS: tuple[str, ...] = ("macro_event_upsert",)
+
+CORE_DECISION_TOOLS: tuple[str, ...] = BOOK_READ_TOOLS + BOOK_WRITE_TOOLS + CALENDAR_TOOLS + MACRO_READ_TOOLS
 
 MULTIFACTOR_RESEARCH_TOOLS: tuple[str, ...] = (
     "stock_indicators",
@@ -47,6 +53,7 @@ MULTIFACTOR_RESEARCH_TOOLS: tuple[str, ...] = (
     "search_stock",
     "get_stock_change_rate",
     "send_cloudmap_img",
+    *MACRO_WRITE_TOOLS,
 )
 
 VOLUME_RESEARCH_TOOLS: tuple[str, ...] = (
