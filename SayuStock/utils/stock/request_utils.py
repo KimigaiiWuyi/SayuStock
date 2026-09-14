@@ -10,7 +10,7 @@ from aiohttp import ClientSession, ClientTimeout, ClientConnectionError
 from gsuid_core.logger import logger
 
 from .utils import get_file
-from ..constant import PREFIX_DATA, code_id_dict
+from ..constant import PREFIX_DATA, code_id_dict, code_query_overrides
 from ...stock_config.stock_config import STOCK_CONFIG
 
 SEARCHAPI_HEADERS = {
@@ -120,6 +120,9 @@ async def get_code_id(code: str, priority: Optional[str] = None) -> Optional[Tup
 
 async def _get_code_id_one(code: str, priority: Optional[str] = None) -> Optional[Tuple[str, str, str]]:
     """单次解析行情 ID（不做复合 query 拆分）。"""
+    override = code_query_overrides.get(code.strip().lower())
+    if override is not None:
+        return override
     if code.endswith(".h"):
         code = code[: -len(".h")]
         priority = "h"

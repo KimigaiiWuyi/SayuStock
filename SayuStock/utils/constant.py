@@ -450,6 +450,13 @@ code_id_dict = {
     "GDAXI": "100.GDAXI",
 }
 
+# 手动重定向：东财 suggest 按热度排序，scm 会命中美股 SCM、原油主连会命中布油 B00Y。
+# 键为精确输入（大小写不敏感），值为 (secid, 名称, 证券类型)，优先于联网搜索。
+code_query_overrides: dict[str, tuple[str, str, str]] = {
+    "scm": ("142.scm", "原油主连", "期货"),
+    "原油主连": ("142.scm", "原油主连", "期货"),
+}
+
 # 国际市场、
 # 这里的 i: 是必加
 i_code = {
