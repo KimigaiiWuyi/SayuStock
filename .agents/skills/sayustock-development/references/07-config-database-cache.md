@@ -31,6 +31,8 @@ STOCK_CONFIG = StringConfig("SayuStock", CONFIG_PATH, CONFIG_DEFAULT)
 | `mapcloud_refresh_minutes` | 图/数据缓存 TTL | 3 |
 | `stock_cache_retention_days` | 每日清理保留天数 | 7 |
 | `eastmoney_cookie` | 东财 Cookie | 内置字符串 |
+| `market_api_default` | 行情API 全局默认源（东方财富/新浪财经/腾讯财经） | 东方财富 |
+| `market_api_<接口>` | 行情API 逐接口数据源选单（quote/intraday/kline/board/rank_list/hotmap/sector_menu/breadth/market_turnover/northbound/valuation_series/financial_snapshot）；「跟随默认」=跟全局默认；不支持时自动回落东财；网页控制台改完热生效 | 跟随默认 |
 | `holdings_analysis_unlimited_users` | 持仓分析免每日限额的 `user_id` 列表；网页控制台改完热生效 | `[]` |
 | `news_push_hourly_groups` | 雪球新闻「小时汇总」群列表（类别2，每小时整点合并推送） | `[]` |
 | `news_push_trading_session_groups` | 雪球新闻「交易时段汇总」群列表（类别3，每日 08/12/16/22 点合并推送：隔夜/午间/收盘/晚间） | `[]` |

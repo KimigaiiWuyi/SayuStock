@@ -37,8 +37,23 @@ snap = await market.hotmap()
 ## 扩展新数据源
 
 1. 实现 `MarketDataPort`（可继承 `adapters._base.PartialMarketData` 只覆盖子集）。
-2. 在 `facade.build_default_market` / `CompositeMarketData` 中注册路由。
+2. 在 `provider_registry._PROVIDER_FACTORIES` / `PROVIDER_LABELS` 注册供应商，
+   并在 `stock_config/config_default.py` 的对应 `market_api_*` 选单加选项；
+   能力不全无需特殊处理——`unsupported` 会自动回落默认源。
 3. **禁止**在 feature 模块解析供应商原始字段。
+
+## 行情API 数据源切换（后台设置「行情API」）
+
+- 网页控制台 → 插件配置 →「行情API」：全局默认源（默认**东方财富**）+ 逐接口选单
+  （quote / intraday / kline / board / rank_list / hotmap / sector_menu / breadth /
+  market_turnover / northbound / valuation_series / financial_snapshot）。
+- 路由实现：`utils/market/provider_registry.py` 的 `ConfigurableEquityMarket`
+  （equity 槽位包装）。配置每次调用时读取，网页控制台改完**立即热生效**。
+- 所选源对某接口返回 `unsupported` 时自动回落：逐接口选择 → 全局默认 → 东方财富；
+  网络/解析错误原样上抛，不静默换源。
+- 可选供应商：`eastmoney`（全接口）、`sina`（盘口/分时/分钟日K/沪深A/指数/行业板块/
+  换手成交额成交量排行/行业菜单）、`tencent`（盘口/分时/分钟K+前复权日周月K）。
+- `resolve` 的 `provider_symbol` 恒为东财 secid（`150.*` 判场外基金依赖此约定），不随源切换变化。
 
 ## OKX / VIX / 场外基金
 

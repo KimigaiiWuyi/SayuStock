@@ -23,6 +23,32 @@ from ..models import (
 )
 
 
+async def resolve_em_symbol(query: str) -> SymbolRef | None:
+    """名称/代码 → SymbolRef，各 equity 源共用。
+
+    provider_symbol 统一为东财 secid（如 1.600519）：调用方依赖 150.* 前缀
+    判定场外基金，行情源切换不能破坏该约定。
+    """
+    from ...load_data import get_full_security_code
+    from .eastmoney.provider import _exchange_of, _sec_type_to_asset
+    from ...stock.request_utils import get_code_id
+
+    code_info = await get_code_id(query)
+    if code_info is None:
+        return None
+    secid = get_full_security_code(code_info[0])
+    if not secid or "." not in secid:
+        return None
+    return SymbolRef(
+        code=secid.split(".")[-1],
+        name=code_info[1] or secid.split(".")[-1],
+        asset_class=_sec_type_to_asset(code_info[2], secid=secid),
+        exchange=_exchange_of(secid, code_info[2]),
+        provider_symbol=secid,
+        sec_type=code_info[2] or "",
+    )
+
+
 class PartialMarketData:
     """子类实现子集方法；其余返回 unsupported。"""
 

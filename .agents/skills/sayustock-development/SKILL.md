@@ -71,6 +71,8 @@ description: >
 
 - **GsCore 插件，不是独立 Bot**：靠 Core 的 `Plugins` / `SV` 注册触发器；前缀默认 `a` / `股票`（见 `SayuStock/__init__.py`）。
 - **行情只走 `get_market()`**：业务侧读 `Quote` / `IntradaySeries` / `KlineSeries` / `BoardSnapshot`，**禁止**解析东财 `f*` 或依赖 `compat` 编码。
+- **行情API 可切换**：equity 槽位为 `ConfigurableEquityMarket`，后台「行情API」逐接口选数据源
+  （默认东财；新浪/腾讯为备用），`unsupported` 自动回落，配置热生效；详见 [三](./references/03-market-data-port.md)。
 - **供应商字段只在 adapter 内解析**：`utils/market/adapters/eastmoney/parse_*.py` 等是唯一合法解析点。
 - **有图必有文字**：`ai_return(...)` 必须在**图片缓存判断之前**调用；部分模型看不到图，文字是唯一输入。
 - **指标单源**：图表与 AI 读数共用 `utils/indicators.py`（通达信/东财口径，勿改用 mplchart 西方 MACD/RSI）。
