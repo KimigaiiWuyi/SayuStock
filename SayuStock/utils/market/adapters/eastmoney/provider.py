@@ -8,10 +8,13 @@ from datetime import date, timedelta
 from dataclasses import replace
 from collections.abc import Sequence
 
-from ...enums import RankBy, BoardKind, ValueKind, AssetClass, KlinePeriod
+from gsuid_core.logger import logger
+
+from ...enums import RankBy, BoardKind, IpoMarket, ValueKind, AssetClass, KlinePeriod, coerce_ipo_market
 from ...errors import MarketError, not_found, empty_error, unsupported, network_error, is_market_error
 from ...models import (
     Quote,
+    IpoEvent,
     SymbolRef,
     BreadthBar,
     KlineSeries,
@@ -24,6 +27,7 @@ from ...models import (
     FinancialSnapshot,
 )
 from .json_util import opt_float, as_mapping, require_mapping
+from .parse_ipo import parse_ipo_apply_payload, parse_ipo_clist_payload
 from .map_fields import PROVIDER
 from .parse_rank import (
     RANK_SPECS_INTERNAL,
@@ -467,3 +471,72 @@ class EastMoneyMarketData:
             industry_type="bank" if industry == "bank" else "standard",
             missing_fields=missing,
         )
+
+    async def ipo_calendar(self, market: IpoMarket | str) -> list[IpoEvent] | MarketError:
+        m = coerce_ipo_market(market)
+        if m is None:
+            return unsupported(f"未知 IPO 市场 {market!r}", provider=PROVIDER)
+        if m == IpoMarket.CN:
+            raw = await EASTMONEY_REQUESTER.get_cn_ipo_apply()
+            if isinstance(raw, str):
+                return network_error(raw, provider=PROVIDER)
+            return parse_ipo_apply_payload(raw)
+        raw = await EASTMONEY_REQUESTER.get_ipo_clist(m.value)
+        if isinstance(raw, str):
+            # push2 瞬断时港股可由 AAStocks 表格降级兜底（美股等用户切纳斯达克源）
+            if m == IpoMarket.HK:
+                fallback = await self._hk_ipo_fallback()
+                if fallback is not None:
+                    return fallback
+            return network_error(raw, provider=PROVIDER)
+        parsed = parse_ipo_clist_payload(raw, m)
+        if isinstance(parsed, MarketError):
+            return parsed
+        if m == IpoMarket.HK:
+            return await self._enrich_hk_ipo(parsed)
+        return parsed
+
+    async def _hk_ipo_fallback(self) -> list[IpoEvent] | None:
+        """东财港股列表不可达时的 AAStocks 降级数据（不含 GEM/介绍上市，名称为繁体）。"""
+        try:
+            from ..aastocks import fetch_mainpage, fetch_upcoming
+            from ..aastocks.parse import HkIpoExtra, parse_mainpage, parse_upcoming, hk_ipo_events_from_extras
+
+            main_html, up_html = await asyncio.gather(fetch_mainpage(), fetch_upcoming())
+            extras: dict[str, HkIpoExtra] = {}
+            if main_html:
+                extras.update(parse_mainpage(main_html))
+            if up_html:
+                for code, extra in parse_upcoming(up_html).items():
+                    base = extras.get(code)
+                    if base is None:
+                        extras[code] = extra
+                    else:
+                        base.grey_market_date = base.grey_market_date or extra.grey_market_date
+                        base.apply_end_date = base.apply_end_date or extra.apply_end_date
+                        base.listing_date = base.listing_date or extra.listing_date
+            events = hk_ipo_events_from_extras(extras)
+            if events:
+                logger.warning(
+                    f"[SayuStock][行情API] 东财港股列表不可用，使用 AAStocks 降级数据"
+                    f"（{len(events)} 只，不含 GEM/介绍上市，名称为繁体）"
+                )
+                return events
+            return None
+        except Exception as e:  # noqa: BLE001 - 降级也失败则按原错误上抛
+            logger.warning(f"[SayuStock][行情API] 港股降级数据(AAStocks)获取失败: {e}")
+            return None
+
+    async def _enrich_hk_ipo(self, events: list[IpoEvent]) -> list[IpoEvent]:
+        """AAStocks 增强港股（招股截止/暗盘/上市价/超购/首日表现）；失败仅告警不阻断。"""
+        try:
+            from ..aastocks import fetch_mainpage, fetch_upcoming, parse_mainpage, parse_upcoming, merge_hk_ipo_extra
+
+            main_html, up_html = await asyncio.gather(fetch_mainpage(), fetch_upcoming())
+            if main_html:
+                events = merge_hk_ipo_extra(events, parse_mainpage(main_html))
+            if up_html:
+                events = merge_hk_ipo_extra(events, parse_upcoming(up_html))
+        except Exception as e:  # noqa: BLE001 - 增强源失败不影响底层数据
+            logger.warning(f"[SayuStock][行情API] 港股IPO增强源(AAStocks)不可用: {e}")
+        return events

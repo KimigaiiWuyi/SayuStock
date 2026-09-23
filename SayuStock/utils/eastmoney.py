@@ -1061,5 +1061,52 @@ class EastMoneyRequester:
         result["data"]["total"] = len(result["data"]["diff"])
         return result
 
+    @async_file_cache(market="新股申购", sector="cn-apply", suffix="json", minutes=60)
+    async def get_cn_ipo_apply(self) -> Union[Dict[str, Any], str]:
+        """datacenter 新股申购表（RPTA_APP_IPOAPPLY，按申购日倒序近 500 条）。
+
+        供 IPO 日历解析申购日/上市日/发行价/首日表现；IPO 数据日内基本不变，
+        缓存 60 分钟。
+        """
+        url = "https://datacenter-web.eastmoney.com/api/data/v1/get"
+        params: List[Tuple[str, str]] = [
+            ("reportName", "RPTA_APP_IPOAPPLY"),
+            ("columns", "ALL"),
+            ("pageSize", "500"),
+            ("pageNumber", "1"),
+            ("sortColumns", "APPLY_DATE"),
+            ("sortTypes", "-1"),
+            ("source", "WEB"),
+            ("client", "WEB"),
+        ]
+        resp = await self.stock_request(url, "GET", params=params)
+        if isinstance(resp, int):
+            return f"[SayuStock] 新股申购接口错误代码: {resp}"
+        return resp
+
+    @async_file_cache(market="新股上市", sector="{market}-clist", suffix="json", minutes=60)
+    async def get_ipo_clist(self, market: str) -> Union[Dict[str, Any], str]:
+        """clist 港股/美股按上市日(f26)倒序，含未来上市日，供 IPO 日历用。"""
+        # 港股 t:3=主板普通股 t:4=创业板普通股（t:1 为 ETF/基金、t:2 为人民币柜台）
+        fs = {"hk": "m:116 t:3,m:116 t:4", "us": "m:105,m:106,m:107"}.get(market)
+        if fs is None:
+            return f"[SayuStock] 未知 IPO 市场: {market}"
+        url = "https://push2.eastmoney.com/api/qt/clist/get"
+        params: List[Tuple[str, str]] = [
+            ("pn", "1"),
+            ("pz", "200"),
+            ("po", "1"),
+            ("np", "1"),
+            ("fltt", "2"),
+            ("invt", "2"),
+            ("fid", "f26"),
+            ("fs", fs),
+            ("fields", "f12,f13,f14,f26"),
+        ]
+        resp = await self.stock_request(url, "GET", params=params)
+        if isinstance(resp, int):
+            return f"[SayuStock] IPO上市列表接口错误代码: {resp}"
+        return resp
+
 
 EASTMONEY_REQUESTER = EastMoneyRequester()

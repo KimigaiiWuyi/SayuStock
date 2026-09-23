@@ -19,6 +19,14 @@
         "need_admin": false
       },
       {
+        "name": "IPO日历",
+        "desc": "A股/港股/美股新股发行与上市日历（T-2至T+7，可筛选市场）",
+        "eg": "IPO日历 美股",
+        "need_ck": false,
+        "need_sk": false,
+        "need_admin": false
+      },
+      {
         "name": "大盘云图",
         "desc": "行业板块涨跌分布热力图（可筛选板块）",
         "eg": "大盘云图",
