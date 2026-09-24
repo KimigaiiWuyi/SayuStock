@@ -10,9 +10,16 @@ from ...enums import KlinePeriod
 from ...errors import MarketError, empty_error, parse_error
 from ...models import Bar, Quote, SymbolRef, KlineSeries, IntradayPoint, IntradaySeries
 
+# 东财 100.* 美股指数 → 腾讯符号（注意东财 NDX 实为纳斯达克综合，对应 .IXIC）
+_US_INDEX_SYMBOLS: dict[str, str] = {
+    "SPX": "usINX",
+    "DJIA": "usDJI",
+    "NDX": "usIXIC",
+}
+
 
 def tencent_symbol_from_secid(secid: str) -> str | None:
-    """东财 secid → 腾讯符号：1.600519→sh600519，0.000001→sz000001。"""
+    """东财 secid → 腾讯符号：1.600519→sh600519，105.QQQ→usQQQ，100.SPX→usINX。"""
     if "." not in secid:
         return None
     prefix, code = secid.split(".", 1)
@@ -20,6 +27,12 @@ def tencent_symbol_from_secid(secid: str) -> str | None:
         return f"sh{code}"
     if prefix == "0":
         return f"sz{code}"
+    if prefix in ("105", "106", "107", "153"):
+        # 美股纳斯达克/纽交所/美交所/粉单；腾讯仅盘口可用（K线/分时无数据）
+        return f"us{code}"
+    if prefix == "100":
+        # 美股指数：盘口可用，代码与东财不同名（SPX→INX、DJIA→DJI、NDX→IXIC）
+        return _US_INDEX_SYMBOLS.get(code.upper())
     return None
 
 
@@ -91,6 +104,59 @@ def parse_qt_line(line: str, *, symbol: SymbolRef) -> Quote | MarketError:
         limit_up=_f(parts, 47),
         limit_down=_f(parts, 48),
         as_of=as_of,
+    )
+
+
+def parse_qt_line_us(line: str, *, symbol: SymbolRef) -> Quote | MarketError:
+    """qt.gtimg.cn 美股 ~ 分隔行 → Quote。
+
+    与 A 股同源的核心列序一致：1 名称, 2 代码.后缀, 3 现价, 4 昨收, 5 今开,
+    30 时间(美东 "YYYY-MM-DD HH:MM:SS"), 31 涨跌, 32 涨跌%, 33 最高, 34 最低,
+    35 币种, 36 量(股), 37 额(币种元)。差异：38 换手%, 39 PE, 43 PB,
+    44/45 流通/总市值(亿), 46 英文名；美股无涨跌停。量额单位与东财美股口径
+    一致（股/元），不做手/万换算。
+    """
+    parts = line.split("~")
+    if len(parts) < 38:
+        return parse_error("腾讯美股盘口字段不足", provider=PROVIDER)
+    name = parts[1].strip() or symbol.name
+    price = _f(parts, 3)
+    prev_close = _f(parts, 4)
+    open_px = _f(parts, 5)
+    if price is None or price == 0.0:
+        price = prev_close or open_px
+    if price is None:
+        return parse_error("腾讯美股盘口缺少现价", provider=PROVIDER)
+    float_cap_yi = _f(parts, 44)
+    total_cap_yi = _f(parts, 45)
+    return Quote(
+        symbol=SymbolRef(
+            code=symbol.code,
+            name=name,
+            asset_class=symbol.asset_class,
+            exchange=symbol.exchange,
+            provider_symbol=symbol.provider_symbol,
+            sec_type=symbol.sec_type,
+        ),
+        price=price,
+        open=open_px,
+        high=_f(parts, 33),
+        low=_f(parts, 34),
+        prev_close=prev_close,
+        change_pct=_f(parts, 32),
+        change_amount=_f(parts, 31),
+        volume=_f(parts, 36),
+        amount=_f(parts, 37),
+        turnover_rate=_f(parts, 38),
+        pe=_f(parts, 39),
+        pb=_f(parts, 43),
+        market_cap=total_cap_yi * 100000000.0 if total_cap_yi is not None else None,
+        float_market_cap=float_cap_yi * 100000000.0 if float_cap_yi is not None else None,
+        industry=None,
+        limit_up=None,
+        limit_down=None,
+        # 东财主源美股 Quote 也不带 as_of；腾讯美股时间戳为美东时间，保持一致置空
+        as_of=None,
     )
 
 

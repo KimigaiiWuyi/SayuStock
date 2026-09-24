@@ -73,89 +73,25 @@ CONFIG_DEFAULT: Dict[str, GSC] = {
     ),
     "market_api_divider": GsDivider(
         "行情API",
-        "行情数据源切换：默认东方财富；每个接口可单独指定数据源，"
-        "所选源不支持该接口时自动回落东方财富。网页控制台修改后立即生效，无需重启",
-        "行情API（数据源切换）",
+        "行情数据源优先级：所有行情接口共用一套优先级，从左到右依次尝试；"
+        "某源失败或不支持该接口时自动顺延到下一个源，尽可能交付结果。"
+        "网页控制台修改后立即生效，无需重启",
+        "行情API（数据源优先级）",
     ),
-    "market_api_default": GsStrConfig(
-        "默认数据源",
-        "A股/指数/ETF 行情的全局默认数据源；未单独指定的接口都跟随这里。"
-        "东方财富=功能最全（默认）；新浪财经/腾讯财经=备用源，覆盖盘口/分时/K线（及部分榜单）",
-        "东方财富",
-        options=["东方财富", "新浪财经", "腾讯财经"],
-    ),
-    "market_api_quote": GsStrConfig(
-        "个股盘口(quote)",
-        "个股/指数/ETF 实时盘口（股价、涨跌幅、换手、市值等）的数据源",
-        "跟随默认",
-        options=["跟随默认", "东方财富", "新浪财经", "腾讯财经"],
-    ),
-    "market_api_intraday": GsStrConfig(
-        "分时(intraday)",
-        "当日分时走势的数据源；五日分时仅东方财富支持，其余源会自动回落",
-        "跟随默认",
-        options=["跟随默认", "东方财富", "新浪财经", "腾讯财经"],
-    ),
-    "market_api_kline": GsStrConfig(
-        "K线(kline)",
-        "分钟/日/周/月 K线的数据源；腾讯=前复权(分钟+日/周/月)，新浪=不复权(分钟+日K)，"
-        "季/半年/年K仅东方财富支持并自动回落",
-        "跟随默认",
-        options=["跟随默认", "东方财富", "新浪财经", "腾讯财经"],
-    ),
-    "market_api_board": GsStrConfig(
-        "板块榜单(board)",
-        "沪深A列表/主要指数/行业板块等榜单的数据源；概念板块与BK成分仅东方财富支持并自动回落",
-        "跟随默认",
-        options=["跟随默认", "东方财富", "新浪财经"],
-    ),
-    "market_api_rank_list": GsStrConfig(
-        "排行榜(rank_list)",
-        "换手/成交额/成交量等通用排行的数据源；主力资金/ROE/利润同比排行仅东方财富支持并自动回落",
-        "跟随默认",
-        options=["跟随默认", "东方财富", "新浪财经"],
-    ),
-    "market_api_hotmap": GsStrConfig(
-        "大盘云图(hotmap)",
-        "大盘云图数据源；仅东方财富支持",
-        "跟随默认",
-        options=["跟随默认", "东方财富"],
-    ),
-    "market_api_sector_menu": GsStrConfig(
-        "板块菜单(sector_menu)",
-        "行业/概念板块菜单数据源；概念菜单仅东方财富支持并自动回落",
-        "跟随默认",
-        options=["跟随默认", "东方财富", "新浪财经"],
-    ),
-    "market_api_breadth": GsStrConfig(
-        "市场宽度(breadth)",
-        "市场宽度数据源；仅东方财富支持",
-        "跟随默认",
-        options=["跟随默认", "东方财富"],
-    ),
-    "market_api_market_turnover": GsStrConfig(
-        "两市成交额(market_turnover)",
-        "沪深两市成交额数据源；仅东方财富支持",
-        "跟随默认",
-        options=["跟随默认", "东方财富"],
-    ),
-    "market_api_northbound": GsStrConfig(
-        "北向资金(northbound)",
-        "北向资金流向数据源；仅东方财富支持",
-        "跟随默认",
-        options=["跟随默认", "东方财富"],
-    ),
-    "market_api_valuation_series": GsStrConfig(
-        "估值序列(valuation_series)",
-        "PE/PB/股息率历史估值数据源；仅东方财富支持",
-        "跟随默认",
-        options=["跟随默认", "东方财富"],
-    ),
-    "market_api_financial_snapshot": GsStrConfig(
-        "财报摘要(financial_snapshot)",
-        "个股财务快照数据源；仅东方财富支持",
-        "跟随默认",
-        options=["跟随默认", "东方财富"],
+    "market_api_priority": GsStrConfig(
+        "数据源优先级",
+        "从左到右优先级递减。取数时按此顺序逐一尝试：源失败或该源没有此接口时"
+        "自动顺延到下一个，全部失败才报错；东财独占的接口（云图/北向/估值/财报/"
+        "五日分时/概念板块）无论东财排在哪都会自动兜底到东方财富",
+        "东方财富 → 腾讯财经 → 新浪财经",
+        options=[
+            "东方财富 → 腾讯财经 → 新浪财经",
+            "东方财富 → 新浪财经 → 腾讯财经",
+            "腾讯财经 → 东方财富 → 新浪财经",
+            "腾讯财经 → 新浪财经 → 东方财富",
+            "新浪财经 → 东方财富 → 腾讯财经",
+            "新浪财经 → 腾讯财经 → 东方财富",
+        ],
     ),
     "kronos_divider": GsDivider(
         "AI模型预测",

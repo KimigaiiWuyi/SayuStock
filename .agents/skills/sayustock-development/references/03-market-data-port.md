@@ -55,6 +55,13 @@ fin = await port.financial_snapshot("600519")
 
 列表展示：`display.from_quote` / `from_board_row` / `board_rows_to_items`。
 
+**数据来源归属（provider 字段）**：`Quote` / `KlineSeries` / `IntradaySeries` /
+`BoardSnapshot` / `RankSnapshot` / `ValueSeries` 均带 `provider: str | None`——
+equity 链在 `ConfigurableEquityMarket._dispatch` 命中时盖章（`display.stamp_provider`）；
+okx/vix/tiantian 槽位在 `CompositeMarketData` 路由时盖章。图表左下角「数据来源」
+标签用 `display.source_label(*providers)`（id→中文名，多源去重拼接，None 回退
+「东方财富」）；**禁止再硬编码「数据来源：东方财富」**。
+
 ## 3.4 `MarketDataPort` 方法清单
 
 定义在 `utils/market/port.py`：
@@ -91,32 +98,43 @@ fin = await port.financial_snapshot("600519")
 ```
 get_market()  →  registry 单例
 build_default_market()  →  CompositeMarketData(
-    equity=ConfigurableEquityMarket(),   # 后台「行情API」逐接口可切换
+    equity=ConfigurableEquityMarket(),   # 后台「行情API」优先级链驱动
     crypto=OkxMarketData(),
     vix=VixMarketData(),
     fund=TiantianFundMarketData(),
 )
 ```
 
-**行情API 切换（`provider_registry.py`）**：equity 槽位是 `ConfigurableEquityMarket`
-包装，按后台配置逐接口分派：
+**行情API 优先级链（`provider_registry.py`）**：equity 槽位是 `ConfigurableEquityMarket`
+包装，所有接口共用一套全局优先级：
 
-- 配置键 `market_api_default`（全局默认，默认东方财富）+ `market_api_<接口>`
-  （逐接口覆盖，选「跟随默认」则跟全局）。选项值为中文展示名（东方财富/新浪财经/腾讯财经），
-  `normalize_provider_id` 归一化为供应商 id。
-- 配置**每次调用时读取**（`STOCK_CONFIG.get_config`），网页控制台改完立即热生效。
-- 供应商实例按 id 缓存；所选源返回 `unsupported`（能力缺失）时自动回落链
-  「逐接口选择 → 全局默认 → 东方财富」；网络/解析错误原样上抛不回落。
-- 新源接入：`_PROVIDER_FACTORIES` 加工厂 + `PROVIDER_LABELS` 加展示名 +
-  `config_default.py` 对应 `market_api_*` 选单加选项。
-- `resolve` 固定走默认源；`provider_symbol` 恒为东财 secid（`150.*` 判场外基金依赖此约定）。
+- 配置键 `market_api_priority`，形如「东方财富 → 腾讯财经 → 新浪财经」，从左到右
+  优先级递减；下拉给全排列预设，解析层兼容箭头/逗号/中文逗号/简称（东财/新浪/腾讯）。
+- 取数语义（尽可能交付）：按链逐一尝试，**成功即返回**；源 `unsupported`
+  （不支持该接口，如腾讯无板块）**跳过**；网络/解析/空数据错误**顺延下一个源**；
+  源内部**抛异常**（如东财瞬断时连接错误穿透）转 network 错误顺延，不炸链；
+  `not_found` 短路返回（标的解析层共用，换源无意义）。全部失败才报错，
+  报「优先级最高且真正出错」的源的错误。
+- 解析层（`get_code_id` → 东财 searchapi）失败 ≠ 标的不存在：`get_code_id_strict`
+  在网络/HTTP 失败时抛 `ResolveLayerError`（HTTP 200 无结果才是真不存在）；
+  东财/腾讯/新浪适配器把它转 **network 错误顺延**，避免误报 not_found 短路
+  （用户会对真实存在的股票看到「不存在该股票」）。存量 `get_code_id` 契约
+  不变（失败仍返回 None）；端口 `resolve()` 用 `resolve_em_symbol_safe` 不抛。
+- 链里没有东方财富时自动把东财补到链尾兜底（云图/北向/估值/财报等东财独占接口
+  不因换源失效）。
+- 配置**每次调用时读取**（`STOCK_CONFIG.get_config`），网页控制台改完立即热生效；
+  供应商实例按 id 缓存。
+- `resolve` 走链头（各源 resolve 语义一致：`provider_symbol` 恒为东财 secid，
+  `150.*` 判场外基金依赖此约定）。
+- 新源接入：`_PROVIDER_FACTORIES` 加工厂 + `_PROVIDER_ALIASES`/`PROVIDER_LABELS`
+  加名称 + `config_default.py` 的 `market_api_priority` options 扩预设。
 
 `CompositeMarketData._route(query)`：
 
 1. `is_vix_query` → VIX adapter  
 2. `is_crypto_query` → OKX adapter  
 3. 场外基金（东财 QuoteID `150.*`，如 `720001`）→ 天天基金净值  
-4. 否则 → equity（`ConfigurableEquityMarket` 按配置分派东财/新浪/腾讯）；若返回的序列
+4. 否则 → equity（`ConfigurableEquityMarket` 按优先级链逐一尝试东财/新浪/腾讯）；若返回的序列
    仍是 `150.*` / `AssetClass.FUND`，Composite 再改走天天基金（名称无「混合」等关键字的安全网）  
 
 `board` / `hotmap` / 菜单 / 北向等**固定走 equity**（加密/VIX/场外基金无板块云图语义）。
@@ -151,9 +169,21 @@ feature 模块不应再直接 `stock_request` 然后读 `f*`。
   `getKLineData` 分钟/日K（**不复权**）、`getMinlineData` 当日分时、行情中心
   `getHQNodeData`（沪深A hs_a / 指数 hs_s / 行业成分）与 `newSinaHy` 行业板块汇总 →
   换手/成交额/成交量排行。无概念板块/资金流/ROE/周月K（unsupported 自动回落东财）。
+  **美股**（secid 105/106/107/153 → `gb_` **小写**符号；100.SPX/DJIA/NDX 指数 →
+  `gb_inx`/`gb_dji`/`gb_ixic`，**东财 NDX 实为纳指综合**）：盘口 + 日K
+  `US_MinKService.getDailyK`（**裸代码** QQQ / 指数 `.inx`，全量历史按 start/end 过滤
+  尾部截取）+ 分钟K `US_MinKService.getMinK?symbol=…&type=5/15/30/60`（qn 无效恒 3，
+  **最多 1023 根**，时间戳**美东** → parse 层转北京时间，夏令时 zoneinfo 自动处理）+
+  分时 `type=1`（末时刻标注 09:31-16:00，逐 bar 量额，取最近交易日；**新鲜度守卫**：
+  末点超 10 天（OTC/.inx/.dji 停更于 2020，.ixic 反而新鲜）→ unsupported 回落东财）。
+  量=股、额/市值=美元；指数 a=0 时均价回退当前价。
 - `tencent/client.py` + `parse.py` + `provider.py`：备用权益源。`qt.gtimg.cn` 盘口（GBK，含
   PE/PB/市值/涨跌停）、`fqkline` **前复权**日/周/月K、`mkline` 分钟K、`minute/query` 当日分时
   （累计量额差分）。K 行列序为**开、收、高、低**（与直觉相反）。无板块/排行（unsupported 回落）。
+  **美股**（secid 105/106/107/153 → `us` 符号；100.SPX/DJIA/NDX → `usINX`/`usDJI`/`usIXIC`，
+  代码与东财不同名）：**仅盘口**（量=股、额=美元、PB 在 43 列、时间为美东、无涨跌停）；
+  美股 K线（fqkline/usfqkline 只回首末两根）、分钟K（mkline param error）与分时
+  （minute/query 仅末点）无有效数据，unsupported 回落东财。
 
 ## 3.8 薄封装 `utils/stock/request.py`
 
@@ -181,9 +211,9 @@ feature 模块不应再直接 `stock_request` 然后读 `f*`。
 
 1. 新建 `adapters/<name>/provider.py`，实现 `MarketDataPort`（可继承 `PartialMarketData` 只覆盖子集）。  
 2. 所有供应商 JSON 解析写在该 adapter 内，输出标准模型。  
-3. 在 `provider_registry.py` 的 `_PROVIDER_FACTORIES` / `PROVIDER_LABELS` 注册，
-   并在 `stock_config/config_default.py` 的对应 `market_api_*` 选单加选项
-   （能力不全的接口不加选项即可，`unsupported` 会自动回落默认源）。  
+3. 在 `provider_registry.py` 的 `_PROVIDER_FACTORIES` / `_PROVIDER_ALIASES` / `PROVIDER_LABELS`
+   注册，并在 `config_default.py` 的 `market_api_priority` options 里扩预设顺序
+   （能力不全的接口无需特殊处理，链式取数会自动跳过 unsupported 并顺延）。  
 4. 补 `test/market/` 解析与路由单测。  
 5. 不改 feature 模块字段假设。
 

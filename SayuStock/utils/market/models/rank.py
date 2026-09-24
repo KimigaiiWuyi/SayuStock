@@ -43,3 +43,5 @@ class RankSnapshot:
     high_first: bool
     caveat: str
     rows: tuple[RankRow, ...]
+    # 命中数据源 id（eastmoney/tencent/sina），渲染层展示真实来源
+    provider: str | None = None

@@ -22,6 +22,8 @@ _HEADERS = {
 HQ_URL = "https://hq.sinajs.cn/list="
 KLINE_URL = "https://quotes.sina.cn/cn/api/json_v2.php/CN_MarketDataService.getKLineData"
 MINLINE_URL = "https://quotes.sina.cn/cn/api/jsonp_v2.php/var%20t=/CN_MinlineService.getMinlineData"
+US_DAILY_URL = "https://stock.finance.sina.com.cn/usstock/api/json_v2.php/US_MinKService.getDailyK"
+US_MINK_URL = "https://stock.finance.sina.com.cn/usstock/api/json_v2.php/US_MinKService.getMinK"
 NODE_URL = "https://vip.stock.finance.sina.com.cn/quotes_service/api/json_v2.php/Market_Center.getHQNodeData"
 NODE_COUNT_URL = "https://vip.stock.finance.sina.com.cn/quotes_service/api/json_v2.php/Market_Center.getHQNodeStockCount"
 INDUSTRY_URL = "https://vip.stock.finance.sina.com.cn/q/view/newSinaHy.php"
@@ -29,7 +31,8 @@ INDUSTRY_URL = "https://vip.stock.finance.sina.com.cn/q/view/newSinaHy.php"
 _NODE_PAGE_SIZE = 80
 # 翻页保护上限（沪深A 全量约 5500+）
 _NODE_MAX_PAGES = 80
-_HQ_RE = re.compile(r'hq_str_(?P<sym>[A-Za-z0-9]+)="(?P<line>[^"]*)"')
+# 美股符号带下划线（gb_qqq），A 股符号（sh600519）亦匹配
+_HQ_RE = re.compile(r'hq_str_(?P<sym>[A-Za-z0-9_]+)="(?P<line>[^"]*)"')
 
 
 async def _get_text(url: str, params: Mapping[str, str] | None = None) -> str | MarketError:
@@ -85,6 +88,31 @@ async def fetch_kline(symbol: str, scale: int, datalen: int) -> list[object] | s
         return payload.message
     if not isinstance(payload, list):
         return "新浪K线响应非列表"
+    return payload
+
+
+@async_file_cache(market="{symbol}", sector="sina-usdaily", suffix="json", minutes=2)
+async def fetch_us_daily(symbol: str) -> list[object] | str:
+    """美股日K（全量历史，字段 d/o/h/l/c/v/a）；symbol 为裸代码，如 QQQ。"""
+    payload = await _get_json(US_DAILY_URL, {"symbol": symbol})
+    if isinstance(payload, MarketError):
+        return payload.message
+    if not isinstance(payload, list):
+        return "新浪美股日K响应非列表"
+    return payload
+
+
+@async_file_cache(market="{symbol}", sector="sina-usmink-{type_}", suffix="json", minutes=2)
+async def fetch_us_mink(symbol: str, type_: int) -> list[object] | str:
+    """美股分钟K：type_=1 分时级 1 分钟，5/15/30/60 分钟K；最多 1023 根。
+
+    symbol 股票为裸代码（QQQ），指数带前导点（.inx）；时间戳为美东时间。
+    """
+    payload = await _get_json(US_MINK_URL, {"symbol": symbol, "type": str(type_), "qn": "3"})
+    if isinstance(payload, MarketError):
+        return payload.message
+    if not isinstance(payload, list):
+        return "新浪美股分钟K响应非列表"
     return payload
 
 

@@ -1,4 +1,4 @@
-"""腾讯财经 MarketDataPort：A股票/指数/ETF 的备用权益行情源。"""
+"""腾讯财经 MarketDataPort：A股票/指数/ETF 备用源；美股仅盘口（K线/分时无数据）。"""
 
 from __future__ import annotations
 
@@ -9,11 +9,12 @@ from collections.abc import Sequence
 
 from .parse import (
     parse_qt_line,
+    parse_qt_line_us,
     parse_kline_payload,
     parse_minute_payload,
     tencent_symbol_from_secid,
 )
-from .._base import PartialMarketData, resolve_em_symbol
+from .._base import PartialMarketData, resolve_em_symbol, resolve_em_symbol_safe
 from .client import PROVIDER, fetch_minute, fetch_mkline, fetch_fqkline, fetch_qt_lines
 from ...enums import KlinePeriod
 from ...errors import MarketError, not_found, unsupported, network_error
@@ -51,18 +52,32 @@ _PERIOD_BARS: dict[KlinePeriod, int] = {
 }
 
 
+# 美股：腾讯仅盘口可用；fqkline/mkline/minute 对美股无有效数据（实测
+# 日K只回上市首日+当日两根、分钟K param error、分时仅末点），交给注册表回落
+def _parse_us_or_cn(line: str, *, qt_sym: str, symbol: SymbolRef) -> Quote | MarketError:
+    if qt_sym.startswith("us"):
+        return parse_qt_line_us(line, symbol=symbol)
+    return parse_qt_line(line, symbol=symbol)
+
+
 class TencentMarketData(PartialMarketData):
     provider_name = PROVIDER
 
     async def resolve(self, query: str) -> SymbolRef | None:
-        return await resolve_em_symbol(query)
+        return await resolve_em_symbol_safe(query)
 
     async def _symbol_of(self, query: str) -> SymbolRef | MarketError:
-        ref = await self.resolve(query)
+        from ....stock.request_utils import ResolveLayerError
+
+        try:
+            ref = await resolve_em_symbol(query)
+        except ResolveLayerError as error:
+            # 解析层（东财 searchapi）瞬断 ≠ 标的不存在；报 network 顺延而非 not_found 短路
+            return network_error(f"行情ID解析层不可用: {error}", provider=PROVIDER)
         if ref is None:
             return not_found(ErroText["notStock"], provider=PROVIDER)
         if tencent_symbol_from_secid(ref.provider_symbol) is None:
-            # 港美股/期货等暂不覆盖，交给注册表回落
+            # 港股/期货等暂不覆盖，交给注册表回落
             return unsupported(f"腾讯不支持 {ref.provider_symbol}", provider=PROVIDER)
         return ref
 
@@ -78,7 +93,7 @@ class TencentMarketData(PartialMarketData):
         line = lines.get(qt_sym)
         if line is None or not line.strip():
             return not_found(ErroText["notStock"], provider=PROVIDER)
-        return parse_qt_line(line, symbol=symbol)
+        return _parse_us_or_cn(line, qt_sym=qt_sym, symbol=symbol)
 
     async def quotes(self, queries: Sequence[str]) -> list[Quote | MarketError]:
         symbols = await asyncio.gather(*[self._symbol_of(q) for q in queries])
@@ -105,7 +120,7 @@ class TencentMarketData(PartialMarketData):
                 if line is None or not line.strip():
                     results[i] = not_found(ErroText["notStock"], provider=PROVIDER)
                     continue
-                results[i] = parse_qt_line(line, symbol=sym_by_idx[i])
+                results[i] = _parse_us_or_cn(line, qt_sym=qt_sym, symbol=sym_by_idx[i])
         return [r if r is not None else not_found(ErroText["notStock"], provider=PROVIDER) for r in results]
 
     async def intraday(self, query: str, *, ndays: int = 1) -> IntradaySeries | MarketError:
@@ -116,6 +131,8 @@ class TencentMarketData(PartialMarketData):
             return symbol
         qt_sym = tencent_symbol_from_secid(symbol.provider_symbol)
         assert qt_sym is not None
+        if qt_sym.startswith("us"):
+            return unsupported("腾讯美股不支持分时（仅盘口）", provider=PROVIDER)
         quote = await self.quote(query)
         payload = await fetch_minute(qt_sym)
         if isinstance(payload, str):
@@ -148,6 +165,8 @@ class TencentMarketData(PartialMarketData):
             return symbol
         qt_sym = tencent_symbol_from_secid(symbol.provider_symbol)
         assert qt_sym is not None
+        if qt_sym.startswith("us"):
+            return unsupported("腾讯美股不支持K线（仅盘口）", provider=PROVIDER)
         datalen = _PERIOD_BARS.get(period, 400)
         if start is not None:
             end_d = end or date.today()

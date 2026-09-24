@@ -28,9 +28,9 @@ from .display import DisplayItem, from_quote, from_board_row, pick_display_items
 from .registry import get_market, set_market
 from .fund_route import maybe_otc_fund_query
 from .provider_registry import (
-    FOLLOW_DEFAULT,
     PROVIDER_LABELS,
     ConfigurableEquityMarket,
+    parse_priority_chain,
     normalize_provider_id,
 )
 
@@ -44,7 +44,6 @@ __all__ = [
     "BreadthBar",
     "ConfigurableEquityMarket",
     "FinancialSnapshot",
-    "FOLLOW_DEFAULT",
     "IntradayPoint",
     "IntradaySeries",
     "KlinePeriod",
@@ -75,6 +74,7 @@ __all__ = [
     "kline_to_df",
     "maybe_otc_fund_query",
     "normalize_provider_id",
+    "parse_priority_chain",
     "quote_fields",
     "set_market",
 ]

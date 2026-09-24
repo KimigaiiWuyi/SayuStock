@@ -30,6 +30,8 @@ class IntradaySeries:
     ndays: int = 1
     # 多日分时 0 轴：窗口第一天的前收（五天前收盘）。缺省则渲染层用首日收盘。
     ref_close: float | None = None
+    # 命中数据源 id（eastmoney/tencent/sina/okx/tiantian/vix），渲染层展示真实来源
+    provider: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -53,3 +55,5 @@ class KlineSeries:
     period: KlinePeriod
     bars: tuple[Bar, ...]
     adjusted: bool
+    # 命中数据源 id（eastmoney/tencent/sina/okx/tiantian/vix），渲染层展示真实来源
+    provider: str | None = None

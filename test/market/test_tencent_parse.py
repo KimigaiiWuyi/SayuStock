@@ -9,6 +9,7 @@ from SayuStock.utils.market.errors import is_market_error
 from SayuStock.utils.market.models import SymbolRef
 from SayuStock.utils.market.adapters.tencent.parse import (
     parse_qt_line,
+    parse_qt_line_us,
     parse_kline_payload,
     parse_minute_payload,
     tencent_symbol_from_secid,
@@ -54,6 +55,47 @@ QT_600519 = "~".join(
 )
 
 
+# qt.gtimg.cn q=usBABA（2026-09-23 美股收盘后采样；量单位为股、额为美元）
+QT_US_BABA = "~".join(
+    [
+        "200",  # 0
+        "阿里巴巴",  # 1 名称
+        "BABA.N",  # 2 代码.交易所后缀
+        "110.80",  # 3 现价
+        "116.31",  # 4 昨收
+        "112.00",  # 5 今开
+        "12223741",  # 6 成交量(股)
+        "0",  # 7
+        "0",  # 8
+    ]
+    + ["110.95", "700"] + ["0"] * 8  # 9-10 买一 / 11-18
+    + ["111.01", "200"] + ["0"] * 8  # 19-20 卖一 / 21-28
+    + [
+        "",  # 29
+        "2026-09-23 16:07:51",  # 30 时间(美东)
+        "-5.51",  # 31 涨跌
+        "-4.74",  # 32 涨跌%
+        "112.28",  # 33 最高
+        "110.59",  # 34 最低
+        "USD",  # 35 币种
+        "12223741",  # 36 量(股)
+        "1359611049",  # 37 额(美元)
+        "0.49",  # 38 换手%
+        "25.33",  # 39 PE
+        "",  # 40
+        "17.38",  # 41 振幅
+        "1:8",  # 42
+        "1.45",  # 43 PB
+        "2705.65972",  # 44 流通市值(亿美元)
+        "2754.07097",  # 45 总市值(亿美元)
+        "Alibaba Group Holding Ltd",  # 46 英文名
+        "4.37",  # 47
+        "191.62",  # 48 52周高
+        "91.99",  # 49 52周低
+    ]
+)
+
+
 def _sym(secid: str = "1.600519", name: str = "贵州茅台") -> SymbolRef:
     return SymbolRef(
         code=secid.split(".")[-1],
@@ -65,10 +107,32 @@ def _sym(secid: str = "1.600519", name: str = "贵州茅台") -> SymbolRef:
     )
 
 
+def _sym_us(secid: str = "106.BABA", name: str = "阿里巴巴") -> SymbolRef:
+    return SymbolRef(
+        code=secid.split(".")[-1],
+        name=name,
+        asset_class=AssetClass.EQUITY,
+        exchange="US",
+        provider_symbol=secid,
+        sec_type="美股",
+    )
+
+
 def test_tencent_symbol_from_secid() -> None:
     assert tencent_symbol_from_secid("1.600519") == "sh600519"
     assert tencent_symbol_from_secid("0.000001") == "sz000001"
-    assert tencent_symbol_from_secid("105.AAPL") is None
+    # 美股：纳斯达克/纽交所/美交所/粉单 → us 前缀（仅盘口可用）
+    assert tencent_symbol_from_secid("105.AAPL") == "usAAPL"
+    assert tencent_symbol_from_secid("106.BABA") == "usBABA"
+    assert tencent_symbol_from_secid("107.SPY") == "usSPY"
+    assert tencent_symbol_from_secid("153.TCEHY") == "usTCEHY"
+    # 美股指数：代码与东财不同名（东财 NDX 实为纳指综合 → IXIC）
+    assert tencent_symbol_from_secid("100.SPX") == "usINX"
+    assert tencent_symbol_from_secid("100.DJIA") == "usDJI"
+    assert tencent_symbol_from_secid("100.NDX") == "usIXIC"
+    assert tencent_symbol_from_secid("100.RUT") is None
+    # 港股/韩股暂不覆盖
+    assert tencent_symbol_from_secid("116.00700") is None
     assert tencent_symbol_from_secid("600519") is None
 
 
@@ -93,6 +157,31 @@ def test_parse_qt_line() -> None:
     assert q.limit_up == 1393.68
     assert q.limit_down == 1140.28
     assert q.as_of is not None and q.as_of.strftime("%Y%m%d%H%M%S") == "20260918161436"
+
+
+def test_parse_qt_line_us() -> None:
+    q = parse_qt_line_us(QT_US_BABA, symbol=_sym_us())
+    assert not is_market_error(q)
+    assert q.symbol.name == "阿里巴巴"
+    assert q.price == 110.80
+    assert q.prev_close == 116.31
+    assert q.open == 112.00
+    assert q.high == 112.28
+    assert q.low == 110.59
+    assert q.change_pct == -4.74
+    assert q.change_amount == -5.51
+    # 美股量额单位与东财一致（股/美元），不做手/万换算
+    assert q.volume == 12223741.0
+    assert q.amount == 1359611049.0
+    assert q.turnover_rate == 0.49
+    assert q.pe == 25.33
+    assert q.pb == 1.45  # 美股 PB 在 43 列（A 股在 46 列）
+    assert q.market_cap == 2754.07097 * 1e8
+    assert q.float_market_cap == 2705.65972 * 1e8
+    # 美股无涨跌停；as_of 为美东时间，与东财主源口径一致置空
+    assert q.limit_up is None
+    assert q.limit_down is None
+    assert q.as_of is None
 
 
 def test_parse_kline_payload_prefers_qfq_then_plain() -> None:

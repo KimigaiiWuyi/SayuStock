@@ -44,3 +44,5 @@ class BoardSnapshot:
     kind: BoardKind
     title: str
     rows: tuple[BoardRow, ...]
+    # 命中数据源 id（eastmoney/tencent/sina），渲染层展示真实来源
+    provider: str | None = None

@@ -2,21 +2,27 @@
 
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, datetime
 
 from SayuStock.utils.market.enums import RankBy, BoardKind, AssetClass, KlinePeriod
 from SayuStock.utils.market.errors import is_market_error
 from SayuStock.utils.market.models import SymbolRef
 from SayuStock.utils.market.adapters.sina.parse import (
+    _et_to_bj,
     industry_menu,
     parse_hq_line,
     parse_rank_rows,
+    parse_hq_line_us,
     parse_kline_rows,
     parse_node_board,
     node_for_industry,
     parse_minline_rows,
+    parse_us_mink_rows,
+    parse_us_daily_rows,
     parse_industry_summary,
+    parse_us_mink_intraday,
     sina_symbol_from_secid,
+    sina_us_mink_symbol_from_secid,
 )
 
 # hq.sinajs.cn list=sh600519（2026-09-18 收盘后采样）
@@ -46,12 +52,52 @@ def _sym(secid: str = "1.600519", name: str = "贵州茅台") -> SymbolRef:
     )
 
 
+def _sym_us(secid: str = "106.BABA", name: str = "阿里巴巴") -> SymbolRef:
+    return SymbolRef(
+        code=secid.split(".")[-1],
+        name=name,
+        asset_class=AssetClass.EQUITY,
+        exchange="US",
+        provider_symbol=secid,
+        sec_type="美股",
+    )
+
+
 def test_sina_symbol_from_secid() -> None:
     assert sina_symbol_from_secid("1.600519") == "sh600519"
     assert sina_symbol_from_secid("0.000001") == "sz000001"
     assert sina_symbol_from_secid("1.000001") == "sh000001"
+    # 美股 → gb_ 前缀且必须小写（gb_QQQ 返回空）
+    assert sina_symbol_from_secid("105.QQQ") == "gb_qqq"
+    assert sina_symbol_from_secid("106.BABA") == "gb_baba"
+    assert sina_symbol_from_secid("153.TCEHY") == "gb_tcehy"
+    # 美股指数（注意东财 NDX 实为纳斯达克综合 → ixic）
+    assert sina_symbol_from_secid("100.SPX") == "gb_inx"
+    assert sina_symbol_from_secid("100.DJIA") == "gb_dji"
+    assert sina_symbol_from_secid("100.NDX") == "gb_ixic"
+    assert sina_symbol_from_secid("100.RUT") is None
+    # 港股暂不覆盖
     assert sina_symbol_from_secid("116.00700") is None
     assert sina_symbol_from_secid("600519") is None
+
+
+def test_sina_us_mink_symbol_from_secid() -> None:
+    # 分钟K/日K接口符号与盘口不同：股票裸代码、指数带前导点
+    assert sina_us_mink_symbol_from_secid("105.QQQ") == "QQQ"
+    assert sina_us_mink_symbol_from_secid("153.TCEHY") == "TCEHY"
+    assert sina_us_mink_symbol_from_secid("100.SPX") == ".inx"
+    assert sina_us_mink_symbol_from_secid("100.NDX") == ".ixic"
+    assert sina_us_mink_symbol_from_secid("1.600519") is None
+    assert sina_us_mink_symbol_from_secid("116.00700") is None
+
+
+def test_et_to_bj_dst_and_rollover() -> None:
+    # 夏令时 EDT(+12)：09:31 → 当日 21:31
+    assert _et_to_bj(datetime(2026, 9, 23, 9, 31)) == datetime(2026, 9, 23, 21, 31)
+    # 夏令时跨日：15:20 → 次日 03:20
+    assert _et_to_bj(datetime(2026, 9, 3, 15, 20)) == datetime(2026, 9, 4, 3, 20)
+    # 冬令时 EST(+13)：1 月 09:31 → 当日 22:31
+    assert _et_to_bj(datetime(2026, 1, 15, 9, 31)) == datetime(2026, 1, 15, 22, 31)
 
 
 def test_parse_hq_line_stock() -> None:
@@ -77,6 +123,86 @@ def test_parse_hq_line_index() -> None:
     assert q.volume == 485712507.0
     assert q.amount == 994169450166.0
     assert q.change_pct == round((3911.8714 - 3875.6044) / 3875.6044 * 100, 3)
+
+
+# hq.sinajs.cn list=gb_baba（2026-09-24 采样；量单位为股、额/市值为美元）
+HQ_US_BABA = (
+    "阿里巴巴,110.8000,-4.74,2026-09-24 16:08:34,-5.5100,112.0000,112.2800,110.5910,"
+    "191.6200,91.9900,12223741,9314764,275407096431,6.41,17.290000,0.00,0.00,0.00,0.00,"
+    "2485623614,40,112.2500,1.31,1.45,Sep 24 04:08AM EDT,Sep 23 04:03PM EDT,116.3100,"
+    "157210,1,2026,1360968048.1589,113.1800,111.9700,17657831.0876,112.0800,110.8000"
+)
+
+
+def test_parse_hq_line_us() -> None:
+    q = parse_hq_line_us(HQ_US_BABA, symbol=_sym_us())
+    assert not is_market_error(q)
+    assert q.symbol.name == "阿里巴巴"
+    assert q.price == 110.80
+    assert q.prev_close == 116.31  # 26 列
+    assert q.open == 112.00
+    assert q.high == 112.28
+    assert q.low == 110.591
+    assert q.change_pct == round((110.80 - 116.31) / 116.31 * 100, 3)  # 按昨收计算
+    assert q.change_amount == -5.51
+    # 量(10列,股) / 额(30列,美元) / 总市值(12列,美元)，与东财美股口径一致
+    assert q.volume == 12223741.0
+    assert q.amount == 1360968048.1589
+    assert q.market_cap == 275407096431.0
+    # 美股时间为美东串，与东财主源口径一致置空
+    assert q.as_of is None
+
+
+# stock.finance.sina.com.cn US_MinKService.getDailyK?symbol=QQQ（2026-09-24 采样）
+US_DAILY_QQQ = [
+    {"d": "2001-01-02", "o": "58.56", "h": "58.69", "l": "52.44", "c": "53.44", "v": "61893300", "a": "0"},
+    {
+        "d": "2026-09-22",
+        "o": "740.98",
+        "h": "748.35",
+        "l": "740.93",
+        "c": "747.46",
+        "v": "40128826",
+        "a": "29927400000",
+    },
+    {
+        "d": "2026-09-23",
+        "o": "746.97",
+        "h": "747.13",
+        "l": "738.19",
+        "c": "741.21",
+        "v": "33191773",
+        "a": "24601000000",
+    },
+]
+
+
+def test_parse_us_daily_rows_tail_and_filter() -> None:
+    series = parse_us_daily_rows(US_DAILY_QQQ, symbol=_sym_us("105.QQQ", "纳指100ETF"), period=KlinePeriod.D1, limit=2)
+    assert not is_market_error(series)
+    assert series.adjusted is False
+    # 全量 3 根取尾部 2 根
+    assert len(series.bars) == 2
+    assert series.bars[-1].close == 741.21
+    assert series.bars[-1].ts.date() == date(2026, 9, 23)
+    assert series.bars[-1].open == 746.97
+    assert series.bars[-1].high == 747.13
+    assert series.bars[-1].low == 738.19
+    assert series.bars[-1].volume == 33191773.0
+    assert series.bars[-1].amount == 24601000000.0
+
+    # start/end 过滤：只剩 2026-09-22 一根
+    series_f = parse_us_daily_rows(
+        US_DAILY_QQQ,
+        symbol=_sym_us("105.QQQ", "纳指100ETF"),
+        period=KlinePeriod.D1,
+        limit=10,
+        start=date(2026, 9, 22),
+        end=date(2026, 9, 22),
+    )
+    assert not is_market_error(series_f)
+    assert len(series_f.bars) == 1
+    assert series_f.bars[0].close == 747.46
 
 
 def test_parse_kline_rows_daily_and_minute() -> None:
@@ -213,3 +339,138 @@ def test_parse_industry_summary_and_menu() -> None:
     assert node_for_industry(menu, "玻璃行业") == "new_blhy"
     assert node_for_industry(menu, "new_blhy") == "new_blhy"
     assert node_for_industry(menu, "不存在的板块") is None
+
+
+# US_MinKService.getMinK?symbol=QQQ&type=5（2026-09-24 采样；时间戳为美东，跨日 bar 采样于头部）
+US_MINK5_QQQ = [
+    {
+        "d": "2026-09-03 15:20:00", "o": "717.8200", "h": "717.9550",
+        "l": "717.6300", "c": "717.9550", "v": "268138", "a": "192449000",
+    },
+    {
+        "d": "2026-09-23 09:35:00", "o": "746.9700", "h": "747.1300",
+        "l": "745.0850", "c": "745.0850", "v": "745040", "a": "555810000",
+    },
+    {
+        "d": "2026-09-23 09:40:00", "o": "745.0900", "h": "745.8000",
+        "l": "744.4500", "c": "744.8000", "v": "450572", "a": "335689000",
+    },
+]
+
+
+def test_parse_us_mink_rows() -> None:
+    sym = _sym_us("105.QQQ", "纳指100ETF")
+    series = parse_us_mink_rows(US_MINK5_QQQ, symbol=sym, period=KlinePeriod.M5, limit=10)
+    assert not is_market_error(series)
+    assert series.period == KlinePeriod.M5
+    assert len(series.bars) == 3
+    # 美东 → 北京：15:20 跨日到次日 03:20；09:35 当日 21:35
+    assert series.bars[0].ts == datetime(2026, 9, 4, 3, 20)
+    assert series.bars[1].ts == datetime(2026, 9, 23, 21, 35)
+    # 腾讯/东财同款末时刻标注：09:35 bar 覆盖 09:30-09:35
+    assert series.bars[1].open == 746.97
+    assert series.bars[1].high == 747.13
+    assert series.bars[1].low == 745.085
+    assert series.bars[1].close == 745.085
+    assert series.bars[1].volume == 745040.0
+    assert series.bars[1].amount == 555810000.0
+
+    # start 过滤掉 09-03 的跨日 bar
+    series_f = parse_us_mink_rows(
+        US_MINK5_QQQ, symbol=sym, period=KlinePeriod.M5, limit=10, start=date(2026, 9, 23)
+    )
+    assert not is_market_error(series_f)
+    assert len(series_f.bars) == 2
+
+    # limit 取尾部
+    series_t = parse_us_mink_rows(US_MINK5_QQQ, symbol=sym, period=KlinePeriod.M5, limit=2)
+    assert len(series_t.bars) == 2
+    assert series_t.bars[0].ts == datetime(2026, 9, 23, 21, 35)
+
+
+# US_MinKService.getMinK?symbol=QQQ&type=1（2026-09-24 采样；含前一交易日末 bar）
+US_MINK1_QQQ = [
+    {
+        "d": "2026-09-22 16:00:00", "o": "747.1700", "h": "747.5900",
+        "l": "747.0900", "c": "747.4650", "v": "597220", "a": "446315000",
+    },
+    {
+        "d": "2026-09-23 09:31:00", "o": "746.9700", "h": "747.1300",
+        "l": "745.9200", "c": "746.0000", "v": "300258", "a": "224227000",
+    },
+    {
+        "d": "2026-09-23 09:32:00", "o": "746.0500", "h": "746.1100",
+        "l": "745.4200", "c": "745.4980", "v": "122022", "a": "90995800",
+    },
+    {
+        "d": "2026-09-23 16:00:00", "o": "740.8900", "h": "741.4200",
+        "l": "740.6200", "c": "741.1700", "v": "542074", "a": "401667000",
+    },
+]
+
+
+def test_parse_us_mink_intraday_last_session() -> None:
+    sym = _sym_us("105.QQQ", "纳指100ETF")
+    series = parse_us_mink_intraday(
+        US_MINK1_QQQ, symbol=sym, quote=None, today=date(2026, 9, 24)
+    )
+    assert not is_market_error(series)
+    assert series.ndays == 1
+    # 只保留最近一个交易日（09-23），前一交易日（09-22）末 bar 被滤掉
+    assert len(series.points) == 3
+    p0, p1, p2 = series.points
+    # 美东 09:31 → 北京 21:31；16:00 → 次日 04:00
+    assert p0.ts == datetime(2026, 9, 23, 21, 31)
+    assert p2.ts == datetime(2026, 9, 24, 4, 0)
+    assert p0.price == 746.00
+    assert p0.open == 746.97
+    assert p0.high == 747.13
+    assert p0.low == 745.92
+    # 逐 bar 量额（非累计）
+    assert p0.volume == 300258.0
+    assert p0.amount == 224227000.0
+    # 均价 = 累计额/累计量
+    assert p0.avg_price == 224227000.0 / 300258.0
+    assert p1.avg_price == (224227000.0 + 90995800.0) / (300258.0 + 122022.0)
+    # 日内高低为累计极值
+    assert p1.high == 747.13
+    assert p1.low == 745.42
+    assert p2.high == 747.13
+    assert p2.low == 740.62
+
+
+def test_parse_us_mink_intraday_stale_guard() -> None:
+    # 新浪对 OTC/美股指数的 1 分钟数据停更于 2020 年：超期 → unsupported 回落东财
+    stale = [
+        {"d": "2020-06-10 15:58:00", "o": "52.20", "h": "52.25", "l": "52.10", "c": "52.15", "v": "1000", "a": "52150"},
+        {"d": "2020-06-10 15:59:00", "o": "52.15", "h": "52.20", "l": "52.10", "c": "52.18", "v": "800", "a": "41744"},
+    ]
+    result = parse_us_mink_intraday(
+        stale, symbol=_sym_us("153.TCEHY"), quote=None, today=date(2026, 9, 24)
+    )
+    assert is_market_error(result)
+    assert result.code == "unsupported"
+    # 空数据同样 unsupported
+    result_empty = parse_us_mink_intraday([], symbol=_sym_us(), quote=None, today=date(2026, 9, 24))
+    assert is_market_error(result_empty)
+    assert result_empty.code == "unsupported"
+
+
+def test_parse_us_mink_intraday_zero_amount_fallback() -> None:
+    # 指数（.ixic）type=1 的 a 恒为 0：均价回退到当前价而非 0
+    rows = [
+        {
+            "d": "2026-09-23 09:31:00", "o": "26986.31", "h": "26986.31",
+            "l": "26975.52", "c": "26978.42", "v": "10759600", "a": "0",
+        },
+        {
+            "d": "2026-09-23 09:32:00", "o": "26979.23", "h": "26981.16",
+            "l": "26976.17", "c": "26980.54", "v": "10938363", "a": "0",
+        },
+    ]
+    series = parse_us_mink_intraday(
+        rows, symbol=_sym_us("100.NDX", "纳斯达克"), quote=None, today=date(2026, 9, 24)
+    )
+    assert not is_market_error(series)
+    assert series.points[0].avg_price == 26978.42
+    assert series.points[1].avg_price == 26980.54

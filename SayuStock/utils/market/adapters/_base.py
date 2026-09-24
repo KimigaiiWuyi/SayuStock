@@ -28,12 +28,15 @@ async def resolve_em_symbol(query: str) -> SymbolRef | None:
 
     provider_symbol 统一为东财 secid（如 1.600519）：调用方依赖 150.* 前缀
     判定场外基金，行情源切换不能破坏该约定。
+
+    解析层（东财 searchapi）不可用时抛 ResolveLayerError：None 仅表示标的
+    不存在。对外端口方法 `resolve()` 请用 `resolve_em_symbol_safe`。
     """
     from ...load_data import get_full_security_code
     from .eastmoney.provider import _exchange_of, _sec_type_to_asset
-    from ...stock.request_utils import get_code_id
+    from ...stock.request_utils import get_code_id_strict
 
-    code_info = await get_code_id(query)
+    code_info = await get_code_id_strict(query)
     if code_info is None:
         return None
     secid = get_full_security_code(code_info[0])
@@ -47,6 +50,16 @@ async def resolve_em_symbol(query: str) -> SymbolRef | None:
         provider_symbol=secid,
         sec_type=code_info[2] or "",
     )
+
+
+async def resolve_em_symbol_safe(query: str) -> SymbolRef | None:
+    """同 resolve_em_symbol，但解析层失败时返回 None（端口 resolve() 语义）。"""
+    from ...stock.request_utils import ResolveLayerError
+
+    try:
+        return await resolve_em_symbol(query)
+    except ResolveLayerError:
+        return None
 
 
 class PartialMarketData:

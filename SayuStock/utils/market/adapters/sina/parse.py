@@ -3,11 +3,11 @@
 from __future__ import annotations
 
 from typing import Mapping, Sequence
-from datetime import datetime
+from datetime import date, datetime
 
 from .client import PROVIDER
 from ...enums import RankBy, BoardKind, KlinePeriod
-from ...errors import MarketError, empty_error, parse_error
+from ...errors import MarketError, empty_error, parse_error, unsupported
 from ...models import (
     RANKING_CAVEAT,
     Bar,
@@ -23,9 +23,31 @@ from ...models import (
     IntradaySeries,
 )
 
+try:  # 美股分钟时间戳为美东时间，转北京时间对齐东财口径；缺 tzdata 时退化为原样
+    from zoneinfo import ZoneInfo
+
+    _ET_TZ = ZoneInfo("America/New_York")
+    _BJ_TZ = ZoneInfo("Asia/Shanghai")
+except Exception:  # noqa: BLE001 - Windows 无 tzdata 包等场景
+    _ET_TZ = None
+    _BJ_TZ = None
+
+# 东财 100.* 美股指数 → 新浪符号。注意东财 NDX 实为纳斯达克综合（查 IXIC/
+# 纳斯达克综合指数 均指向 100.NDX），对应新浪 .ixic，而非纳指100 .ndx。
+US_INDEX_HQ: dict[str, str] = {
+    "SPX": "gb_inx",
+    "DJIA": "gb_dji",
+    "NDX": "gb_ixic",
+}
+US_INDEX_MINK: dict[str, str] = {
+    "SPX": ".inx",
+    "DJIA": ".dji",
+    "NDX": ".ixic",
+}
+
 
 def sina_symbol_from_secid(secid: str) -> str | None:
-    """东财 secid → 新浪符号：1.600519→sh600519，0.000001→sz000001。"""
+    """东财 secid → 新浪盘口符号：1.600519→sh600519，105.QQQ→gb_qqq，100.SPX→gb_inx。"""
     if "." not in secid:
         return None
     prefix, code = secid.split(".", 1)
@@ -33,7 +55,35 @@ def sina_symbol_from_secid(secid: str) -> str | None:
         return f"sh{code}"
     if prefix == "0":
         return f"sz{code}"
+    if prefix in ("105", "106", "107", "153"):
+        # 美股符号必须小写（gb_QQQ 返回空）
+        return f"gb_{code.lower()}"
+    if prefix == "100":
+        return US_INDEX_HQ.get(code.upper())
     return None
+
+
+def sina_us_mink_symbol_from_secid(secid: str) -> str | None:
+    """东财 secid → 新浪美股分钟K/日K符号：股票=裸代码（QQQ），指数=.inx 等。
+
+    US_MinKService.getDailyK/getMinK 的 symbol 参数：股票直接传代码，
+    指数需带前导点（.inx）；与 hq 盘口符号（gb_*）不同。
+    """
+    if "." not in secid:
+        return None
+    prefix, code = secid.split(".", 1)
+    if prefix in ("105", "106", "107", "153"):
+        return code
+    if prefix == "100":
+        return US_INDEX_MINK.get(code.upper())
+    return None
+
+
+def _et_to_bj(dt: datetime) -> datetime:
+    """美东 naive 时间 → 北京 naive 时间（自动处理夏令时，EDT+12/EST+13）。"""
+    if _ET_TZ is None or _BJ_TZ is None:
+        return dt
+    return dt.replace(tzinfo=_ET_TZ).astimezone(_BJ_TZ).replace(tzinfo=None)
 
 
 def _f(parts: Sequence[str], idx: int) -> float | None:
@@ -113,6 +163,62 @@ def parse_hq_line(line: str, *, symbol: SymbolRef) -> Quote | MarketError:
     )
 
 
+def parse_hq_line_us(line: str, *, symbol: SymbolRef) -> Quote | MarketError:
+    """hq.sinajs.cn 美股 gb_ CSV → Quote。
+
+    列序（与 A 股完全不同）：0 名称, 1 现价, 2 涨跌%, 4 涨跌, 5 今开,
+    6 最高, 7 最低, 8 52周高, 9 52周低, 10 量(股), 12 总市值(美元),
+    19 股本, 24/25 美东时间串, 26 昨收, 30 成交额(美元)。
+    量额单位与东财美股口径一致（股/美元），不做换算。
+    """
+    parts = line.split(",")
+    if len(parts) < 27:
+        return parse_error("新浪美股盘口字段不足", provider=PROVIDER)
+    name = _s(parts, 0) or symbol.name
+    price = _f(parts, 1)
+    prev_close = _f(parts, 26)
+    open_px = _f(parts, 5)
+    if price is None or price == 0.0:
+        price = prev_close or open_px
+    if price is None:
+        return parse_error("新浪美股盘口缺少现价", provider=PROVIDER)
+    change_pct = None
+    if prev_close:
+        # 与 A 股口径一致按昨收计算；新浪美股涨跌%字段对部分标的（如 OTC）不维护
+        change_pct = round((price - prev_close) / prev_close * 100, 3)
+    if change_pct is None:
+        change_pct = _f(parts, 2)
+    return Quote(
+        symbol=SymbolRef(
+            code=symbol.code,
+            name=name,
+            asset_class=symbol.asset_class,
+            exchange=symbol.exchange,
+            provider_symbol=symbol.provider_symbol,
+            sec_type=symbol.sec_type,
+        ),
+        price=price,
+        open=open_px,
+        high=_f(parts, 6),
+        low=_f(parts, 7),
+        prev_close=prev_close,
+        change_pct=change_pct,
+        change_amount=_f(parts, 4),
+        volume=_f(parts, 10),
+        amount=_f(parts, 30),
+        turnover_rate=None,
+        pe=None,
+        pb=None,
+        market_cap=_f(parts, 12),
+        float_market_cap=None,
+        industry=None,
+        limit_up=None,
+        limit_down=None,
+        # 东财主源美股 Quote 也不带 as_of；新浪美股时间为美东串，保持一致置空
+        as_of=None,
+    )
+
+
 def _parse_ts(raw: str) -> datetime | None:
     text = raw.strip()
     for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M", "%Y-%m-%d"):
@@ -170,6 +276,221 @@ def parse_kline_rows(
     if not bars:
         return empty_error("新浪K线解析后为空", provider=PROVIDER)
     return KlineSeries(symbol=symbol, period=period, bars=tuple(bars), adjusted=False)
+
+
+def parse_us_daily_rows(
+    rows: object,
+    *,
+    symbol: SymbolRef,
+    period: KlinePeriod,
+    limit: int,
+    start: date | None = None,
+    end: date | None = None,
+) -> KlineSeries | MarketError:
+    """新浪美股 getDailyK（d/o/h/l/c/v/a 全量历史）→ KlineSeries。
+
+    接口只返回全量历史，按 start/end 过滤后取尾部 limit 根。
+    """
+    if not isinstance(rows, list) or not rows:
+        return empty_error("新浪美股日K为空", provider=PROVIDER)
+    bars: list[Bar] = []
+    for row in rows:
+        if not isinstance(row, Mapping):
+            continue
+        ts = _parse_ts(str(row.get("d", "")))
+        if ts is None:
+            continue
+        try:
+            open_px = float(row["o"])
+            high = float(row["h"])
+            low = float(row["l"])
+            close = float(row["c"])
+            volume = float(row["v"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        amount = None
+        if "a" in row:
+            try:
+                amount = float(row["a"])
+            except (TypeError, ValueError):
+                amount = None
+        bars.append(
+            Bar(
+                ts=ts,
+                open=open_px,
+                high=high,
+                low=low,
+                close=close,
+                volume=volume,
+                amount=amount,
+                amplitude=None,
+                change_pct=None,
+                change_amount=None,
+                turnover_rate=None,
+            )
+        )
+    if not bars:
+        return empty_error("新浪美股日K解析后为空", provider=PROVIDER)
+    if start is not None:
+        bars = [b for b in bars if b.ts.date() >= start]
+    if end is not None:
+        bars = [b for b in bars if b.ts.date() <= end]
+    if not bars:
+        return empty_error("新浪美股日K过滤后为空", provider=PROVIDER)
+    return KlineSeries(symbol=symbol, period=period, bars=tuple(bars[-limit:]), adjusted=False)
+
+
+def _us_mink_bars(rows: object) -> list[Bar] | MarketError:
+    """getMinK 行（d/o/h/l/c/v/a，美东时间，逐 bar 量额）→ Bar（北京时间）。"""
+    if not isinstance(rows, list) or not rows:
+        return empty_error("新浪美股分钟K为空", provider=PROVIDER)
+    bars: list[Bar] = []
+    for row in rows:
+        if not isinstance(row, Mapping):
+            continue
+        ts = _parse_ts(str(row.get("d", "")))
+        if ts is None:
+            continue
+        try:
+            open_px = float(row["o"])
+            high = float(row["h"])
+            low = float(row["l"])
+            close = float(row["c"])
+            volume = float(row["v"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        amount = None
+        if "a" in row:
+            try:
+                amount = float(row["a"])
+            except (TypeError, ValueError):
+                amount = None
+        bars.append(
+            Bar(
+                ts=_et_to_bj(ts),
+                open=open_px,
+                high=high,
+                low=low,
+                close=close,
+                volume=volume,
+                amount=amount,
+                amplitude=None,
+                change_pct=None,
+                change_amount=None,
+                turnover_rate=None,
+            )
+        )
+    if not bars:
+        return empty_error("新浪美股分钟K解析后为空", provider=PROVIDER)
+    return bars
+
+
+def parse_us_mink_rows(
+    rows: object,
+    *,
+    symbol: SymbolRef,
+    period: KlinePeriod,
+    limit: int,
+    start: date | None = None,
+    end: date | None = None,
+) -> KlineSeries | MarketError:
+    """getMinK 分钟K（type=5/15/30/60，最多 1023 根，约 3~40 个交易日）→ KlineSeries。"""
+    bars = _us_mink_bars(rows)
+    if isinstance(bars, MarketError):
+        return bars
+    if start is not None:
+        bars = [b for b in bars if b.ts.date() >= start]
+    if end is not None:
+        bars = [b for b in bars if b.ts.date() <= end]
+    if not bars:
+        return empty_error("新浪美股分钟K过滤后为空", provider=PROVIDER)
+    return KlineSeries(symbol=symbol, period=period, bars=tuple(bars[-limit:]), adjusted=False)
+
+
+# type=1 分时新鲜度守卫：新浪对部分标的（OTC、美股指数）的 1 分钟数据停更于
+# 2020 年，返回的仍是旧数据；超期视为该源无此数据（unsupported 回落东财）
+_US_INTRADAY_MAX_AGE_DAYS = 10
+
+
+def parse_us_mink_intraday(
+    rows: object,
+    *,
+    symbol: SymbolRef,
+    quote: Quote | None,
+    today: date,
+) -> IntradaySeries | MarketError:
+    """getMinK type=1（1 分钟线，末时刻标注）→ 当日（最近一个交易日）IntradaySeries。
+
+    时间戳美东 → 北京；量额为逐 bar 值，均价按累计额/累计量推导。
+    """
+    if not isinstance(rows, list) or not rows:
+        return unsupported("新浪该美股标的无分时数据", provider=PROVIDER)
+    parsed: list[tuple[datetime, Bar]] = []
+    for row in rows:
+        if not isinstance(row, Mapping):
+            continue
+        ts = _parse_ts(str(row.get("d", "")))
+        if ts is None:
+            continue
+        try:
+            bar = Bar(
+                ts=ts,
+                open=float(row["o"]),
+                high=float(row["h"]),
+                low=float(row["l"]),
+                close=float(row["c"]),
+                volume=float(row["v"]),
+                amount=float(row["a"]) if row.get("a") not in (None, "") else None,
+                amplitude=None,
+                change_pct=None,
+                change_amount=None,
+                turnover_rate=None,
+            )
+        except (KeyError, TypeError, ValueError):
+            continue
+        parsed.append((ts, bar))
+    if not parsed:
+        return unsupported("新浪该美股标的无分时数据", provider=PROVIDER)
+    last_day = parsed[-1][0].date()
+    if (today - last_day).days > _US_INTRADAY_MAX_AGE_DAYS:
+        # 数据停更（如 OTC/指数停在 2020 年），不是当日分时
+        return unsupported(
+            f"新浪该美股标的无近期分时数据（末点 {last_day}）", provider=PROVIDER
+        )
+    session = [bar for ts, bar in parsed if ts.date() == last_day]
+    points: list[IntradayPoint] = []
+    open_px: float | None = None
+    day_high: float | None = None
+    day_low: float | None = None
+    cum_vol = 0.0
+    cum_amount = 0.0
+    for bar in session:
+        price = bar.close
+        if price <= 0:
+            continue
+        ts_bj = _et_to_bj(bar.ts)
+        if open_px is None:
+            open_px = bar.open or price
+        day_high = bar.high if day_high is None else max(day_high, bar.high)
+        day_low = bar.low if day_low is None else min(day_low, bar.low)
+        cum_vol += bar.volume or 0.0
+        cum_amount += bar.amount or 0.0
+        points.append(
+            IntradayPoint(
+                ts=ts_bj,
+                price=price,
+                open=open_px,
+                high=day_high,
+                low=day_low,
+                volume=bar.volume or 0.0,
+                amount=bar.amount or 0.0,
+                # 指数（.ixic 等）无成交额（a=0），均价回退到当前价
+                avg_price=cum_amount / cum_vol if cum_vol > 0 and cum_amount > 0 else price,
+            )
+        )
+    if not points:
+        return empty_error("新浪美股分时解析后为空", provider=PROVIDER)
+    return IntradaySeries(symbol=symbol, points=tuple(points), quote=quote, ndays=1)
 
 
 def parse_minline_rows(

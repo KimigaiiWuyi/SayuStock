@@ -42,15 +42,16 @@ snap = await market.hotmap()
    能力不全无需特殊处理——`unsupported` 会自动回落默认源。
 3. **禁止**在 feature 模块解析供应商原始字段。
 
-## 行情API 数据源切换（后台设置「行情API」）
+## 行情API 数据源优先级（后台设置「行情API」）
 
-- 网页控制台 → 插件配置 →「行情API」：全局默认源（默认**东方财富**）+ 逐接口选单
-  （quote / intraday / kline / board / rank_list / hotmap / sector_menu / breadth /
-  market_turnover / northbound / valuation_series / financial_snapshot）。
+- 网页控制台 → 插件配置 →「行情API」→ **数据源优先级**：一套全局优先级链
+  （默认「东方财富 → 腾讯财经 → 新浪财经」，从左到右递减），所有行情接口共用。
 - 路由实现：`utils/market/provider_registry.py` 的 `ConfigurableEquityMarket`
   （equity 槽位包装）。配置每次调用时读取，网页控制台改完**立即热生效**。
-- 所选源对某接口返回 `unsupported` 时自动回落：逐接口选择 → 全局默认 → 东方财富；
-  网络/解析错误原样上抛，不静默换源。
+- 取数语义（尽可能交付）：按链逐一尝试，成功即返回；源不支持该接口（`unsupported`）
+  跳过；网络/解析/空数据错误顺延下一个源；`not_found` 短路返回（解析层共用）。
+  全部失败才报错，报优先级最高的真实错误。
+- 链里没有东方财富时自动把东财补到链尾兜底（云图/北向/估值/财报等东财独占接口不受影响）。
 - 可选供应商：`eastmoney`（全接口）、`sina`（盘口/分时/分钟日K/沪深A/指数/行业板块/
   换手成交额成交量排行/行业菜单）、`tencent`（盘口/分时/分钟K+前复权日周月K）。
 - `resolve` 的 `provider_symbol` 恒为东财 secid（`150.*` 判场外基金依赖此约定），不随源切换变化。

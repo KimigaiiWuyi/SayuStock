@@ -1,13 +1,18 @@
-"""权益行情供应商注册表：后台「行情API」配置驱动、逐接口可切换。
+"""权益行情供应商注册表：后台「行情API」优先级链驱动。
 
-- `market_api_default`：全局默认源（未单独指定接口时使用）。
-- `market_api_<接口>`：逐接口覆盖；选「跟随默认」或未知值时回落全局默认。
-- 所选源返回 `unsupported`（能力缺失）时自动回落默认源，仍不支持再回落
-  东方财富，保证既有功能不因切源而失效。网络/解析错误原样上抛。
+- `market_api_priority`：一套全局优先级，形如「东方财富 → 腾讯财经 → 新浪财经」，
+  从左到右优先级递减；所有接口共用。
+- 取数语义（尽可能交付）：按链逐一尝试，成功即返回；源返回 `unsupported`
+  （不支持该接口）直接跳过；其余错误（网络/解析/空数据）顺延到下一个源；
+  `not_found` 短路返回（标的解析层共用，换源无意义）。全部失败才报错，
+  报「优先级最高且真正出错」的那个源的错误。
+- 链里没有东方财富时自动把东财追加到链尾兜底（云图/北向/估值/财报等
+  东财独占接口不因换源而失效）。
 """
 
 from __future__ import annotations
 
+import re
 import asyncio
 from typing import Literal, Callable, cast
 from datetime import date
@@ -17,7 +22,7 @@ from gsuid_core.logger import logger
 
 from .port import MarketDataPort
 from .enums import RankBy, BoardKind, ValueKind, KlinePeriod
-from .errors import MarketError, is_market_error
+from .errors import MarketError, network_error, is_market_error
 from .models import (
     Quote,
     SymbolRef,
@@ -38,37 +43,45 @@ PROVIDER_LABELS: dict[str, str] = {
     "sina": "新浪财经",
     "tencent": "腾讯财经",
 }
-_LABEL_TO_ID: dict[str, str] = {label: pid for pid, label in PROVIDER_LABELS.items()}
+
+# 选单值/手写值 → 供应商 id（含常用简称）
+_PROVIDER_ALIASES: dict[str, str] = {
+    "东方财富": "eastmoney",
+    "东财": "eastmoney",
+    "eastmoney": "eastmoney",
+    "新浪财经": "sina",
+    "新浪": "sina",
+    "sina": "sina",
+    "腾讯财经": "tencent",
+    "腾讯": "tencent",
+    "tencent": "tencent",
+}
 
 FALLBACK_PROVIDER_ID = "eastmoney"
-DEFAULT_CONFIG_KEY = "market_api_default"
-FOLLOW_DEFAULT = "跟随默认"
+PRIORITY_CONFIG_KEY = "market_api_priority"
+DEFAULT_PRIORITY = "东方财富 → 腾讯财经 → 新浪财经"
 
-# Port 接口名 → 后台配置键（quotes 跟随 quote，resolve/榜单内层走默认源）
-INTERFACE_CONFIG_KEYS: dict[str, str] = {
-    "quote": "market_api_quote",
-    "intraday": "market_api_intraday",
-    "kline": "market_api_kline",
-    "board": "market_api_board",
-    "rank_list": "market_api_rank_list",
-    "hotmap": "market_api_hotmap",
-    "sector_menu": "market_api_sector_menu",
-    "breadth": "market_api_breadth",
-    "market_turnover": "market_api_market_turnover",
-    "northbound": "market_api_northbound",
-    "valuation_series": "market_api_valuation_series",
-    "financial_snapshot": "market_api_financial_snapshot",
-}
+# 链字符串分隔符：→ > ， , 及空白
+_CHAIN_SPLIT = re.compile(r"[→>，,]")
 
 
 def normalize_provider_id(value: object) -> str | None:
-    """选单值（中文展示名或裸 id）→ 供应商 id；未知返回 None。"""
+    """选单值（中文展示名/简称/裸 id）→ 供应商 id；未知返回 None。"""
     text = str(value or "").strip()
-    if not text or text == FOLLOW_DEFAULT:
+    if not text:
         return None
-    if text in PROVIDER_LABELS:
-        return text
-    return _LABEL_TO_ID.get(text)
+    return _PROVIDER_ALIASES.get(text)
+
+
+def parse_priority_chain(raw: object) -> list[str]:
+    """优先级链配置 → 供应商 id 列表（保序去重，未知片段忽略）。"""
+    text = str(raw or "")
+    ids: list[str] = []
+    for part in _CHAIN_SPLIT.split(text):
+        pid = normalize_provider_id(part)
+        if pid is not None and pid not in ids:
+            ids.append(pid)
+    return ids
 
 
 def _build_eastmoney() -> MarketDataPort:
@@ -108,8 +121,25 @@ def default_config_reader(key: str, fallback: str) -> str:
         return fallback
 
 
+def build_priority_chain(reader: Callable[[str, str], str]) -> list[str]:
+    """配置 → 实际调用链：优先级链 + 东财兜底（缺东财时补到链尾）。"""
+    chain = parse_priority_chain(reader(PRIORITY_CONFIG_KEY, DEFAULT_PRIORITY))
+    if not chain:
+        chain = [FALLBACK_PROVIDER_ID]
+    if FALLBACK_PROVIDER_ID not in chain:
+        chain.append(FALLBACK_PROVIDER_ID)
+    return chain
+
+
+def _stamp_provider(result: object, pid: str) -> object:
+    """把命中源 id 写进结果模型，供渲染层展示真实数据来源（左下角标签）。"""
+    from .display import stamp_provider
+
+    return stamp_provider(result, pid)
+
+
 class ConfigurableEquityMarket:
-    """equity 槽位包装：逐接口分派到所选供应商，unsupported 自动回落。
+    """equity 槽位包装：按全局优先级链逐一尝试，尽可能交付。
 
     供应商实例按 id 缓存；配置每次调用时读取，网页控制台改完即热生效。
     """
@@ -128,54 +158,61 @@ class ConfigurableEquityMarket:
             self._instances[provider_id] = factory()
         return self._instances[provider_id]
 
-    def _chain(self, iface: str) -> list[tuple[str, MarketDataPort]]:
-        """调用链：逐接口选择 → 全局默认 → 东方财富（去重、保序）。"""
-        picked: list[str] = []
-        key = INTERFACE_CONFIG_KEYS.get(iface)
-        if key is not None:
-            override = normalize_provider_id(self._reader(key, FOLLOW_DEFAULT))
-            if override is not None:
-                picked.append(override)
-        default_id = normalize_provider_id(self._reader(DEFAULT_CONFIG_KEY, PROVIDER_LABELS[FALLBACK_PROVIDER_ID]))
-        if default_id is not None:
-            picked.append(default_id)
-        picked.append(FALLBACK_PROVIDER_ID)
+    def _chain(self) -> list[tuple[str, MarketDataPort]]:
         chain: list[tuple[str, MarketDataPort]] = []
-        seen: set[str] = set()
-        for pid in picked:
-            if pid in seen:
-                continue
-            seen.add(pid)
+        for pid in build_priority_chain(self._reader):
             instance = self._instance(pid)
             if instance is not None:
                 chain.append((pid, instance))
         return chain
 
     async def _dispatch(self, iface: str, method: str, *args: object, **kwargs: object) -> object:
-        chain = self._chain(iface)
+        chain = self._chain()
         if not chain:
             return MarketError(
                 code="unsupported",
                 message=f"行情API无可用供应商（接口 {iface}）",
                 provider="registry",
             )
-        result: object = None
+        first_real_error: MarketError | None = None
+        first_error: MarketError | None = None
         for i, (pid, port) in enumerate(chain):
-            result = await getattr(port, method)(*args, **kwargs)
-            if not (is_market_error(result) and result.code == "unsupported"):
-                return result
-            nxt = chain[i + 1] if i + 1 < len(chain) else None
-            if nxt is not None:
+            try:
+                result = await getattr(port, method)(*args, **kwargs)
+            except Exception as exc:  # noqa: BLE001 - 源内部异常转 network 错误顺延，链路尽可能交付
+                result = network_error(f"{type(exc).__name__}: {exc}", provider=pid)
                 logger.warning(
-                    f"[SayuStock][行情API] {iface} 在 {PROVIDER_LABELS.get(pid, pid)} 不支持"
-                    f"（{result.message}），回落 {PROVIDER_LABELS.get(nxt[0], nxt[0])}"
+                    f"[SayuStock][行情API] {iface} 在 {PROVIDER_LABELS.get(pid, pid)} 抛出异常"
+                    f"（{result.message}），按失败顺延"
                 )
-        return result
+            if not is_market_error(result):
+                return _stamp_provider(result, pid)
+            assert isinstance(result, MarketError)
+            if first_error is None:
+                first_error = result
+            if result.code == "not_found":
+                # 标的解析层各源共用，换源无意义
+                return result
+            if result.code == "unsupported":
+                # 该源没有此接口，属预期，静默跳过
+                logger.debug(
+                    f"[SayuStock][行情API] {iface} 在 {PROVIDER_LABELS.get(pid, pid)} 不支持，跳过"
+                )
+                continue
+            if first_real_error is None:
+                first_real_error = result
+            nxt = chain[i + 1] if i + 1 < len(chain) else None
+            logger.warning(
+                f"[SayuStock][行情API] {iface} 由 {PROVIDER_LABELS.get(pid, pid)} 失败"
+                f"（{result.code}: {result.message}），顺延 "
+                f"{PROVIDER_LABELS.get(nxt[0], nxt[0]) if nxt else '无下一源'}"
+            )
+        return first_real_error or first_error
 
     # -- MarketDataPort -------------------------------------------------
 
     async def resolve(self, query: str) -> SymbolRef | None:
-        chain = self._chain("resolve")
+        chain = self._chain()
         if not chain:
             return None
         return await chain[0][1].resolve(query)
