@@ -96,9 +96,35 @@ CONFIG_DEFAULT: Dict[str, GSC] = {
         "AI预测模型",
         "Kronos-mini=默认，4.1M参数，CPU即可流畅运行；"
         "Kronos-small=24.7M参数，建议GPU；Kronos-base=102.3M参数，需GPU且显存充足。"
-        "⚠️ 选择高配置模型前，请先确认服务器具有能流畅运行该模型的配置（内存/显存），"
+        "⚠️ 切换高配置模型前，请先确认服务器具有能流畅运行该模型的配置（内存/显存），"
         "否则预测会非常慢，甚至因资源不足失败",
         "NeoQuasar/Kronos-mini",
         options=["NeoQuasar/Kronos-mini", "NeoQuasar/Kronos-small", "NeoQuasar/Kronos-base"],
+    ),
+    "news_push_divider": GsDivider(
+        "雪球新闻推送分级",
+        "已订阅「订阅雪球新闻」的群按下面的列表分为四类推送模式；"
+        "同一群号出现在多个列表时按 小时 > 交易时段 > 每日 优先；"
+        "没有出现在任何列表里的订阅群保持默认的逐条实时推送。列表改动立即生效，无需重启",
+        "雪球7x24新闻推送分级 (默认立即推送)",
+    ),
+    "news_push_hourly_groups": GsListStrConfig(
+        "小时汇总推送群",
+        "这些群每小时整点收到一条合并推送，内容为上一小时内的雪球7x24新闻",
+        [],
+        options=[],
+    ),
+    "news_push_trading_session_groups": GsListStrConfig(
+        "交易时段汇总推送群",
+        "这些群在每天 08:00 / 12:00 / 16:00 / 22:00 各收到一条合并推送"
+        "（隔夜/午间/收盘/晚间汇总），内容为自上次推送以来累积的雪球7x24新闻",
+        [],
+        options=[],
+    ),
+    "news_push_daily_groups": GsListStrConfig(
+        "每日汇总推送群",
+        "这些群每天 08:00 收到一条合并推送，内容为自昨天以来累积的雪球7x24新闻",
+        [],
+        options=[],
     ),
 }

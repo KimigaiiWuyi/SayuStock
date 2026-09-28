@@ -16,7 +16,7 @@
 - `Plugins(name="SayuStock", force_prefix=["a", "股票"], allow_empty_prefix=True)`。
 - 行情只走 `get_market()` 领域模型；业务代码禁止解析东财 `f*`。
 - 有图必有文字：`ai_return` 必须在图片缓存判断**之前**。
-- 版本：`SayuStock/version.py`（当前 `0.8`）。`pyproject.toml` 的 `[project]` / poetry 版本可能不一致。Python `==3.12.*`。
+- 版本：`SayuStock/version.py`（当前 `0.9`）。`pyproject.toml` 的 `[project]` / poetry 版本可能不一致。Python `==3.12.*`。
 
 ## Repository map
 

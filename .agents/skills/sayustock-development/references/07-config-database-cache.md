@@ -32,6 +32,13 @@ STOCK_CONFIG = StringConfig("SayuStock", CONFIG_PATH, CONFIG_DEFAULT)
 | `stock_cache_retention_days` | 每日清理保留天数 | 7 |
 | `eastmoney_cookie` | 东财 Cookie | 内置字符串 |
 | `holdings_analysis_unlimited_users` | 持仓分析免每日限额的 `user_id` 列表；网页控制台改完热生效 | `[]` |
+| `news_push_hourly_groups` | 雪球新闻「小时汇总」群列表（类别2，每小时整点合并推送） | `[]` |
+| `news_push_trading_session_groups` | 雪球新闻「交易时段汇总」群列表（类别3，每日 08/12/16/22 点合并推送：隔夜/午间/收盘/晚间） | `[]` |
+| `news_push_daily_groups` | 雪球新闻「每日汇总」群列表（类别4，每日 08:00 合并推送） | `[]` |
+
+三个推送分级列表由 `stock_config.py` 的 `SayuStockConfig`（`StringConfig` 子类）覆写 `set_config`：
+保存任一列表后检查群号跨列表重叠并 `logger.warning` 告警（重叠群按 小时 > 交易时段 > 每日 优先遮蔽，
+重叠集合不变不重复告警；模块导入时兜底检查一次，覆盖手改 config.json 的场景）。
 
 读取：
 

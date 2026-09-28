@@ -49,7 +49,7 @@ plugins/SayuStock/
 | `stock_ai/` | Kronos 模型预测出图 |
 | `stock_agent/` | 注册 `stock_agent` 与模拟盘相关 AgentNode |
 | `stock_papertrade/` | 模拟盘命令、DB、撮合、策略、周期 gate |
-| `stock_news/` | 雪球等新闻订阅（群） |
+| `stock_news/` | 雪球 7x24 新闻订阅（群）；推送分四级：逐条实时（默认）/小时汇总/交易时段(08·12·16·22点)汇总/每日(08点)汇总，后三类群列表在 STOCK_CONFIG 配置 |
 | `stock_help/` | 帮助图 + `register_help` |
 | `stock_status/` | 状态相关（若启用） |
 | `stock_config/` | `STOCK_CONFIG` / `CONFIG_DEFAULT` |
