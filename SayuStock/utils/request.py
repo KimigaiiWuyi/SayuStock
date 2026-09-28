@@ -65,14 +65,19 @@ async def get_token() -> object:
 
 
 # 新闻缓存保留时长。小时/交易时段/每日汇总推送需要取到隔夜消息，
-# 不能在 00:00 整表清空，只裁掉超过该时长的旧新闻，内存仍有界
-_NEWS_RETENTION_MS = 24 * 60 * 60 * 1000
+# 不能在 00:00 整表清空，只裁掉超过该时长的旧新闻，内存仍有界。
+# 取 48h 而非 24h：漏推一次「每日 08:00」时，下一次汇总仍要能补齐前一天的量。
+NEWS_RETENTION_MS = 48 * 60 * 60 * 1000
+
+# 逐条实时只需最新几页；cover_ms 回填时按覆盖窗口决定翻多少页，页数上限兜底
+_NEWS_LIVE_PAGES = 3
+_NEWS_MAX_PAGES = 60
 
 
 async def clean_news() -> None:
     """按 created_at 裁剪新闻缓存中超过保留时长的旧条目"""
     now_ms = int(time.time() * 1000)
-    NEWS["items"] = [i for i in NEWS["items"] if now_ms - i["created_at"] <= _NEWS_RETENTION_MS]
+    NEWS["items"] = [i for i in NEWS["items"] if now_ms - i["created_at"] <= NEWS_RETENTION_MS]
 
 
 async def get_news_list(
@@ -95,14 +100,26 @@ async def get_news_list(
 
 async def get_news(
     max_id: int = 0,
+    cover_ms: int = 0,
 ) -> Union[int, Tuple[int, XueQiu7x24]]:
+    """取雪球7x24新闻并合并进全局 NEWS 缓存。
+
+    cover_ms > 0 时持续翻页，直到缓存已覆盖该时长（汇总推送靠它回填隔夜/隔日区间，
+    进程重启后缓存是空的，否则只能拿到最近 45 条）；为 0 时只取最新 _NEWS_LIVE_PAGES 页。
+    """
     global NEWS
     _max_id = max_id
     return_max_id = max_id
     # 用 seen_ids 防止同一新闻被反复 append 进全局 NEWS
     seen_ids: set = {item["id"] for item in NEWS["items"]}
+    now_ms = int(time.time() * 1000)
 
-    for i in range(3):
+    cached_oldest = min((item["created_at"] for item in NEWS["items"]), default=now_ms)
+    need_cover = bool(cover_ms) and now_ms - cached_oldest < cover_ms
+    max_pages = _NEWS_MAX_PAGES if need_cover else _NEWS_LIVE_PAGES
+    oldest_ms: Optional[int] = None
+
+    for i in range(max_pages):
         data = await get_news_list(max_id=_max_id)
         if isinstance(data, int):
             return data
@@ -121,9 +138,16 @@ async def get_news(
                 NEWS["items"].append(item)
                 seen_ids.add(item["id"])
 
+        page_oldest = min(item["created_at"] for item in data["items"])
+        oldest_ms = page_oldest if oldest_ms is None else min(oldest_ms, page_oldest)
+
         NEWS["next_id"] = data["next_id"]
         NEWS["next_max_id"] = data["next_max_id"]
         _max_id = data["next_max_id"]
+
+        # 已经翻到比覆盖窗口更旧的条目就不必再翻
+        if need_cover and oldest_ms is not None and now_ms - oldest_ms >= cover_ms:
+            break
 
     return return_max_id, NEWS
 

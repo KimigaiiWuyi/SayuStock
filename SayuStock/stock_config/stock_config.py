@@ -6,8 +6,6 @@ from gsuid_core.utils.plugins_config.gs_config import StringConfig
 from .config_default import CONFIG_DEFAULT
 from ..utils.resource_path import CONFIG_PATH
 
-STOCK_CONFIG = StringConfig("SayuStock", CONFIG_PATH, CONFIG_DEFAULT)
-
 # 雪球新闻推送分级的三个群列表键（stock_news 消费；优先级：小时 > 交易时段 > 每日）
 _NEWS_PUSH_LIST_NAMES = {
     "news_push_hourly_groups": "小时汇总",
@@ -46,20 +44,22 @@ def warn_news_push_group_overlap() -> None:
         )
 
 
-_orig_set_config = StringConfig.set_config
+class SayuStockConfig(StringConfig):
+    """追加推送分级列表的跨列表重叠告警。
+
+    网页控制台保存（批量 / 单项）最终都走 ``set_config``；用子类覆写而非给实例
+    挂方法，插件热重载重复执行本模块时不会叠加包装。构造走 Core 单例，
+    ``"SayuStock"`` 首次构造者生效。
+    """
+
+    def set_config(self, key: str, value: Union[str, List, bool, Dict, int]) -> bool:
+        ok = super().set_config(key, value)
+        if ok and key in _NEWS_PUSH_LIST_NAMES:
+            warn_news_push_group_overlap()
+        return ok
 
 
-def _set_config_checked(key: str, value: Union[str, List, bool, Dict, int]) -> bool:
-    ok = _orig_set_config(STOCK_CONFIG, key, value)
-    if ok and key in _NEWS_PUSH_LIST_NAMES:
-        warn_news_push_group_overlap()
-    return ok
-
-
-# 网页控制台保存插件配置（批量/单项）最终都调用 StringConfig.set_config；
-# 实例级包装让三个推送分级列表每次保存后都做跨列表检查。
-# 取类函数而非实例属性来包装，插件热重载重复执行本模块时不会包装叠加。
-STOCK_CONFIG.set_config = _set_config_checked  # type: ignore[method-assign]
+STOCK_CONFIG = SayuStockConfig("SayuStock", CONFIG_PATH, CONFIG_DEFAULT)
 
 # 启动兜底检查一次（手改 config.json 绕过 set_config 的情况）
 warn_news_push_group_overlap()

@@ -12,9 +12,10 @@ from gsuid_core.logger import logger
 from gsuid_core.models import Event
 from gsuid_core.subscribe import gs_subscribe
 from gsuid_core.utils.database.models import Subscribe
+from gsuid_core.utils.plugins_config.gs_config import sp_config
 
 from ..utils.models import ItemType
-from ..utils.request import get_news, clean_news
+from ..utils.request import NEWS_RETENTION_MS, get_news, clean_news
 from ..utils.time_range import now_bjt
 
 sv_stock_subscribe = SV("订阅新闻", pm=2, area="GROUP")
@@ -45,11 +46,7 @@ _BJT = ZoneInfo("Asia/Shanghai")
 # 用锁串行化所有取数入口
 _FETCH_LOCK = asyncio.Lock()
 
-# 出站发送全局串行化。整点时刻多个推送 job 并发运行（08:00 同时触发
-# 小时/交易时段/每日三个任务，逐条任务也可能跨整点延伸），各 job 只保证
-# 自己循环内的间隔，合起来仍会出现同一秒向多个群发出消息——QQ 风控
-# 对同账号同秒多群最敏感。所有 subscribe.send 统一走 _throttled_send，
-# 进程内任意两条新闻推送之间至少间隔 2-5s 且绝不并发。
+# 所有新闻出站共用锁：整点多个 job 并发会同秒向多群发消息，QQ 风控对此最敏感
 _SEND_LOCK = asyncio.Lock()
 
 # 进程内发送去重（不持久化，重启即清空，仅作安全网）
@@ -80,17 +77,27 @@ def _mark_sent(group_id: Optional[str], news_id: int) -> None:
     history.append(news_id)
 
 
-async def _throttled_send(subscribe: Subscribe, message: Union[str, List[str]]) -> None:
+# 全局关闭合并转发时 Core 会直接丢弃 node（整条消息不发），只能退回纯文本
+_FORWARD_DISABLED = "禁止(不发送任何消息)"
+
+
+def _digest_payload(texts: List[str]) -> Union[str, List[str]]:
+    """把一批汇总正文转成可发送载荷；合并转发被禁用时退回纯文本"""
+    if sp_config.get_config("EnableForwardMessage").data == _FORWARD_DISABLED:
+        return "\n".join(texts)
+    return texts
+
+
+async def _throttled_send(subscribe: Subscribe, message: Union[str, List[str]]) -> bool:
     """全局串行发送单条订阅消息，发送后强制间隔 2-5s（含在锁内）。
 
-    单个群发送失败只记日志，不打断同轮其他群的推送。
+    返回是否真的送达。``Subscribe.send`` 在机器人离线 / WS_BOT_ID 失效时返回 -1
+    而不抛异常，调用方据此决定要不要推进水位线，避免丢消息。
     """
     async with _SEND_LOCK:
-        try:
-            await subscribe.send(message)
-        except Exception as e:
-            logger.error(f"[SayuStock] 雪球新闻推送到群 {subscribe.group_id} 失败: {e}")
+        result = await subscribe.send(message)
         await asyncio.sleep(2 + random.random() * 3)
+    return result != -1
 
 
 def _fmt_news_time(created_at: int, fmt: str = "%m-%d %H:%M") -> str:
@@ -241,7 +248,14 @@ async def send_subscribe_info() -> None:
                     if _already_sent(subscribe.group_id, new["id"]):
                         continue
                     dt_local = _fmt_news_time(new["created_at"], "%Y-%m-%d %H:%M:%S")
-                    await _throttled_send(subscribe, f"【{dt_local}】雪球7x24消息\n{new['text']}")
+                    sent = await _throttled_send(subscribe, f"【{dt_local}】雪球7x24消息\n{new['text']}")
+                    if not sent:
+                        # 断在这里：水位线停在最后一条真正发出的 id，本条及之后的留待下轮重发
+                        logger.error(
+                            f"[SayuStock] 雪球新闻推送到群 {subscribe.group_id} 失败，"
+                            f"停在 id={sent_max_id}，剩余条目留待下轮重发"
+                        )
+                        break
                     sent_max_id = max(sent_max_id, new["id"])
                     _mark_sent(subscribe.group_id, new["id"])
 
@@ -253,12 +267,15 @@ async def _send_digest(subscribe: Subscribe, items: List[ItemType], label: str) 
     """给单个订阅发送汇总。
 
     多条新闻以 ``List[str]`` 交给 ``subscribe.send``，走核心现成的合并实现
-    （segment.convert_message 会把纯字符串列表包成 MessageSegment.node 合并转发，
-    实际形态由全局 EnableForwardMessage 配置决定）。
+    （segment.convert_message 会把纯字符串列表包成 MessageSegment.node 合并转发）；
+    核心禁止合并转发时由 _digest_payload 退回纯文本，避免整条被丢弃。
+
+    分批发送：只有确认发出去的批次才记 _SENT_HISTORY 并推进水位线，
+    某批失败即中断，本批及之后的条目留到下个窗口重发。
     """
     watermark = int(subscribe.extra_message or 0)
     sent_max_id = watermark
-    entries: List[str] = []
+    entries: List[Tuple[int, str]] = []
     first_dt = last_dt = ""
 
     for new in items:
@@ -269,9 +286,7 @@ async def _send_digest(subscribe: Subscribe, items: List[ItemType], label: str) 
             if not entries:
                 first_dt = dt
             last_dt = dt
-            entries.append(f"【{dt}】{new['text']}")
-            sent_max_id = max(sent_max_id, new["id"])
-            _mark_sent(subscribe.group_id, new["id"])
+            entries.append((new["id"], f"【{dt}】{new['text']}"))
 
     if not entries:
         return
@@ -279,11 +294,23 @@ async def _send_digest(subscribe: Subscribe, items: List[ItemType], label: str) 
     header = f"📰 雪球7x24 · {label}（共{len(entries)}条 · {first_dt}~{last_dt}）"
     for i in range(0, len(entries), _DIGEST_BATCH):
         batch = entries[i : i + _DIGEST_BATCH]
+        texts = [line for _, line in batch]
         if i == 0:
-            batch = [header] + batch
-        await _throttled_send(subscribe, batch)
+            texts = [header] + texts
 
-    await _update_watermark(subscribe, sent_max_id)
+        if not await _throttled_send(subscribe, _digest_payload(texts)):
+            logger.error(
+                f"[SayuStock] 雪球新闻{label}推送到群 {subscribe.group_id} 失败，"
+                f"停在 id={sent_max_id}，本批及后续留待下个窗口重发"
+            )
+            break
+
+        for news_id, _ in batch:
+            _mark_sent(subscribe.group_id, news_id)
+        sent_max_id = max(sent_max_id, max(news_id for news_id, _ in batch))
+
+    if sent_max_id > watermark:
+        await _update_watermark(subscribe, sent_max_id)
 
 
 async def _push_digest(category: int, label: str) -> None:
@@ -299,7 +326,8 @@ async def _push_digest(category: int, label: str) -> None:
         return
 
     async with _FETCH_LOCK:
-        news = await get_news()
+        # 汇总要覆盖隔夜/隔日区间，进程重启后缓存是空的，必须回填到保留窗口
+        news = await get_news(cover_ms=NEWS_RETENTION_MS)
     if isinstance(news, int):
         logger.error(f"[SayuStock] 发送雪球新闻{label}失败, 取消发送, 错误码：{news}!")
         return
@@ -320,12 +348,7 @@ async def push_hourly_digest() -> None:
     await _push_digest(CATEGORY_HOURLY, "小时汇总")
 
 
-# 类别3：交易时段汇总。分段切在 22:00 是为了把夜间睡眠段（23:00-08:00 不推送）
-# 拦腰截断，避免出现覆盖美股整个交易日的 16 小时大段：
-#   08:00 隔夜汇总（22:00-08:00，美股尾盘/收盘+清晨国际消息）
-#   12:00 午间汇总（08:00-12:00，盘前公告+集合竞价+A股上午盘）
-#   16:00 收盘汇总（12:00-16:00，A股下午盘+15:00收盘+港股收盘）
-#   22:00 晚间汇总（16:00-22:00，盘后公告密集期+欧股盘中+美股数据/开盘）
+# 22 点切段是为了让夜间睡眠段（23:00-08:00）不被单条汇总覆盖；时段名取 now_bjt().hour
 _TRADING_SESSION_LABELS = {
     8: "隔夜汇总",
     12: "午间汇总",
