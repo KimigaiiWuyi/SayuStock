@@ -454,9 +454,7 @@ def parse_us_mink_intraday(
     last_day = parsed[-1][0].date()
     if (today - last_day).days > _US_INTRADAY_MAX_AGE_DAYS:
         # 数据停更（如 OTC/指数停在 2020 年），不是当日分时
-        return unsupported(
-            f"新浪该美股标的无近期分时数据（末点 {last_day}）", provider=PROVIDER
-        )
+        return unsupported(f"新浪该美股标的无近期分时数据（末点 {last_day}）", provider=PROVIDER)
     session = [bar for ts, bar in parsed if ts.date() == last_day]
     points: list[IntradayPoint] = []
     open_px: float | None = None

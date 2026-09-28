@@ -25,7 +25,9 @@ MINLINE_URL = "https://quotes.sina.cn/cn/api/jsonp_v2.php/var%20t=/CN_MinlineSer
 US_DAILY_URL = "https://stock.finance.sina.com.cn/usstock/api/json_v2.php/US_MinKService.getDailyK"
 US_MINK_URL = "https://stock.finance.sina.com.cn/usstock/api/json_v2.php/US_MinKService.getMinK"
 NODE_URL = "https://vip.stock.finance.sina.com.cn/quotes_service/api/json_v2.php/Market_Center.getHQNodeData"
-NODE_COUNT_URL = "https://vip.stock.finance.sina.com.cn/quotes_service/api/json_v2.php/Market_Center.getHQNodeStockCount"
+NODE_COUNT_URL = (
+    "https://vip.stock.finance.sina.com.cn/quotes_service/api/json_v2.php/Market_Center.getHQNodeStockCount"
+)
 INDUSTRY_URL = "https://vip.stock.finance.sina.com.cn/q/view/newSinaHy.php"
 # 行情中心单页上限；新浪对大 num 不稳定，超出走翻页
 _NODE_PAGE_SIZE = 80

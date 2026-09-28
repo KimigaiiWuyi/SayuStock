@@ -64,9 +64,7 @@ def test_stamp_provider() -> None:
     # 非模型对象原样返回
     assert stamp_provider("eastmoney:quote", "eastmoney") == "eastmoney:quote"
     # K 线序列也可盖章
-    kl = stamp_provider(
-        KlineSeries(symbol=_sym(), period=KlinePeriod.D1, bars=(), adjusted=False), "sina"
-    )
+    kl = stamp_provider(KlineSeries(symbol=_sym(), period=KlinePeriod.D1, bars=(), adjusted=False), "sina")
     assert kl.provider == "sina"
 
 

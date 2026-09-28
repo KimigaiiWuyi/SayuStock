@@ -73,32 +73,36 @@ class _StubPort:
 
     async def quote(self, query: str) -> Quote | MarketError:
         result = self._ret("quote")
-        return result if isinstance(result, MarketError) else Quote(
-            symbol=SymbolRef(
-                code=query,
-                name=str(result),
-                asset_class=AssetClass.OTHER,
-                exchange=self.tag,
-                provider_symbol=query,
-            ),
-            price=1.0,
-            open=None,
-            high=None,
-            low=None,
-            prev_close=None,
-            change_pct=None,
-            change_amount=None,
-            volume=None,
-            amount=None,
-            turnover_rate=None,
-            pe=None,
-            pb=None,
-            market_cap=None,
-            float_market_cap=None,
-            industry=None,
-            limit_up=None,
-            limit_down=None,
-            as_of=None,
+        return (
+            result
+            if isinstance(result, MarketError)
+            else Quote(
+                symbol=SymbolRef(
+                    code=query,
+                    name=str(result),
+                    asset_class=AssetClass.OTHER,
+                    exchange=self.tag,
+                    provider_symbol=query,
+                ),
+                price=1.0,
+                open=None,
+                high=None,
+                low=None,
+                prev_close=None,
+                change_pct=None,
+                change_amount=None,
+                volume=None,
+                amount=None,
+                turnover_rate=None,
+                pe=None,
+                pb=None,
+                market_cap=None,
+                float_market_cap=None,
+                industry=None,
+                limit_up=None,
+                limit_down=None,
+                as_of=None,
+            )
         )
 
     async def quotes(self, queries: Sequence[str]) -> list[Quote | MarketError]:

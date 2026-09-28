@@ -18,7 +18,12 @@ from typing import Literal, Callable, cast
 from datetime import date
 from collections.abc import Sequence
 
-from gsuid_core.logger import logger
+try:
+    from gsuid_core.logger import logger
+except ImportError:  # 最小依赖 CI（Indicator math job）只装 pandas/numpy/pytest
+    import logging
+
+    logger = logging.getLogger("SayuStock")
 
 from .port import MarketDataPort
 from .enums import RankBy, BoardKind, ValueKind, KlinePeriod
@@ -195,9 +200,7 @@ class ConfigurableEquityMarket:
                 return result
             if result.code == "unsupported":
                 # 该源没有此接口，属预期，静默跳过
-                logger.debug(
-                    f"[SayuStock][行情API] {iface} 在 {PROVIDER_LABELS.get(pid, pid)} 不支持，跳过"
-                )
+                logger.debug(f"[SayuStock][行情API] {iface} 在 {PROVIDER_LABELS.get(pid, pid)} 不支持，跳过")
                 continue
             if first_real_error is None:
                 first_real_error = result

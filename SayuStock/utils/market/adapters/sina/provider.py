@@ -216,15 +216,11 @@ class SinaMarketData(PartialMarketData):
                 rows = await fetch_us_mink(us_mink, minute_type)
                 if isinstance(rows, str):
                     return network_error(rows, provider=PROVIDER)
-                return parse_us_mink_rows(
-                    rows, symbol=symbol, period=period, limit=datalen, start=start, end=end
-                )
+                return parse_us_mink_rows(rows, symbol=symbol, period=period, limit=datalen, start=start, end=end)
             rows = await fetch_us_daily(us_mink)
             if isinstance(rows, str):
                 return network_error(rows, provider=PROVIDER)
-            return parse_us_daily_rows(
-                rows, symbol=symbol, period=period, limit=datalen, start=start, end=end
-            )
+            return parse_us_daily_rows(rows, symbol=symbol, period=period, limit=datalen, start=start, end=end)
         rows = await fetch_kline(sina_sym, scale, min(datalen, 1900))
         if isinstance(rows, str):
             return network_error(rows, provider=PROVIDER)
