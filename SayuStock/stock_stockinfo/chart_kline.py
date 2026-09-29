@@ -53,9 +53,9 @@ from .render_data import build_kline_render_data
 from ..utils.constant import ErroText
 from ..utils.market.models import KlineSeries
 
-# BOLL 带：短期淡红、中期淡紫（Bands 填充 alpha=0.2，线色略实才能在暗底上看清）
-BOLL20_COLOR = "#c0392b"
-BOLL60_COLOR = "#8e7cc3"
+# BOLL 带：2σ 窄带淡红、3σ 宽带淡紫（Bands 填充 alpha=0.2，线色略实才能在暗底上看清）
+BOLL2_COLOR = "#c0392b"
+BOLL3_COLOR = "#8e7cc3"
 
 
 class BOLL(Indicator):
@@ -67,8 +67,8 @@ class BOLL(Indicator):
     ``lowerband`` 这两个列名就会走 ``_plot_bands``：上下轨点线 + 区域填充。
     所以这里只换算法、不换渲染，把带子原样还回来。
 
-    不返回 ``middleband``：BOLL 中轨按定义就是 MA(N)，而图上已经有 SMA(20) /
-    SMA(60) 两条实线（带图例）画的是同一条线，再画一条虚线纯属重叠。
+    不返回 ``middleband``：BOLL 中轨按定义就是 MA(N)，而图上已经画了 SMA(60)
+    实线（带图例），两条带的中轨都是同一条线，再画一条虚线纯属重叠。
     """
 
     output_names = ("upperband", "lowerband")
@@ -157,22 +157,23 @@ def draw_single_kline_chart(series: KlineSeries, sp: str | None = None) -> DrawR
         },
     )
     # 新版 mplchart 忽略 color_scheme，必须把颜色钉在 Bands(color=) 上。
-    boll20: object = BOLL(20, 2.0)
-    boll60: object = BOLL(60, 3.0)
+    # 两条带同为 60 周期，用 σ 倍数区分：2σ 窄带（红）、3σ 宽带（紫）。
+    boll60_2: object = BOLL(60, 2.0)
+    boll60_3: object = BOLL(60, 3.0)
     if Bands is not None:
-        boll20 = Bands(boll20, color=BOLL20_COLOR)
-        boll60 = Bands(boll60, color=BOLL60_COLOR)
+        boll60_2 = Bands(boll60_2, color=BOLL2_COLOR)
+        boll60_3 = Bands(boll60_3, color=BOLL3_COLOR)
     chart.plot(
         Candlesticks(width=0.78, alpha=0.95, colorup=UP_COLOR, colordn=DOWN_COLOR),
         Volume(width=0.76, alpha=0.42, colorup=UP_COLOR, colordn=DOWN_COLOR),
         SMA(60),
         SMA(5),
         SMA(10),
-        # MA20（月线）：AI 的多头排列 / close_above_ma20 判断都基于它，图上必须画出来。
-        # 它同时就是 BOLL(20,2) 的中轨，所以 BOLL 带不再重复画中轨。
+        # MA20：AI 的多头排列 / close_above_ma20 判断都基于它，图上必须画出来。
+        # BOLL 两条带都是 60 周期，中轨同为 MA(60)（已由 SMA(60) 画出），故不重复画中轨。
         SMA(20),
-        boll20,
-        boll60,
+        boll60_2,
+        boll60_3,
         LinePlot(lambda frame: frame["bbi"], label="BBI", color="#ffd700", width=2.2),
         Pane("below", height_ratio=0.22),
         HLine(0, color=GRID_COLOR, linestyle="--"),
