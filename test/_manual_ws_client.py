@@ -7,6 +7,7 @@
 不带参数时跑内置的多账户回归剧本。
 """
 
+import io
 import sys
 import json
 import time
@@ -104,5 +105,6 @@ async def main() -> None:
 
 
 if __name__ == "__main__":
-    sys.stdout.reconfigure(encoding="utf-8")
+    if isinstance(sys.stdout, io.TextIOWrapper):
+        sys.stdout.reconfigure(encoding="utf-8")
     asyncio.run(main())

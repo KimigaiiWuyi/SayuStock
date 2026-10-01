@@ -61,6 +61,72 @@ async def send_heal_ledger(bot: Bot, ev: Event) -> list[str] | None:
     return await bot.send("\n".join(lines))
 
 
+@sv_papertrade_admin.on_fullmatch(("模拟盘假期还原",))
+@sv_papertrade_admin.on_prefix(("模拟盘假期还原",))
+async def send_heal_holiday(bot: Bot, ev: Event) -> list[str] | None:
+    """清掉落在非交易日的成交并重建账本。默认只预演，加"执行"才真改。
+
+    背景：交易日历原先靠一张人工假期表，2026 年只覆盖到 2 月底，4 月之后每个
+    长假都照常撮合，凭空写进流水。日历已改成上证日 K 自证，但历史脏数据要还回去。
+
+    判定用权威休市集合（上证日 K：工作日却无 K 线），拿不到就整体放弃——
+    绝不用那张已知会过期的人工表删数据。删前整行落 JSON 留档，可回滚。
+    """
+    from .holiday_heal import heal_holiday_trades
+
+    confirmed = "执行" in (ev.text or "")
+    summary = await heal_holiday_trades(dry_run=not confirmed)
+
+    tag = "预演" if summary["dry_run"] else "已执行"
+    lines = [f"🧹 **模拟盘 · 假期成交还原（{tag}）**", f"休市表来源：{summary['source']}"]
+
+    if summary["skipped"]:
+        lines.append(f"⚠️ 未执行：{summary['skipped']}")
+        return await bot.send("\n".join(lines))
+
+    if not summary["dirty_days"]:
+        lines.append("✅ 没有落在非交易日的成交，账本无需还原。")
+        return await bot.send("\n".join(lines))
+
+    days = summary["dirty_days"]
+    lines.append(f"脏数据日期：{days[0]} ~ {days[-1]}（共 {len(days)} 天）")
+    lines.append(f"{'将删除' if summary['dry_run'] else '已删除'}流水 {summary['deleted_trades']} 笔")
+
+    for fix in summary["cash_fixed"]:
+        lines.append(
+            f"  · 盘#{fix['account_id']} {fix['account_name']} "
+            f"现金 {fix['old_cash']:,.2f} → {fix['new_cash']:,.2f}；"
+            f"本金 {fix['old_principal']:,.2f} → {fix['new_principal']:,.2f}"
+        )
+
+    for p in summary["positions"]:
+        if p["removed"]:
+            lines.append(
+                f"  · 盘#{p['account_id']} {p['stock_name']}({p['stock_code']}) {p['old_qty']} 股 → 0（删除持仓行）"
+            )
+        else:
+            lines.append(
+                f"  · 盘#{p['account_id']} {p['stock_name']}({p['stock_code']}) "
+                f"{p['old_qty']}股@{p['old_avg_cost']:.3f} → {p['new_qty']}股@{p['new_avg_cost']:.3f}"
+            )
+
+    if summary["deleted_decisions"]:
+        lines.append(f"清理 buy/sell 决策日志 {summary['deleted_decisions']} 条（hold 保留）")
+    if summary["snapshots_deleted"]:
+        lines.append(f"删除休市日净值行 {summary['snapshots_deleted']} 行（那天没开盘，不该有净值）。")
+    if summary["snapshots_updated"]:
+        lines.append(f"重写净值快照 {summary['snapshots_updated']} 行。")
+    if summary["price_fallback_codes"]:
+        lines.append(f"⚠️ 以下票历史收盘价拉取失败，已按成本价兜底：{', '.join(summary['price_fallback_codes'])}")
+    if summary["archive_path"]:
+        lines.append(f"留档：{summary['archive_path']}")
+
+    if summary["dry_run"]:
+        lines.append("")
+        lines.append("以上为预演，账本未改动。确认无误后发「模拟盘假期还原 执行」。")
+    return await bot.send("\n".join(lines))
+
+
 # 压测专用盘：**绝不能**复用用户的真盘。压测会真买真卖、末尾还会 reset_account 把
 # 账本清空，跑在真盘上等于把用户几个月的记录抹了。
 _DRY_RUN_ACCOUNT_NAME: str = "压测临时盘"

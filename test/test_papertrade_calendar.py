@@ -55,6 +55,8 @@ is_trading_time = cal.is_trading_time
 should_run_papertrade = cal.should_run_papertrade
 trading_day_summary = cal.trading_day_summary
 next_decision_time = cal.next_decision_time
+FALLBACK_CLOSED_DAYS = cal.FALLBACK_CLOSED_DAYS
+CalendarCache = cal.CalendarCache
 
 
 # ============================================================
@@ -191,6 +193,119 @@ def test_next_decision_time_holiday_to_next_trading_day():
     print(f"[OK] 节假日 → 下一个交易日 {nxt.date().isoformat()}")
 
 
+# ============================================================
+# 2026 假期表回归（这批 bug 的直接防线）
+# ============================================================
+def test_2026_national_day_is_holiday():
+    """2026 国庆 10/1~10/7 休市——旧表只到 2026-02-27，这里全被当成交易日。"""
+    for day in ("2026-10-01", "2026-10-02", "2026-10-05", "2026-10-06", "2026-10-07"):
+        dt = datetime.fromisoformat(day + "T10:00:00")
+        assert is_a_share_trading_day(dt) is False, f"{day} 应为休市"
+    print("[OK] 2026 国庆 5 个工作日全部判为休市")
+
+
+def test_2026_mid_autumn_is_holiday():
+    """2026 中秋 9/25(周五) 休市，9/28(周一) 恢复开市。"""
+    assert is_a_share_trading_day(datetime(2026, 9, 25, 10, 0, 0)) is False
+    assert is_a_share_trading_day(datetime(2026, 9, 28, 10, 0, 0)) is True
+    print("[OK] 2026 中秋 9/25 休市、9/28 开市")
+
+
+def test_2026_other_holidays_covered():
+    """清明 / 劳动节 / 端午 也都在表里。"""
+    for day in ("2026-04-06", "2026-05-01", "2026-05-04", "2026-05-05", "2026-06-19"):
+        assert is_a_share_trading_day(datetime.fromisoformat(day + "T10:00:00")) is False, day
+    print("[OK] 2026 清明/劳动节/端午 全部判为休市")
+
+
+def test_2026_post_spring_festival_is_trading():
+    """2026 春节 2/24~2/27 照常开市——旧表误标成休市，会白白少跑 4 天。"""
+    for day in ("2026-02-24", "2026-02-25", "2026-02-26", "2026-02-27"):
+        assert day not in FALLBACK_CLOSED_DAYS, f"{day} 是交易日，不该在假期表里"
+        assert is_a_share_trading_day(datetime.fromisoformat(day + "T10:00:00")) is True, day
+    print("[OK] 2026 春节后 2/24~2/27 判为交易日")
+
+
+def test_session_grace_window():
+    """开盘 3 分钟内不拿分时判休市，避免首根分时未落地就误杀。"""
+    at_open = datetime(2026, 3, 18, 9, 31, 0)
+    assert is_trading_time(at_open) is True
+    assert cal._session_grace_passed(at_open) is False
+    assert cal._session_grace_passed(datetime(2026, 3, 18, 9, 34, 0)) is True
+    assert cal._session_grace_passed(datetime(2026, 3, 18, 13, 2, 0)) is False
+    assert cal._session_grace_passed(datetime(2026, 3, 18, 13, 4, 0)) is True
+    print("[OK] 开盘 3 分钟宽限窗口生效")
+
+
+def test_cache_coercion_rejects_garbage():
+    """缓存字段缺失/类型不对时整体作废，不做部分补全。"""
+    assert cal._coerce_cache({}) is None
+    assert cal._coerce_cache("nope") is None
+    assert cal._coerce_cache({"intraday_last_date": "2026-09-30"}) is None
+    good = CalendarCache(
+        intraday_last_date="2026-09-30",
+        intraday_checked_at=1.0,
+        daily_last_date="2026-09-30",
+        daily_checked_at=1.0,
+        daily_window_start="2024-10-01",
+        daily_window_end="2026-09-30",
+        closed_days=["2026-10-01"],
+    )
+    assert cal._coerce_cache(good) == good
+    bad = dict(good)
+    bad["closed_days"] = ["2026-10-01", 7]
+    assert cal._coerce_cache(bad) is None
+    print("[OK] 缓存校验：残缺/污染输入一律作废")
+
+
+def test_fallback_covers_more_than_static_table():
+    """兜底表不能只等于手工静态表——holidays 库应带来额外年份覆盖。"""
+    static = cal._STATIC_FALLBACK_DAYS
+    assert static <= FALLBACK_CLOSED_DAYS
+    assert len(FALLBACK_CLOSED_DAYS) > len(static), "holidays 库没有贡献任何额外休市日"
+    print(f"[OK] 兜底表 {len(FALLBACK_CLOSED_DAYS)} 天（静态 {len(static)} + holidays 扩展）")
+
+
+def test_holidays_backend_covers_2026_official_days():
+    """holidays 库必须覆盖 2026 全部官方休市工作日，否则兜底不成立。"""
+    official = {
+        "2026-01-01",
+        "2026-01-02",
+        "2026-02-16",
+        "2026-02-17",
+        "2026-02-18",
+        "2026-02-19",
+        "2026-02-20",
+        "2026-02-23",
+        "2026-04-06",
+        "2026-05-01",
+        "2026-05-04",
+        "2026-05-05",
+        "2026-06-19",
+        "2026-09-25",
+        "2026-10-01",
+        "2026-10-02",
+        "2026-10-05",
+        "2026-10-06",
+        "2026-10-07",
+    }
+    from_holidays = cal._closed_from_holidays([2026])
+    missing = official - from_holidays
+    assert not missing, f"holidays 库缺少: {sorted(missing)}"
+    print(f"[OK] holidays 库覆盖 2026 全部 {len(official)} 个官方休市工作日")
+
+
+def test_density_guard_thresholds_are_sane():
+    """密度阈值要卡得住"数据残缺"、又不误伤正常年份。"""
+    assert 0.0 < cal._MIN_BAR_DENSITY < 1.0
+    # 实测 A 股工作日里约 92%~93% 是交易日，阈值必须显著低于它
+    assert cal._MIN_BAR_DENSITY < 0.85
+    assert 0.0 < cal._MAX_CLOSED_RATIO < 1.0
+    # 正常年份休市占比 ~7%~8%，阈值必须显著高于它
+    assert cal._MAX_CLOSED_RATIO > 0.15
+    print(f"[OK] 密度阈值 {cal._MIN_BAR_DENSITY:.0%} / 休市上限 {cal._MAX_CLOSED_RATIO:.0%}")
+
+
 if __name__ == "__main__":
     test_weekday_is_trading_day()
     test_weekend_is_not_trading_day()
@@ -206,4 +321,13 @@ if __name__ == "__main__":
     test_next_decision_time_lunch_break()
     test_next_decision_time_after_close()
     test_next_decision_time_holiday_to_next_trading_day()
-    print("\n[SUCCESS] calendar 全部 13 个测试通过！")
+    test_2026_national_day_is_holiday()
+    test_2026_mid_autumn_is_holiday()
+    test_2026_other_holidays_covered()
+    test_2026_post_spring_festival_is_trading()
+    test_session_grace_window()
+    test_cache_coercion_rejects_garbage()
+    test_fallback_covers_more_than_static_table()
+    test_holidays_backend_covers_2026_official_days()
+    test_density_guard_thresholds_are_sane()
+    print("\n[SUCCESS] calendar 全部测试通过！")

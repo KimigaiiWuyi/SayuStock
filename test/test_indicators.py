@@ -146,9 +146,9 @@ def test_rsi_is_wilder_smoothing() -> None:
     got = ind.rsi(close, 6)
 
     delta = close.diff()
-    gain = delta.clip(lower=0.0).ewm(alpha=1 / 6, adjust=False).mean()
-    loss = (-delta.clip(upper=0.0)).ewm(alpha=1 / 6, adjust=False).mean()
-    expected = 100.0 - 100.0 / (1.0 + gain / loss)
+    gain = pd.Series(delta.clip(lower=0.0).ewm(alpha=1 / 6, adjust=False).mean())
+    loss = pd.Series((-delta.clip(upper=0.0)).ewm(alpha=1 / 6, adjust=False).mean())
+    expected = pd.Series(100.0 - 100.0 / (1.0 + gain / loss))
     assert got.iloc[-1] == pytest.approx(expected.iloc[-1])
 
 

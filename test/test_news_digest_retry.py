@@ -1,7 +1,7 @@
 """雪球新闻推送：发送失败不推进水位线 / 不记已发送、合并转发禁用时退回纯文本。全部离线。"""
 
 import asyncio
-from typing import Any, Dict, List, Union
+from typing import Any, Dict, List, Union, Optional
 
 from SayuStock.stock_news import _DIGEST_BATCH, _send_digest, _digest_payload, _throttled_send
 from SayuStock.utils.models import ItemType
@@ -15,9 +15,9 @@ class FakeSubscribe:
         self.bot_id = "bot"
         self.extra_message = "0"
         self.send_result = send_result
-        self.sent: List[Union[str, List[str]]] = []
+        self.sent: List[Optional[Union[str, List[str]]]] = []
 
-    async def send(self, reply: Union[str, List[str]] = None) -> Union[int, None]:
+    async def send(self, reply: Optional[Union[str, List[str]]] = None) -> Union[int, None]:
         self.sent.append(reply)
         return self.send_result
 
@@ -108,7 +108,7 @@ def test_digest_partial_batch_failure_stops_at_failed_batch(monkeypatch: Any) ->
     calls = {"n": 0}
     real_send = sub.send
 
-    async def _flaky_send(reply: Union[str, List[str]] = None) -> Union[int, None]:
+    async def _flaky_send(reply: Optional[Union[str, List[str]]] = None) -> Union[int, None]:
         calls["n"] += 1
         if calls["n"] == 2:
             return -1

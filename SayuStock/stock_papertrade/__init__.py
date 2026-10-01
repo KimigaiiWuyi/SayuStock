@@ -23,6 +23,7 @@
 from pathlib import Path
 
 from gsuid_core.logger import logger
+from gsuid_core.server import on_core_start
 from gsuid_core.ai_core.models import KnowledgeBase
 from gsuid_core.ai_core.register import ai_alias, ai_entity
 
@@ -99,6 +100,10 @@ def _register_recurring_gates() -> None:
       - snapshot → 仅要求交易日（15:05 收盘后写快照，不在交易时段内）
       - reporter（月报）→ 不设门，任何日子都可出报告
 
+    一律挂 **async** 版（``*_async``）：它们先拉上证指数分时自证"今天到底开没
+    开市"，再走同步判定。同步判定只读缓存，而缓存由启动钩子 + 每次 gate 触发
+    刷新，硬编码假期表仅作离线兜底。
+
     旧版框架无 register_recurring_gate 时降级为无门（行为同旧版）。
     """
     try:
@@ -107,21 +112,57 @@ def _register_recurring_gates() -> None:
         logger.warning("[SayuStock][PaperTrade] 框架不支持 recurring gate（版本过旧），跳过注册")
         return
     from . import strategies as _pt_strategies
-    from .trading_calendar import should_run_papertrade, is_a_share_trading_day
+    from .trading_calendar import is_trading_day_async, should_run_papertrade_async
 
     for s in _pt_strategies.decision_profiles():
-        register_recurring_gate(s.agent_profile, should_run_papertrade)
-    register_recurring_gate("papertrade_pool_refresh_agent", should_run_papertrade)
-    register_recurring_gate("papertrade_snapshot_agent", is_a_share_trading_day)
-    logger.info("[SayuStock][PaperTrade] recurring gate 已按策略注册表挂上")
+        register_recurring_gate(s.agent_profile, should_run_papertrade_async)
+    register_recurring_gate("papertrade_pool_refresh_agent", should_run_papertrade_async)
+    register_recurring_gate("papertrade_snapshot_agent", is_trading_day_async)
+    logger.info("[SayuStock][PaperTrade] recurring gate 已按策略注册表挂上（async 自证版）")
 
 
 _register_recurring_gates()
 
+
+# ── 启动自愈：刷交易日历 + 清假期脏成交 ───────────────────────────
+@on_core_start()
+async def _papertrade_holiday_boot() -> None:
+    """核心起来后跑一次：刷新权威交易日历，并清掉落在非交易日的成交。
+
+    挂 ``on_core_start``（WS 已开始服务）而不是 ``on_core_start_before``：
+    两步都要打行情接口，不该阻塞启动。异常只记日志，绝不让模拟盘拖挂 core。
+    """
+    from .trading_calendar import refresh_intraday, refresh_daily_calendar
+
+    try:
+        await refresh_daily_calendar()
+        await refresh_intraday()
+    except Exception as e:
+        logger.warning(f"[SayuStock][PaperTrade] 交易日历刷新异常（沿用缓存/兜底表）: {e}")
+
+    try:
+        from .holiday_heal import heal_holiday_trades
+
+        await heal_holiday_trades()
+    except Exception as e:
+        logger.exception(f"[SayuStock][PaperTrade] 假期成交自愈异常，账本保持原样: {e}")
+
+
 # ── SV 实例 + 子模块导入触发装饰器 ───────────────────────────────
-from . import db, admin, ai_tools, commands  # noqa: E402,F401
+from . import (  # noqa: E402,F401
+    db,
+    admin,
+    ai_tools,
+    commands,
+    holiday_heal,  # noqa: E402,F401
+)
 from .sv import sv_papertrade, sv_papertrade_admin, sv_papertrade_watchlist  # noqa: E402,F401
-from .admin import send_dry_run, send_clear_all, send_heal_ledger  # noqa: E402,F401
+from .admin import (  # noqa: E402,F401
+    send_dry_run,
+    send_clear_all,
+    send_heal_ledger,
+    send_heal_holiday,
+)
 
 # 兼容旧 import 路径：业务命令从 commands 模块再 re-export 出去
 from .commands import (  # noqa: E402,F401

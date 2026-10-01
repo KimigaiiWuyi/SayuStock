@@ -152,6 +152,8 @@ def test_measure_from_ohlcv_detects_bottom_volume():
     _, params = reg.resolve_with_params(VOLUME)
     measured = measure_from_ohlcv(df, params)
     assert not isinstance(measured, str)
+    assert measured.close_percentile is not None
+    assert measured.rel_volume is not None
     assert measured.close_percentile <= 0.15
     assert measured.rel_volume >= 2.0
     assert measured.bullish_close is True
@@ -163,6 +165,8 @@ def test_measure_from_ohlcv_detects_top_volume():
     _, params = reg.resolve_with_params(VOLUME)
     measured = measure_from_ohlcv(df, params)
     assert not isinstance(measured, str)
+    assert measured.close_percentile is not None
+    assert measured.rel_volume is not None
     assert measured.close_percentile >= 0.85
     assert measured.rel_volume >= 2.0
 
@@ -279,12 +283,12 @@ def test_load_structure_does_not_cache_kline_errors():
 def test_gate_entry_stop_sell_skips_failed_kline():
     """止损卖必须在拉 K 之前放行，不能被 load_structure 失败短路。"""
     import asyncio
-    from types import SimpleNamespace
     from unittest.mock import AsyncMock, patch
 
     from SayuStock.stock_papertrade.ai_tools import _gate_entry
+    from SayuStock.utils.database.papertrade_models import SayuPaperAccount
 
-    account = SimpleNamespace(strategy_id=VOLUME, strategy_params="{}")
+    account = SayuPaperAccount(strategy_id=VOLUME, strategy_params="{}", group_id="", bot_id="")
     loader = AsyncMock(return_value="⚠️ 拉K线失败(day): timeout")
 
     async def _run() -> str:

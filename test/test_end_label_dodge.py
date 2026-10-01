@@ -5,6 +5,7 @@ from __future__ import annotations
 import sys
 import importlib.util
 from types import ModuleType
+from typing import Callable
 from pathlib import Path
 from unittest.mock import MagicMock
 
@@ -18,6 +19,16 @@ sys.path.insert(0, str(REPO_ROOT))
 
 PKG_ROOT = Path(__file__).resolve().parent.parent / "SayuStock"
 PKG_NAME = "_end_label_dodge_test"
+
+
+class _FontsModuleStub(ModuleType):
+    """``gsuid_core.utils.fonts.fonts`` 的占位模块。
+
+    显式声明 chart_base 真正取用的两个符号，替 ModuleType 扛下任意属性挂载。
+    """
+
+    FONT_ORIGIN_PATH: Path
+    core_font: Callable[[int], object]
 
 
 def _ensure_pkg() -> None:
@@ -45,7 +56,7 @@ def _ensure_pkg() -> None:
         try:
             import gsuid_core.utils.fonts.fonts  # noqa: F401
         except Exception:
-            fonts_mod = ModuleType("gsuid_core.utils.fonts.fonts")
+            fonts_mod = _FontsModuleStub("gsuid_core.utils.fonts.fonts")
             fonts_mod.FONT_ORIGIN_PATH = Path("/nonexistent")
             fonts_mod.core_font = lambda size: __import__(
                 "PIL.ImageFont", fromlist=["ImageFont"]

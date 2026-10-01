@@ -5,12 +5,24 @@ from __future__ import annotations
 import asyncio
 from typing import Any
 from unittest.mock import patch
+from collections.abc import Iterable
 
 from SayuStock.utils.constant import PREFIX_DATA
 from SayuStock.utils.time_range import Market, _parse_em_code
 from SayuStock.utils.market.enums import AssetClass
 from SayuStock.utils.market.models import SymbolRef
 from SayuStock.utils.stock.request_utils import get_code_id
+
+
+def _as_pair_dict(params: Iterable[object]) -> dict[str, str]:
+    """把搜索请求参数（tuple of pairs）收窄成 dict，形状不符直接断言失败。"""
+    as_dict: dict[str, str] = {}
+    for item in params:
+        assert isinstance(item, tuple) and len(item) == 2, f"params 项形状不对: {item!r}"
+        key, value = item
+        assert isinstance(key, str) and isinstance(value, str), f"params 项不是字符串对: {item!r}"
+        as_dict[key] = value
+    return as_dict
 
 
 def test_display_name_with_sec_type() -> None:
@@ -106,8 +118,9 @@ def test_kr_suffix_sets_priority_and_matches() -> None:
             # 确认搜索关键字已去掉 .kr
             params = kwargs.get("params") or args[1] if len(args) > 1 else None
             if params is not None:
+                assert isinstance(params, Iterable), f"params 形状不对: {params!r}"
                 # params 为 tuple of pairs
-                as_dict = dict(params)
+                as_dict = _as_pair_dict(params)
                 assert as_dict.get("input") == "三星电子"
             return _Resp()
 

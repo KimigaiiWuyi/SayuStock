@@ -9,6 +9,7 @@ pytest.importorskip("pandas")
 pytest.importorskip("matplotlib")
 
 import pandas as pd  # noqa: E402
+from matplotlib.typing import ColorType  # noqa: E402
 
 from SayuStock.utils.mplchart_compat import Chart  # noqa: E402
 from SayuStock.stock_stockinfo.chart_base import BG_COLOR, _paint_chart_background  # noqa: E402
@@ -23,7 +24,7 @@ def _tiny_prices() -> pd.DataFrame:
     )
 
 
-def _rgba(color: object) -> tuple[float, float, float, float]:
+def _rgba(color: ColorType) -> tuple[float, float, float, float]:
     from matplotlib.colors import to_rgba
 
     return to_rgba(color)

@@ -31,6 +31,12 @@ from SayuStock.utils.market.models import (
 )
 
 
+def _as_float(value: object) -> float:
+    """把 fixture 行里的数值字段收窄成 float；非数值直接断言失败。"""
+    assert isinstance(value, (int, float)), f"分时字段不是数值: {value!r}"
+    return float(value)
+
+
 def _series_from_trends(
     name: str,
     code: str,
@@ -47,7 +53,9 @@ def _series_from_trends(
             ts = dt.datetime.strptime(ts_s, "%Y-%m-%d %H:%M")
         except ValueError:
             continue
-        price = float(row["price"])  # type: ignore[arg-type]
+        price = _as_float(row["price"])
+        volume = _as_float(row.get("amount") or 0)
+        amount = _as_float(row.get("money") or 0)
         points.append(
             IntradayPoint(
                 ts=ts,
@@ -55,8 +63,8 @@ def _series_from_trends(
                 open=price,
                 high=price,
                 low=price,
-                volume=float(row.get("amount") or 0),
-                amount=float(row.get("money") or 0),
+                volume=volume,
+                amount=amount,
                 avg_price=price,
             )
         )
@@ -188,7 +196,7 @@ def test_single_stock_render_keeps_future_nan_axis(monkeypatch: pytest.MonkeyPat
     )
     result = build_single_stock_render_data(series)
     assert not isinstance(result, str), result
-    assert result.df["price"].isna().any()
+    assert bool(result.df["price"].isna().any())
     max_dt = result.df["dt"].max()
     assert max_dt.hour == 15 and max_dt.minute == 0
     assert result.df["price"].notna().sum() == 4

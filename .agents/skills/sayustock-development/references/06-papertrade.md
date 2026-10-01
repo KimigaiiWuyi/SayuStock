@@ -34,7 +34,8 @@ stock_papertrade/
 ├── strategies/          # 策略包：注册表 + 每策略工具清单 / 硬闸 / Kanban 流程
 ├── indicators.py        # 模拟盘侧指标封装
 ├── candidate_pool.py    # 候选池
-├── trading_calendar.py  # A 股交易日/时段
+├── trading_calendar.py  # A 股交易日/时段（数据驱动，见 6.5）
+├── holiday_heal.py      # 假期脏成交自愈/还原（需行情层，不放 utils/database）
 ├── proactive.py         # 主动播报等
 ├── render.py            # 账户/排行 PIL；持仓简图走 paper_holdings_html
 ├── ai_tools.py          # @ai_tools 读写
@@ -74,6 +75,46 @@ WebConsole：`SayuPaper*Admin` 注册到管理后台。
 - 全流程幂等；孤儿子表行跳过并告警
 - 启动时再跑 ``heal_orphan_ledger``：删幽灵仓；若现金−流水重算现金≈Σrealized_pnl，判定为旧卖出公式把盈亏加进了现金并更正；回写净值；补空的播报路由。master 也可发 ``模拟盘对账``。
 
+### 假期脏成交自愈（`stock_papertrade/holiday_heal.py`）
+
+放 feature 包而**不是** `utils/database`：它需要行情层回溯历史收盘价，也需要
+撮合层的成本公式。`heal_holiday_trades(dry_run=...)` 挂在 `on_core_start`
+（不是 `on_core_start_before`——要打行情接口，不该阻塞启动），master 可发
+``模拟盘假期还原`` 手动跑（默认预演，加"执行"才真改）。
+
+流程：权威休市表 → 定位 `decided_at` 落在休市日的流水 → **留档 JSON** →
+删流水 → 按留存流水重算现金 / `principal` / 持仓 → 删休市日净值行并重写之后的
+净值链 → 删同窗口的 buy/sell 决策（hold 保留）。
+
+**误删防线是分层的，改判据时必须逐层确认仍然成立**（"今天没开市"是唯一判据，
+判据一旦残缺，删除就从纠错变成灾难）：
+
+| 层 | 位置 | 作用 |
+|----|------|------|
+| 0 | `resolve_closed_days()` | 上证日 K 拿不到 → 整体放弃，**绝不**回落到人工表删数据 |
+| 1 | `refresh_daily_calendar` 密度自检 | 交易日/工作日 < 60% → 判上游残缺，拒绝生成休市表 |
+| 2 | `refresh_daily_calendar` 占比自检 | 推导出的休市日 > 工作日 30% → 判据可疑，拒绝采用 |
+| 3 | `heal_holiday_trades` 熔断 | 脏数据占比 > 30% 或 > 500 笔 → 放弃清理，留给人看 |
+| 4 | 时间戳解析 | 解析不了就跳过该行并 `logger.error` |
+
+实测参考：A 股工作日中约 92%~93% 是交易日，休市占比约 7%~8%——阈值都留了
+足够余量（60% / 30%），正常年份绝不会误触。
+
+离线兜底是 `holidays` 库（`country_holidays("CN")`）按年生成并上静态表，
+已验证覆盖 2026 全部 17 个官方休市工作日。
+
+四条硬约束：
+
+1. **权威休市表拿不到就整体放弃**，绝不回落到人工表删数据
+2. 重算一律调 `matcher.apply_fill_qty_cost` / `cash_delta_for_fill`，
+   **不要**自己写加权成本——线上口径是 `(old_qty*old_avg + buy_qty*price + fee) / new_qty`，
+   手续费在分子且不乘股数
+3. 裸 `text()` 查询回来的 datetime 列是**字符串**；解析失败必须跳过该行并
+   `logger.error`，**绝不能兜底 `now()`**——那会把每笔历史成交标成"今天"，
+   然后把整个账本当脏数据删光
+4. `principal` = 期初 + Σrealized_pnl，`heal_orphan_ledger` **不管**这一列，
+   只有本模块会改它
+
 ## 6.4 用户命令
 
 | 命令 | 说明 | 权限 |
@@ -86,7 +127,7 @@ WebConsole：`SayuPaper*Admin` 注册到管理后台。
 | 模拟盘列表 / 查看 &lt;盘名&gt; / 收益 &lt;盘名&gt; / 记录 &lt;盘名&gt; | 只读查询 | 任何人（仍挂管理 SV） |
 | 模拟盘自选 / 持仓 [盘名] | HTML 持仓简图（图例 + 分时）；空盘名=默认盘 | 任何人（``sv_papertrade_watchlist`` pm=6） |
 | 模拟盘排行 / 模拟盘查询 &lt;盘名&gt; | 跨盘排行 / 单盘明细 | 管理 |
-| 模拟盘清盘 &lt;盘名&gt; / 模拟盘对账 / 模拟盘模拟测试 | 运维 | master（pm=0） |
+| 模拟盘清盘 &lt;盘名&gt; / 模拟盘对账 / 模拟盘假期还原 [执行] / 模拟盘模拟测试 | 运维 | master（pm=0） |
 | 宏观事件 / 宏观事件刷新 | 查看宏观事件表 / 立即联网复核（`stock_macro/commands.py`） | 任何人 / 管理 |
 
 权限 helpers：`permissions.user_pm_level` / `check_admin`。
@@ -103,8 +144,30 @@ fullmatch）。带参命令若也想支持裸发（给用法提示），必须**
 
 ## 6.5 周期心跳与日历
 
-- `trading_calendar.py`：`is_a_share_trading_day` / `is_trading_time` / `trading_day_summary`  
-- `__init__.py` 注册 **recurring gate**：非交易日不进 decision/pool/snapshot  
+**日历是数据驱动的，人工假期表只是离线兜底。** 权威判据全在上证指数 `1.000001`
+（必须带市场前缀，裸 `000001` 是平安银行）：
+
+- `refresh_daily_calendar()` → 日 K 里"工作日却无 K 线"的日子 = 权威休市表，落盘
+  `data/papertrade_trading_calendar.json` 的 `closed_days`
+- `refresh_intraday()` → 分时最后一点的日期；休市时返回上一交易日数据，
+  所以"最后一点不是今天"就是今天没开市的确凿证据
+
+**同步 / 异步分工**（`commands._is_market_open_now`、`next_decision_time` 是同步
+调用点，同步 API **只读缓存、绝不发网络**）：
+
+| 函数 | 网络 | 谁在用 |
+|------|------|--------|
+| `is_a_share_trading_day` / `should_run_papertrade` | 否，只读缓存 | 同步命令层 / 日志 |
+| `is_trading_day_async` / `should_run_papertrade_async` | 是，先自证 | recurring gate |
+| `refresh_daily_calendar` / `refresh_intraday` | 是 | `on_core_start` 启动钩子 |
+
+`__init__.py` 注册的 **recurring gate 一律挂 async 版**：非交易日不进
+decision / pool / snapshot。gate 抛异常框架是 fail-open（等于放行交易），
+所以 async 判定位**自己**吞掉探测失败、不向上抛。
+
+⚠️ 开盘 3 分钟内（09:30-09:33 / 13:00-13:03）**不**拿分时判休市——首根分时
+可能还没落地，误判会白白吃掉一个 cron 槽。
+
 - 决策节奏写在建树时的 `recurring_trigger` 快照（现状 `cron:0,30 9-11,13-15 * * 1-5`）；
   `SayuPaperAccount.frequency_minutes` **不驱动调度**。改代码里的 cron **不会**自动改老盘，
   必须重建心跳树（换策略 / 启用 / 初始化补挂）才换新间隔。

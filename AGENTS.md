@@ -145,6 +145,7 @@ basedpyright --pythonpath <Core venv>/python
 8. importlib 桩漏 `mplchart_compat` 导出名 → Full suite collection `ImportError`。
 9. 价序列类型用 `Sequence`，不要让 `list[float]` 与 `list[float | None]` 互赋。
 10. 离线出图测：空 `DATA_PATH` 不是缓存；要有 `*_single-stock*_data.json`。
+11. 模拟盘交易日**自证**（上证 `1.000001` 分时/日 K），别再维护人工假期表——旧表只到 2026-02 就过期，长假照常撮合写脏流水；`holiday_heal` 会自动清。`text()` 查询回来的 datetime 列是**字符串**，解析失败要跳过并告警，**兜底 `now()` 会把整个账本当脏数据删光**。
 
 ## Security notes
 

@@ -582,6 +582,8 @@ def test_heal_restates_cash_when_sell_added_realized_pnl(tmp_path):
 
     first, cash, snap_cash, second = _run(tmp_path, body)
     assert first["cash_restated"][0]["extra"] == 990
+    assert isinstance(cash, (int, float))
+    assert isinstance(snap_cash, (int, float))
     assert abs(float(cash) - 1000985.0) < 0.01
     assert abs(float(snap_cash) - 1000985.0) < 0.01
     assert second["cash_restated"] == []

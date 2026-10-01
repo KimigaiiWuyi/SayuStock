@@ -20,6 +20,7 @@ sys.path.insert(0, str(REPO_ROOT))
 
 from gsuid_core.bot import Bot, _Bot  # noqa: E402
 from SayuStock.stock_papertrade import db as pt_db, broadcast as bc  # noqa: E402
+from SayuStock.utils.database.papertrade_models import SayuPaperAccount  # noqa: E402
 
 
 def _target(
@@ -264,7 +265,7 @@ def test_fill_line_collapses_and_truncates_reason():
 # ============================================================
 def test_broadcast_fill_pushes_a_line_per_group():
     emitter = _Emitter()
-    account = SimpleNamespace(id=7, name="放量盘")
+    account = SayuPaperAccount(id=7, name="放量盘", group_id="", bot_id="")
     sent = _run(
         [_target("111"), _target("222")],
         emitter,

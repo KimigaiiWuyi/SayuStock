@@ -1,6 +1,7 @@
 """宏观定调：事件字段归一 / 到期判定 / 提示词拼装 / 知识库分片 / 技能目录。全部离线。"""
 
 import sys
+from typing import Unpack, Optional, TypedDict
 from pathlib import Path
 from datetime import datetime, timedelta
 
@@ -20,8 +21,30 @@ from SayuStock.utils.database.macro_models import (  # noqa: E402
 )
 
 
-def _event(**overrides: object) -> SayuMacroEvent:
-    base: dict[str, object] = {
+class _EventFields(TypedDict, total=False):
+    """``_event`` 允许覆盖的列：与 SayuMacroEvent 的字段一一对应。"""
+
+    slug: str
+    title: str
+    category: str
+    status: str
+    severity: int
+    direction: str
+    affected_sectors: str
+    summary: str
+    result: str
+    stance: str
+    source_urls: str
+    check_interval_hours: int
+    created_by: str
+    created_at: datetime
+    updated_at: datetime
+    last_checked_at: Optional[datetime]
+    settled_at: Optional[datetime]
+
+
+def _event(**overrides: Unpack[_EventFields]) -> SayuMacroEvent:
+    base: _EventFields = {
         "slug": "us_china_tariff_2026",
         "title": "中美关税战（2026）",
         "category": "trade",
@@ -212,8 +235,9 @@ def test_repo_upsert_roundtrip_on_temp_sqlite(tmp_path: Path):
     maker = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
 
     async def _main() -> None:
+        macro_table = SayuMacroEvent.metadata.tables["sayumacroevent"]
         async with engine.begin() as conn:
-            await conn.run_sync(SayuMacroEvent.metadata.create_all, tables=[SayuMacroEvent.__table__])
+            await conn.run_sync(SayuMacroEvent.metadata.create_all, tables=[macro_table])
         original = base_models.async_maker
         base_models.async_maker = maker
         try:
