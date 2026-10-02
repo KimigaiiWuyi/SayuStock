@@ -31,6 +31,8 @@ STOCK_CONFIG = StringConfig("SayuStock", CONFIG_PATH, CONFIG_DEFAULT)
 | `mapcloud_refresh_minutes` | 图/数据缓存 TTL | 3 |
 | `stock_cache_retention_days` | 每日清理保留天数 | 7 |
 | `eastmoney_cookie` | 东财 Cookie | 内置字符串 |
+| `market_api_priority_eastmoney/tencent/sina/ths` | 行情API 每源优先级数字（0-100，大者先尝试，0=禁用，平局按系统默认序 东财→腾讯→新浪→同花顺）；失败/不支持自动顺延；旧 `market_api_priority` 链串装配时自动迁移；网页控制台改完热生效 | 40 / 30 / 20 / 10 |
+| `ths_api_key` | 同花顺金融数据 API（扶摇 fuyao.aicubes.cn）的 X-api-key | 内置公共 Key |
 | `holdings_analysis_unlimited_users` | 持仓分析免每日限额的 `user_id` 列表；网页控制台改完热生效 | `[]` |
 | `news_push_hourly_groups` | 雪球新闻「小时汇总」群列表（类别2，每小时整点合并推送） | `[]` |
 | `news_push_trading_session_groups` | 雪球新闻「交易时段汇总」群列表（类别3，每日 08/12/16/22 点合并推送：隔夜/午间/收盘/晚间） | `[]` |

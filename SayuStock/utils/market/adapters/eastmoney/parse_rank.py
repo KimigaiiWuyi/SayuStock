@@ -5,11 +5,19 @@ from __future__ import annotations
 from typing import Mapping, Sequence
 from dataclasses import dataclass
 
-from ...enums import RankBy
+from ...enums import RankBy, resolve_rank_by
 from ...errors import MarketError, empty_error, parse_error
 from ...models import RANKING_CAVEAT, RankRow, RankSnapshot
 from .json_util import opt_str, opt_float, as_mapping, require_mapping
 from .map_fields import PROVIDER, RANK_SORT, RANK_FIELD
+
+__all__ = [
+    "RANK_SPECS_INTERNAL",
+    "RankSpecInternal",
+    "rank_fields_csv",
+    "resolve_rank_by",
+    "parse_rank_payload",
+]
 
 
 @dataclass(frozen=True, slots=True)
@@ -123,18 +131,6 @@ def rank_fields_csv(spec: RankSpecInternal) -> str:
             seen.add(f)
             ordered.append(f)
     return ",".join(ordered)
-
-
-def resolve_rank_by(rank_by: RankBy | str) -> RankBy | None:
-    if isinstance(rank_by, RankBy):
-        return rank_by
-    raw = (rank_by or "").strip()
-    if not raw:
-        return None
-    for m in RankBy:
-        if raw == m.value or raw.lower() == m.value:
-            return m
-    return None
 
 
 def _iter_diff(diff: object) -> Sequence[Mapping[str, object]]:

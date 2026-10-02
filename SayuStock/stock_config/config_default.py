@@ -57,6 +57,38 @@ CONFIG_DEFAULT: Dict[str, GSC] = {
         [],
         options=[],
     ),
+    "market_api_divider": GsDivider(
+        "行情API",
+        "行情数据源优先级：所有行情接口共用，每个源填 0-100 的优先级数字，数字越大越先尝试；"
+        "某源失败或不支持该接口时自动顺延到下一个源，尽可能交付结果；0=禁用该源。"
+        "注意：云图/北向/估值/财报/五日分时/概念板块为东财独占，禁用东财后这些接口无兜底。"
+        "网页控制台修改后立即生效，无需重启",
+        "行情API（数据源优先级）",
+    ),
+    "market_api_priority_eastmoney": GsIntConfig(
+        "东方财富优先级",
+        "0-100，数字越大越先尝试；0=禁用该源；数字相同的源按系统默认顺序执行（东财→腾讯→新浪→同花顺）",
+        40,
+        max_value=100,
+    ),
+    "market_api_priority_tencent": GsIntConfig(
+        "腾讯财经优先级",
+        "0-100，数字越大越先尝试；0=禁用该源；数字相同的源按系统默认顺序执行（东财→腾讯→新浪→同花顺）",
+        30,
+        max_value=100,
+    ),
+    "market_api_priority_sina": GsIntConfig(
+        "新浪财经优先级",
+        "0-100，数字越大越先尝试；0=禁用该源；数字相同的源按系统默认顺序执行（东财→腾讯→新浪→同花顺）",
+        20,
+        max_value=100,
+    ),
+    "market_api_priority_ths": GsIntConfig(
+        "同花顺优先级",
+        "0-100，数字越大越先尝试；0=禁用该源；数字相同的源按系统默认顺序执行（东财→腾讯→新浪→同花顺）",
+        10,
+        max_value=100,
+    ),
     "eastmoney_cookie": GsStrConfig(
         "东财Cookie",
         "东财Cookie",
@@ -70,6 +102,12 @@ CONFIG_DEFAULT: Dict[str, GSC] = {
             "nid_create_time=1762029542554; gvi=VIzYcS_d6R9H3UQkE2C7078a4; gvi_create_time=1762029542554; "
             "websitepoptg_api_time=1762781584093; fullscreengg=1; fullscreengg2=1"
         ],
+    ),
+    "ths_api_key": GsStrConfig(
+        "同花顺API密钥",
+        "同花顺金融数据API（扶摇 fuyao.aicubes.cn）的 API Key，请求头 X-api-key 携带；"
+        "默认内置公共 Key，失效可到该站「API Key 管理」页（/admin）用同花顺账号签发自己的",
+        "sk-fuyao-ORe_1l_p-CogNpfJpfU90yzO7LjLkMOE",
     ),
     "kronos_divider": GsDivider(
         "AI模型预测",

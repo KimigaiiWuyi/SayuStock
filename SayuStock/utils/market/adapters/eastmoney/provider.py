@@ -40,7 +40,6 @@ from ....eastmoney import EASTMONEY_REQUESTER
 from ....load_data import get_full_security_code
 from .parse_intraday import extract_trends_from_payload, parse_intraday_from_trends_list
 from ....eastmoney_finance import get_financial_snapshot as _fetch_fin_snapshot
-from ....stock.request_utils import get_code_id
 
 _PERIOD_DAYS: dict[KlinePeriod, int] = {
     KlinePeriod.M5: 30,
@@ -128,6 +127,23 @@ def _market_key(kind: BoardKind | str, sector: str | None) -> str:
     return str(kind.value if isinstance(kind, BoardKind) else kind)
 
 
+async def _resolve_code(query: str) -> tuple[str, str, str] | MarketError:
+    """query → (QuoteID, Name, SecurityTypeName)。
+
+    解析层（东财 searchapi）瞬断时返回 network 错误让注册表顺延其他源，
+    而不是误报 not_found 短路整条链。
+    """
+    from ....stock.request_utils import ResolveLayerError, get_code_id_strict
+
+    try:
+        code_info = await get_code_id_strict(query)
+    except ResolveLayerError as error:
+        return network_error(f"行情ID解析层不可用: {error}", provider=PROVIDER)
+    if code_info is None:
+        return not_found(ErroText["notStock"], provider=PROVIDER)
+    return code_info
+
+
 class EastMoneyMarketData:
     """东财适配器；HTTP/缓存仍走 EASTMONEY_REQUESTER。"""
 
@@ -145,9 +161,9 @@ class EastMoneyMarketData:
         )
 
     async def quote(self, query: str) -> Quote | MarketError:
-        code_info = await get_code_id(query)
-        if code_info is None:
-            return not_found(ErroText["notStock"], provider=PROVIDER)
+        code_info = await _resolve_code(query)
+        if isinstance(code_info, MarketError):
+            return code_info
         secid = get_full_security_code(code_info[0])
         sec_type = code_info[2]
         raw = await EASTMONEY_REQUESTER.get_single_stock(secid, sec_type)
@@ -163,9 +179,9 @@ class EastMoneyMarketData:
         return list(await asyncio.gather(*[self.quote(q) for q in queries]))
 
     async def intraday(self, query: str, *, ndays: int = 1) -> IntradaySeries | MarketError:
-        code_info = await get_code_id(query)
-        if code_info is None:
-            return not_found(ErroText["notStock"], provider=PROVIDER)
+        code_info = await _resolve_code(query)
+        if isinstance(code_info, MarketError):
+            return code_info
         secid = get_full_security_code(code_info[0])
         sec_type = code_info[2]
         symbol = SymbolRef(
@@ -219,9 +235,9 @@ class EastMoneyMarketData:
         start: date | None = None,
         end: date | None = None,
     ) -> KlineSeries | MarketError:
-        code_info = await get_code_id(query)
-        if code_info is None:
-            return not_found(ErroText["notStock"], provider=PROVIDER)
+        code_info = await _resolve_code(query)
+        if isinstance(code_info, MarketError):
+            return code_info
         secid = get_full_security_code(code_info[0])
         sec_type = code_info[2]
         symbol = SymbolRef(

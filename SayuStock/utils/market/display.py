@@ -2,9 +2,50 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from typing import TypeVar, cast
+from dataclasses import replace, dataclass
 
-from .models import Quote, BoardRow
+from .models import Quote, BoardRow, KlineSeries, ValueSeries, RankSnapshot, BoardSnapshot, IntradaySeries
+
+# 数据源 id → 展示名（图表左下角「数据来源」标签用）
+PROVIDER_DISPLAY: dict[str, str] = {
+    "eastmoney": "东方财富",
+    "tencent": "腾讯财经",
+    "sina": "新浪财经",
+    "ths": "同花顺",
+    "tiantian": "天天基金",
+    "okx": "OKX",
+    "vix": "OPTBBS",
+}
+
+# 可盖章（写入 provider 字段）的结果模型
+_STAMPABLE = (Quote, KlineSeries, IntradaySeries, BoardSnapshot, RankSnapshot, ValueSeries)
+
+_T = TypeVar("_T")
+
+
+def stamp_provider(result: _T, pid: str) -> _T:
+    """把命中数据源 id 写进结果模型（已有值不覆盖），供渲染层展示真实来源。"""
+    if isinstance(result, _STAMPABLE) and result.provider is None:
+        return cast("_T", replace(result, provider=pid))
+    return result
+
+
+def source_label(*providers: str | None) -> str:
+    """数据源 id 序列 → 展示标签；多源去重拼接；未知 id 原样展示。
+
+    无任何来源信息时回退「东方财富」（历史口径）。
+    """
+    labels: list[str] = []
+    for pid in providers:
+        if not pid:
+            continue
+        label = PROVIDER_DISPLAY.get(pid, pid)
+        if label not in labels:
+            labels.append(label)
+    if not labels:
+        return PROVIDER_DISPLAY["eastmoney"]
+    return "、".join(labels)
 
 
 @dataclass(frozen=True, slots=True)

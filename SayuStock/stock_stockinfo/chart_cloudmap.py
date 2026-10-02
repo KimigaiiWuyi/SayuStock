@@ -15,6 +15,7 @@ from .chart_base import (
 )
 from .render_data import build_cloudmap_render_data
 from ..utils.market.models import BoardSnapshot
+from ..utils.market.display import source_label
 
 CloudmapItem = dict[str, object]
 
@@ -114,5 +115,5 @@ def draw_cloudmap_chart(snap: BoardSnapshot, market: str, sector: str | None = N
         )
 
     ax.set_title(cloudmap.title, color=FG_COLOR, fontsize=28, fontweight="bold", pad=18)
-    fig.text(0.01, 0.01, "数据来源：东方财富 | SayuStock", color=FG_COLOR, fontsize=9, alpha=0.65)
+    fig.text(0.01, 0.01, f"数据来源：{source_label(snap.provider)} | SayuStock", color=FG_COLOR, fontsize=9, alpha=0.65)
     return _fig_to_image(fig, dpi=220)

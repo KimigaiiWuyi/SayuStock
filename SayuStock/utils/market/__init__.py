@@ -27,6 +27,12 @@ from .convert import board_to_df, kline_to_df, quote_fields, kline_to_cn_df
 from .display import DisplayItem, from_quote, from_board_row, pick_display_items, board_rows_to_items
 from .registry import get_market, set_market
 from .fund_route import maybe_otc_fund_query
+from .provider_registry import (
+    PROVIDER_LABELS,
+    ConfigurableEquityMarket,
+    parse_priority_chain,
+    normalize_provider_id,
+)
 
 __all__ = [
     "AssetClass",
@@ -36,6 +42,7 @@ __all__ = [
     "BoardRow",
     "BoardSnapshot",
     "BreadthBar",
+    "ConfigurableEquityMarket",
     "FinancialSnapshot",
     "IntradayPoint",
     "IntradaySeries",
@@ -45,6 +52,7 @@ __all__ = [
     "MarketError",
     "MarketTurnover",
     "NorthboundFlow",
+    "PROVIDER_LABELS",
     "Quote",
     "RANKING_CAVEAT",
     "RankBy",
@@ -65,6 +73,8 @@ __all__ = [
     "kline_to_cn_df",
     "kline_to_df",
     "maybe_otc_fund_query",
+    "normalize_provider_id",
+    "parse_priority_chain",
     "quote_fields",
     "set_market",
 ]

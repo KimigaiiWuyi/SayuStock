@@ -100,21 +100,44 @@ def _code_query_candidates(raw: str) -> List[str]:
     return out
 
 
+class ResolveLayerError(Exception):
+    """行情ID解析层（东财 searchapi）不可用：网络/HTTP 失败。
+
+    与「标的不存在」（HTTP 200 且无结果 → None）区分开，供行情优先级链
+    在解析层瞬断时返回 network 错误顺延，而不是误报 not_found 短路。
+    """
+
+
 async def get_code_id(code: str, priority: Optional[str] = None) -> Optional[Tuple[str, str, str]]:
     """
     生成东方财富股票专用的行情ID
     code:可以是代码或简称或英文
     """
+    try:
+        return await get_code_id_strict(code, priority)
+    except ResolveLayerError:
+        return None
+
+
+async def get_code_id_strict(code: str, priority: Optional[str] = None) -> Optional[Tuple[str, str, str]]:
+    """同 get_code_id，但解析层失败时抛 ResolveLayerError；None 仅表示标的不存在。"""
     candidates = _code_query_candidates(code)
     if not candidates:
         return None
-    # 复合 query 依次尝试；首个成功即返回
+    # 复合 query 依次尝试；首个成功即返回；存在解析层失败时优先抛出（宁报网络错不误报不存在）
     last: Optional[Tuple[str, str, str]] = None
+    layer_error: Optional[ResolveLayerError] = None
     for cand in candidates:
-        hit = await _get_code_id_one(cand, priority)
+        try:
+            hit = await _get_code_id_one(cand, priority)
+        except ResolveLayerError as error:
+            layer_error = error
+            continue
         if hit is not None:
             return hit
         last = hit
+    if layer_error is not None:
+        raise layer_error
     return last
 
 
@@ -180,72 +203,74 @@ async def _get_code_id_one(code: str, priority: Optional[str] = None) -> Optiona
     async with ClientSession(headers=_get_searchapi_headers(), timeout=ClientTimeout(total=15)) as sess:
         try:
             async with sess.get(url, params=params) as res:
-                if res.status == 200:
-                    logger.debug(f"[SayuStock]开始获取{code}的ID")
-                    text = await res.text()
-                    logger.debug(text)
-                    data = json.loads(text)
-                    code_dict: List[Dict] = data["QuotationCodeTable"]["Data"]
-                    if code_dict:
-                        # 排序：SecurityTypeName为"债券"的排到最后
-                        if not is_bond:
-                            code_dict.sort(key=lambda x: x.get("SecurityTypeName") == "债券")
-                        for i in code_dict:
-                            if priority is None:
+                if res.status != 200:
+                    raise ResolveLayerError(f"searchapi HTTP {res.status}")
+                logger.debug(f"[SayuStock]开始获取{code}的ID")
+                text = await res.text()
+                logger.debug(text)
+                data = json.loads(text)
+                code_dict: List[Dict] = data["QuotationCodeTable"]["Data"]
+                if code_dict:
+                    # 排序：SecurityTypeName为"债券"的排到最后
+                    if not is_bond:
+                        code_dict.sort(key=lambda x: x.get("SecurityTypeName") == "债券")
+                    for i in code_dict:
+                        if priority is None:
+                            return (
+                                i["QuoteID"],
+                                i["Name"],
+                                i["SecurityTypeName"],
+                            )
+                        elif priority == "h":
+                            if i["SecurityTypeName"] in ["港股"]:
                                 return (
                                     i["QuoteID"],
                                     i["Name"],
                                     i["SecurityTypeName"],
                                 )
-                            elif priority == "h":
-                                if i["SecurityTypeName"] in ["港股"]:
-                                    return (
-                                        i["QuoteID"],
-                                        i["Name"],
-                                        i["SecurityTypeName"],
-                                    )
-                            elif priority == "us":
-                                if i["SecurityTypeName"] in ["美股", "粉单"]:
-                                    return (
-                                        i["QuoteID"],
-                                        i["Name"],
-                                        i["SecurityTypeName"],
-                                    )
-                            elif priority == "kr":
-                                if i["SecurityTypeName"] in ["韩股"]:
-                                    return (
-                                        i["QuoteID"],
-                                        i["Name"],
-                                        i["SecurityTypeName"],
-                                    )
-                            elif priority == "a":
-                                if i["SecurityTypeName"] in [
-                                    "沪深A",
-                                    "沪A",
-                                    "深A",
-                                    "创业板",
-                                    "科创板",
-                                    "京A",
-                                ]:
-                                    return (
-                                        i["QuoteID"],
-                                        i["Name"],
-                                        i["SecurityTypeName"],
-                                    )
-                        else:
-                            return (
-                                code_dict[0]["QuoteID"],
-                                code_dict[0]["Name"],
-                                i["SecurityTypeName"],
-                            )
+                        elif priority == "us":
+                            if i["SecurityTypeName"] in ["美股", "粉单"]:
+                                return (
+                                    i["QuoteID"],
+                                    i["Name"],
+                                    i["SecurityTypeName"],
+                                )
+                        elif priority == "kr":
+                            if i["SecurityTypeName"] in ["韩股"]:
+                                return (
+                                    i["QuoteID"],
+                                    i["Name"],
+                                    i["SecurityTypeName"],
+                                )
+                        elif priority == "a":
+                            if i["SecurityTypeName"] in [
+                                "沪深A",
+                                "沪A",
+                                "深A",
+                                "创业板",
+                                "科创板",
+                                "京A",
+                            ]:
+                                return (
+                                    i["QuoteID"],
+                                    i["Name"],
+                                    i["SecurityTypeName"],
+                                )
                     else:
-                        return None
+                        return (
+                            code_dict[0]["QuoteID"],
+                            code_dict[0]["Name"],
+                            i["SecurityTypeName"],
+                        )
+                else:
+                    # HTTP 200 且无结果：标的确切不存在
+                    return None
         except ClientConnectionError as error:
             logger.error(f"[SayuStock] 获取{code}的ID失败: {error}")
-            return None
+            raise ResolveLayerError(str(error)) from error
         except Exception as error:
             logger.error(f"[SayuStock] 获取{code}的ID异常: {error}")
-            return None
+            raise ResolveLayerError(str(error)) from error
     return None
 
 
