@@ -108,8 +108,10 @@ build_default_market()  →  CompositeMarketData(
 **行情API 优先级链（`provider_registry.py`）**：equity 槽位是 `ConfigurableEquityMarket`
 包装，所有接口共用一套全局优先级：
 
-- 配置键 `market_api_priority`，形如「东方财富 → 腾讯财经 → 新浪财经」，从左到右
-  优先级递减；下拉给全排列预设，解析层兼容箭头/逗号/中文逗号/简称（东财/新浪/腾讯）。
+- 每源一个整数配置 `market_api_priority_<id>`（0-100，数字越大越先尝试，0=禁用），
+  数字相同按各源系统内禀序号 `_PROVIDER_RANKS`（东财9/腾讯8/新浪7/同花顺6，大者先）裁决；
+  出厂默认 40/30/20/10。旧版 `market_api_priority` 链串在装配时一次性迁移
+  （`migrate_legacy_priority_config`，`parse_priority_chain` 仅迁移用）。
 - 取数语义（尽可能交付）：按链逐一尝试，**成功即返回**；源 `unsupported`
   （不支持该接口，如腾讯无板块）**跳过**；网络/解析/空数据错误**顺延下一个源**；
   源内部**抛异常**（如东财瞬断时连接错误穿透）转 network 错误顺延，不炸链；
@@ -127,7 +129,8 @@ build_default_market()  →  CompositeMarketData(
 - `resolve` 走链头（各源 resolve 语义一致：`provider_symbol` 恒为东财 secid，
   `150.*` 判场外基金依赖此约定）。
 - 新源接入：`_PROVIDER_FACTORIES` 加工厂 + `_PROVIDER_ALIASES`/`PROVIDER_LABELS`
-  加名称 + `config_default.py` 的 `market_api_priority` options 扩预设。
+  加名称 + `_PROVIDER_RANKS` 定内禀序号 + `config_default.py` 加
+  `market_api_priority_<id>` 整数配置。
 
 `CompositeMarketData._route(query)`：
 
@@ -211,8 +214,8 @@ feature 模块不应再直接 `stock_request` 然后读 `f*`。
 
 1. 新建 `adapters/<name>/provider.py`，实现 `MarketDataPort`（可继承 `PartialMarketData` 只覆盖子集）。  
 2. 所有供应商 JSON 解析写在该 adapter 内，输出标准模型。  
-3. 在 `provider_registry.py` 的 `_PROVIDER_FACTORIES` / `_PROVIDER_ALIASES` / `PROVIDER_LABELS`
-   注册，并在 `config_default.py` 的 `market_api_priority` options 里扩预设顺序
+3. 在 `provider_registry.py` 的 `_PROVIDER_FACTORIES` / `_PROVIDER_ALIASES` / `PROVIDER_LABELS` /
+   `_PROVIDER_RANKS` 注册，并在 `config_default.py` 加 `market_api_priority_<id>` 整数配置
    （能力不全的接口无需特殊处理，链式取数会自动跳过 unsupported 并顺延）。  
 4. 补 `test/market/` 解析与路由单测。  
 5. 不改 feature 模块字段假设。
