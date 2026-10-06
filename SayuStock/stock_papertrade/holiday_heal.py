@@ -47,6 +47,10 @@ _MAX_PRICE_LOOKUP_CODES = 60
 _MAX_DIRTY_SHARE = 0.30
 _MAX_DIRTY_ROWS = 500
 
+# 成本价比对容差。股数一致时成本价差在这个范围内直接跳过对账，
+# 避免对「加仓后取整」之类的正常舍入反复改写。
+_AVG_COST_TOL = 0.005
+
 
 class AccountCashFix(TypedDict):
     account_id: int
@@ -66,6 +70,8 @@ class PositionFix(TypedDict):
     old_avg_cost: float
     new_avg_cost: float
     removed: bool
+    created: bool
+    cost_only: bool
 
 
 class HolidayHealResult(TypedDict):
@@ -73,12 +79,14 @@ class HolidayHealResult(TypedDict):
     source: str
     dry_run: bool
     scanned_trades: int
+    unparsed_trades: int
     traded_span: str
     dirty_days: List[str]
     deleted_trades: int
     deleted_decisions: int
     positions_changed: int
     positions_removed: int
+    positions_created: int
     snapshots_updated: int
     snapshots_deleted: int
     price_fallback_codes: List[str]
@@ -119,12 +127,14 @@ def _empty_result(source: str, dry_run: bool, skipped: Optional[str] = None) -> 
         source=source,
         dry_run=dry_run,
         scanned_trades=0,
+        unparsed_trades=0,
         traded_span="",
         dirty_days=[],
         deleted_trades=0,
         deleted_decisions=0,
         positions_changed=0,
         positions_removed=0,
+        positions_created=0,
         snapshots_updated=0,
         snapshots_deleted=0,
         price_fallback_codes=[],
@@ -258,7 +268,12 @@ def _as_datetime(value: object) -> Optional[datetime]:
     return None
 
 
-async def _load_trades(session: AsyncSession) -> List[_Trade]:
+async def _load_trades(session: AsyncSession) -> Tuple[List[_Trade], int]:
+    """读全量留存流水。第二个返回值是"时间戳解析失败被跳过"的行数。
+
+    调用方必须看这个数：跳过的行意味着回放**不完整**，拿它去重算持仓会把
+    真实持仓算成 0 然后删掉。所以非 0 时禁止任何基于回放的重算。
+    """
     rows = (
         await session.execute(
             text(
@@ -295,7 +310,7 @@ async def _load_trades(session: AsyncSession) -> List[_Trade]:
         )
     if skipped:
         logger.error(f"{_LOG} {len(skipped)} 笔流水时间戳无法解析，已跳过（不删不改）: {skipped[:20]}")
-    return out
+    return out, len(skipped)
 
 
 async def _load_accounts(session: AsyncSession) -> Dict[int, Tuple[str, float, float, float]]:
@@ -324,6 +339,66 @@ async def _load_positions(session: AsyncSession) -> Dict[Tuple[int, str], Tuple[
     return out
 
 
+def _plan_positions(
+    keep: List[_Trade],
+    old_positions: Dict[Tuple[int, str], Tuple[int, float, float]],
+    known_accounts: FrozenSet[int],
+) -> List[PositionFix]:
+    """按留存流水回放，算出每只票应有的持仓，并列出与实际持仓行的差异。
+
+    **两个方向都要**：
+      * 流水有、持仓缺（或股数/成本对不上）→ 建仓或改写（美的一例就是这条）
+      * 持仓有、流水净头寸 ≤ 0 → 删行（幽灵仓）
+
+    只处理账户表里真实存在的盘：流水的 ``account_id`` 若是孤儿（盘被删过），
+    按它建出来的持仓行永远没人看，且会污染"持仓数"这类统计。
+    """
+    by_acc: Dict[int, List[_Trade]] = {}
+    for t in keep:
+        if t.account_id in known_accounts:
+            by_acc.setdefault(t.account_id, []).append(t)
+
+    out: List[PositionFix] = []
+    # 遍历范围必须包含**只有持仓、完全没有流水**的盘。只按 ``by_acc`` 遍历时
+    # 这种盘一个键都进不来，幽灵仓就永远扫不出来——而它恰恰是最该删的一类。
+    aids = set(by_acc) | {aid for aid, _ in old_positions}
+    for aid in sorted(aids):
+        if aid not in known_accounts:
+            continue
+        finals = _replay_final(by_acc.get(aid, []))
+        keys: set[Tuple[int, str]] = {(aid, c) for c in finals}
+        keys.update(k for k in old_positions if k[0] == aid)
+        for key in sorted(keys):
+            code = key[1]
+            state = finals.get(code)
+            new_qty = state.qty if state is not None else 0
+            new_avg = state.avg if state is not None else 0.0
+            old = old_positions.get(key)
+            old_qty, old_avg, _ = old if old is not None else (0, 0.0, 0.0)
+            created = old is None and new_qty > 0
+            if not created and new_qty == old_qty and abs(new_avg - old_avg) <= _AVG_COST_TOL:
+                continue
+            # 股数一致、只有成本价漂移时**不改**：早期版本的 ``calc_new_avg_cost``
+            # 不把买费用计入成本，老账里那批行按新口径算必然差几分钱。那不是损坏，
+            # 是口径演进；自动改写会让用户看到持仓成本凭空跳一下。
+            cost_only = old is not None and new_qty == old_qty
+            out.append(
+                PositionFix(
+                    account_id=aid,
+                    stock_code=code,
+                    stock_name=(state.name if state is not None and state.name else ""),
+                    old_qty=old_qty,
+                    new_qty=new_qty,
+                    old_avg_cost=round(old_avg, 4),
+                    new_avg_cost=round(new_avg, 4),
+                    removed=new_qty <= 0,
+                    created=created,
+                    cost_only=cost_only,
+                )
+            )
+    return out
+
+
 def _plan_accounts(
     accounts: Dict[int, Tuple[str, float, float, float]],
     keep: List[_Trade],
@@ -335,7 +410,6 @@ def _plan_accounts(
         by_acc.setdefault(t.account_id, []).append(t)
 
     cash_fixes: List[AccountCashFix] = []
-    pos_fixes: List[PositionFix] = []
 
     for aid, (name, initial, cash, principal) in accounts.items():
         trades = by_acc.get(aid, [])
@@ -358,33 +432,7 @@ def _plan_accounts(
                 )
             )
 
-        finals = _replay_final(trades)
-        # 两边的键都要统一成 (account_id, code)：finals 的键是裸 code，
-        # 直接和 old_positions 的元组键取并集会退化成联合类型，key[1] 在裸
-        # 字符串上取到的是第二个字符，股票代码会被写坏。
-        keys: set[Tuple[int, str]] = {(aid, c) for c in finals} | set(old_positions)
-        for key in sorted(keys):
-            code = key[1]
-            state = finals.get(code)
-            new_qty = state.qty if state is not None else 0
-            new_avg = state.avg if state is not None else 0.0
-            old = old_positions.get(key)
-            old_qty, old_avg, _ = old if old is not None else (0, 0.0, 0.0)
-            if new_qty == old_qty and abs(new_avg - old_avg) <= 0.0001:
-                continue
-            pos_fixes.append(
-                PositionFix(
-                    account_id=aid,
-                    stock_code=code,
-                    stock_name=(state.name if state is not None and state.name else ""),
-                    old_qty=old_qty,
-                    new_qty=new_qty,
-                    old_avg_cost=round(old_avg, 4),
-                    new_avg_cost=round(new_avg, 4),
-                    removed=new_qty <= 0,
-                )
-            )
-    return cash_fixes, pos_fixes
+    return cash_fixes, _plan_positions(keep, old_positions, frozenset(accounts))
 
 
 async def _archive(trades: List[_Trade], days: List[str]) -> str:
@@ -554,57 +602,110 @@ async def _rewrite_snapshots(
     return updated, len(holiday_ids), failed
 
 
-async def _apply_positions(session: AsyncSession, keep: List[_Trade], fixes: List[PositionFix]) -> Tuple[int, int]:
-    """按重算结果改/删持仓行，返回 (改了几行, 删了几行)。"""
-    finals: Dict[int, Dict[str, _PosState]] = {}
-    for t in keep:
-        finals.setdefault(t.account_id, {})
+async def _apply_positions(session: AsyncSession, keep: List[_Trade], fixes: List[PositionFix]) -> Tuple[int, int, int]:
+    """按重算结果建/改/删持仓行，返回 (新建, 改动, 删除)。
+
+    原来这里只会 UPDATE 和 DELETE——"流水有、持仓缺"会算成一条 UPDATE，
+    打到 0 行上、什么都没发生，账本照样对不上。建仓必须真的 INSERT。
+    """
     by_acc: Dict[int, List[_Trade]] = {}
     for t in keep:
         by_acc.setdefault(t.account_id, []).append(t)
-    for aid, trades in by_acc.items():
-        finals[aid] = _replay_final(trades)
+    finals: Dict[int, Dict[str, _PosState]] = {aid: _replay_final(ts) for aid, ts in by_acc.items()}
 
-    has_quote = await _has_column(session, "sayupaperposition", "last_quote_price")
     has_opened = await _has_column(session, "sayupaperposition", "opened_at")
+    has_name = await _has_column(session, "sayupaperposition", "stock_name")
+    has_secid = await _has_column(session, "sayupaperposition", "secid")
+    has_group = await _has_column(session, "sayupaperposition", "group_id")
+    has_bot = await _has_column(session, "sayupaperposition", "bot_id")
     now = datetime.now()
-    changed = removed = 0
+    created = changed = removed = 0
+    origin_cache: Dict[int, Tuple[str, str]] = {}
+
     for fix in fixes:
-        state = finals.get(fix["account_id"], {}).get(fix["stock_code"])
+        if fix["cost_only"]:
+            # 股数一致、只是成本价口径不同：只报告不动手（口径演进而非损坏）
+            continue
+        aid = fix["account_id"]
+        code = fix["stock_code"]
+        state = finals.get(aid, {}).get(code)
         if fix["removed"] or state is None or state.qty <= 0:
             await session.execute(
                 text("DELETE FROM sayupaperposition WHERE account_id = :aid AND stock_code = :code"),
-                {"aid": fix["account_id"], "code": fix["stock_code"]},
+                {"aid": aid, "code": code},
             )
             removed += 1
             continue
 
-        sets = ["qty = :qty", "avg_cost = :avg", "updated_at = :now"]
+        # 参数键一律用**列名**，与 SQL 里的占位符逐字对应。
+        # 曾经这里是 :aid/:code/:avg/:now 配列名 account_id/stock_code/avg_cost/
+        # updated_at，INSERT 时运行期才炸 "A value is required for bind parameter"。
         params: Dict[str, object] = {
             "qty": state.qty,
-            "avg": round(state.avg, 4),
-            "now": now,
-            "aid": fix["account_id"],
-            "code": fix["stock_code"],
+            "avg_cost": round(state.avg, 4),
+            "updated_at": now,
+            "account_id": aid,
+            "stock_code": code,
         }
-        if state.name:
-            sets.append("stock_name = :name")
-            params["name"] = state.name
-        if state.secid:
-            sets.append("secid = :secid")
+        if has_name and state.name:
+            params["stock_name"] = state.name
+        if has_secid and state.secid:
             params["secid"] = state.secid
         if has_opened and state.opened_on is not None:
-            sets.append("opened_at = :opened")
-            params["opened"] = datetime.combine(state.opened_on, datetime.min.time())
-        if not has_quote:
-            sets.append("last_quote_price = :px")
-            params["px"] = round(state.avg, 4)
+            params["opened_at"] = datetime.combine(state.opened_on, datetime.min.time())
+        # 报价留空而不是填成本价：填了会让"最新价=成本"看起来像真实行情。
+        # 下游 `quote_source='cost'` 本来就会用 avg_cost 兜底显示。
+        if fix["created"]:
+            cols = ["account_id", "stock_code", "qty", "avg_cost", "updated_at"]
+            if has_opened and state.opened_on is not None:
+                cols.append("opened_at")
+            if has_name:
+                cols.append("stock_name")
+            if has_secid:
+                cols.append("secid")
+            if has_group or has_bot:
+                if aid not in origin_cache:
+                    origin_cache[aid] = await _account_origin(session, aid)
+                group_id, bot_id = origin_cache[aid]
+            if has_group:
+                params["group_id"] = group_id
+                cols.append("group_id")
+            if has_bot:
+                params["bot_id"] = bot_id
+                cols.append("bot_id")
+            await session.execute(
+                text(f"INSERT INTO sayupaperposition ({', '.join(cols)}) VALUES ({', '.join(f':{c}' for c in cols)})"),
+                params,
+            )
+            created += 1
+            continue
+
+        sets = ["qty = :qty", "avg_cost = :avg_cost", "updated_at = :updated_at"]
+        if has_name and state.name:
+            sets.append("stock_name = :stock_name")
+        if has_secid and state.secid:
+            sets.append("secid = :secid")
+        if has_opened and state.opened_on is not None:
+            sets.append("opened_at = :opened_at")
         await session.execute(
-            text(f"UPDATE sayupaperposition SET {', '.join(sets)} WHERE account_id = :aid AND stock_code = :code"),
+            text(
+                f"UPDATE sayupaperposition SET {', '.join(sets)} "
+                "WHERE account_id = :account_id AND stock_code = :stock_code"
+            ),
             params,
         )
         changed += 1
-    return changed, removed
+    return created, changed, removed
+
+
+async def _account_origin(session: AsyncSession, aid: int) -> Tuple[str, str]:
+    """建持仓行时补上建仓群 / 平台，仅用于排障。"""
+    row = (
+        await session.execute(text("SELECT group_id, bot_id FROM sayupaperaccount WHERE id = :id"), {"id": aid})
+    ).first()
+    if row is None:
+        return "", ""
+    return str(row[0] or ""), str(row[1] or "")
 
 
 async def diagnose_holiday_heal(limit: int = 20) -> str:
@@ -685,25 +786,65 @@ async def diagnose_holiday_heal(limit: int = 20) -> str:
             out.append(
                 "   → 命中为 0：要么休市表没覆盖那些日期（看 1️⃣），要么 decided_at 的日期与实际不符（看 4️⃣ 的解析结果）"
             )
+
+        # 6️⃣ 持仓 ↔ 流水 双向对账。命中为 0 时真正的问题往往在这一段：
+        # 「卖出播报了、钱少了、但库里没流水」= 持仓行被别处删掉而流水没写，
+        # 这种形状和"脏成交"无关，光看休市表命中数永远是 0。
+        trades, unparsed = await _load_trades(session)
+        accounts = await _load_accounts(session)
+        old_positions = await _load_positions(session)
+        fixes = _plan_positions(trades, old_positions, frozenset(accounts))
+        out.append(
+            f"6️⃣ 持仓对账：流水 {len(trades)} 笔（时间戳解析失败 {unparsed} 笔）、"
+            f"持仓 {len(old_positions)} 行 → 不一致 {len(fixes)} 处"
+        )
+        if unparsed:
+            out.append("   ⚠️ 有流水时间戳解析失败，回放不完整，对账结果仅供参考，自愈会拒绝据此改账")
+        for f in fixes[:limit]:
+            arrow = f"{f['old_qty']}股@{f['old_avg_cost']:.3f} → {f['new_qty']}股@{f['new_avg_cost']:.3f}"
+            name = f["stock_name"] or "?"
+            if f["cost_only"]:
+                kind = "仅成本口径（不动）"
+            elif f["created"]:
+                kind = "新建"
+            elif f["removed"]:
+                kind = "删除"
+            else:
+                kind = "改写"
+            out.append(f"   · 盘#{f['account_id']} {kind} {name}({f['stock_code']}) {arrow}")
+        if len(fixes) > limit:
+            out.append(f"   …还有 {len(fixes) - limit} 处")
+        if not fixes and not unparsed:
+            out.append("   ✅ 持仓与流水自洽")
     return "\n".join(out)
 
 
 async def heal_holiday_trades(*, dry_run: bool = False) -> HolidayHealResult:
     """清掉落在非交易日的成交，并把现金 / 本金 / 持仓 / 净值快照重建回自洽。
 
-    幂等：没有脏成交时是空操作。``dry_run=True`` 时只算计划不落库。
-    权威休市集合拿不到就直接放弃——宁可不清，也不拿过期的人工表删数据。
+    两件事，优先级不同：
+      1. **持仓 ↔ 流水双向对账**，无条件执行、幂等。它不依赖休市表——
+         "持仓行被别处删掉而流水没写"（卖出播报了、钱少了、库无流水）与
+         节假日毫无关系，挂在 `if not dirty` 后面就永远修不了。
+      2. **清非交易日成交**，需要权威休市集合；拿不到就整轮放弃。
+
+    ``dry_run=True`` 时只算计划不落库。
     """
     closed, source = await resolve_closed_days()
     if closed is None:
-        logger.warning(f"{_LOG} 权威休市表拿不到（{source}），本次不处理历史脏成交")
-        return _empty_result(source, dry_run, skipped=f"权威休市表不可用（{source}）")
-    if not closed:
-        logger.warning(f"{_LOG} 权威休市表为空，本次不处理历史脏成交")
-        return _empty_result(source, dry_run, skipped="权威休市表为空")
-    logger.info(
-        f"{_LOG} 权威休市表就绪：{len(closed)} 个休市工作日（来源 {source}），区间 {min(closed)} ~ {max(closed)}"
-    )
+        logger.warning(f"{_LOG} 权威休市表拿不到（{source}），本次跳过清理非交易日成交")
+        # 休市表只判"哪笔成交是脏的"。持仓对账不依赖它——持仓行被别处删掉
+        # 这种损坏与节假日无关，不能因为拿不到日历就一并放过。
+        closed = frozenset()
+    elif not closed:
+        logger.warning(f"{_LOG} 权威休市表为空，本次跳过清理非交易日成交")
+        closed = frozenset()
+    if closed:
+        logger.info(
+            f"{_LOG} 权威休市表就绪：{len(closed)} 个休市工作日（来源 {source}），区间 {min(closed)} ~ {max(closed)}"
+        )
+    else:
+        logger.warning(f"{_LOG} 休市表不可用（{source}）：不会删除任何流水，仅执行持仓对账")
 
     result = _empty_result(source, dry_run)
     async with async_maker() as session:
@@ -714,10 +855,11 @@ async def heal_holiday_trades(*, dry_run: bool = False) -> HolidayHealResult:
             logger.warning(f"{_LOG} 库中没有 sayupaperaccount 表，跳过")
             return _empty_result(source, dry_run, skipped="无 sayupaperaccount 表")
 
-        trades = await _load_trades(session)
+        trades, unparsed = await _load_trades(session)
         dirty = [t for t in trades if t.decided_at.date().isoformat() in closed]
         # 每条出口都留痕：否则"没跑"和"跑了但没找到脏数据"在日志里长得一模一样
         result["scanned_trades"] = len(trades)
+        result["unparsed_trades"] = unparsed
         if trades:
             lo = min(t.decided_at for t in trades).strftime("%Y-%m-%d")
             hi = max(t.decided_at for t in trades).strftime("%Y-%m-%d")
@@ -725,47 +867,91 @@ async def heal_holiday_trades(*, dry_run: bool = False) -> HolidayHealResult:
         else:
             result["traded_span"] = "(账本无成交)"
         logger.info(f"{_LOG} 扫描 {len(trades)} 笔流水（{result['traded_span']}），命中 {len(dirty)} 笔非交易日成交")
+        # 时间戳解析不了的行已经从回放里消失：拿残缺的回放去重算持仓，会把
+        # 真实持仓算成 0 然后删掉。宁可不做，也绝不能在这一步动账。
+        if unparsed:
+            logger.error(f"{_LOG} 有 {unparsed} 笔流水时间戳无法解析，回放不完整，本次不做任何账本重算")
+            result["skipped"] = f"{unparsed} 笔流水时间戳无法解析，回放不完整"
+            return result
+
+        accounts = await _load_accounts(session)
+        has_pos_table = await _has_table(session, "sayupaperposition")
+        old_positions = await _load_positions(session) if has_pos_table else {}
+        dirty_ids = {t.id for t in dirty}
+        keep = [t for t in trades if t.id not in dirty_ids]
+
+        # ── 熔断：脏数据占比过高一律不动账 ──
+        # 正常情况下脏数据只可能来自少数几个长假，占比理应极低。一旦这个比例失控，
+        # 更可能的解释是"休市表判据本身出了问题"（上游残缺 / secid 走偏等），
+        # 此时按脏数据删下去就是把整本账删光。宁可留着等人来看。
+        #
+        # 必须排在持仓对账**之前**：熔断一旦触发就整轮放弃，若先改了对账，
+        # "放弃"就只剩了个空壳——账已经被改了一半，比不清还糟。
+        if dirty:
+            share = len(dirty) / len(trades)
+            if share > _MAX_DIRTY_SHARE:
+                msg = (
+                    f"脏数据占比 {len(dirty)}/{len(trades)} = {share:.1%} 超过阈值 "
+                    f"{_MAX_DIRTY_SHARE:.0%}，判定休市表判据可疑，**已放弃本次清理**"
+                )
+                logger.error(f"{_LOG} {msg}")
+                result["skipped"] = msg
+                return result
+            if not dry_run and len(dirty) > _MAX_DIRTY_ROWS:
+                msg = (
+                    f"单次将删除 {len(dirty)} 笔流水，超过安全上限 {_MAX_DIRTY_ROWS} 笔，"
+                    f"**已放弃自动清理**；请人工核对后用「模拟盘假期还原 执行」"
+                )
+                logger.error(f"{_LOG} {msg}")
+                result["skipped"] = msg
+                return result
+
+        # ── 账本双向对账：与"有没有脏成交"无关，必须无条件跑 ──
+        # 以前这一步挂在 `if not dirty: return` 后面，于是"流水有、持仓缺"
+        # 这种形状永远没人修：没有脏流水 → 直接返回 → 持仓重建根本走不到。
+        # 美的 10-01 就是这个形状（买入流水 id=12 还在，持仓行没了）。
+        pos_fixes = _plan_positions(keep, old_positions, frozenset(accounts))
+        result["positions"] = pos_fixes
+        if pos_fixes:
+            logger.warning(
+                f"{_LOG} 账本对账发现 {len(pos_fixes)} 处持仓与流水不一致"
+                f"（新建 {sum(1 for f in pos_fixes if f['created'])}、"
+                f"改 {sum(1 for f in pos_fixes if not f['created'] and not f['removed'])}、"
+                f"删 {sum(1 for f in pos_fixes if f['removed'])}）；{'预演' if dry_run else '准备修复'}"
+            )
+        else:
+            logger.info(f"{_LOG} 账本对账：持仓与流水一致，无需修复")
+
+        if not dry_run and pos_fixes and has_pos_table:
+            made, changed, removed = await _apply_positions(session, keep, pos_fixes)
+            result["positions_created"] = made
+            result["positions_changed"] = changed
+            result["positions_removed"] = removed
+
         if not dirty:
             tail = sorted(closed)[-5:] if closed else []
+            # 必须在这里就 commit：``async_maker()`` 是普通 AsyncSession，
+            # 退出 with 不自动提交（实测：不 commit 写了也等于没写）。
+            # 不 commit 的话，"无脏成交"这条最常见的路径会把刚建好的持仓丢掉，
+            # 而日志还写着"已执行持仓对账"——看起来成功，实际没落库。
+            if not dry_run and result["positions_created"]:
+                await session.commit()
+                logger.info(
+                    f"{_LOG} 已提交持仓对账：新建 {result['positions_created']} 行"
+                    f"（10-01 这类流水有、持仓缺就是靠这一步自动补回）"
+                )
             logger.info(
-                f"{_LOG} 无需处理：没有任何成交落在休市日。"
-                f"流水时间跨度 {result['traded_span']}，休市表最近几个休市日 {tail}"
+                f"{_LOG} 无脏成交可清：流水时间跨度 {result['traded_span']}，"
+                f"休市表最近几个休市日 {tail}" + ("；已提交持仓对账" if result["positions_created"] else "；持仓已自洽")
             )
             return result
 
         days = sorted({t.decided_at.date().isoformat() for t in dirty})
         first_dirty = min(t.decided_at.date() for t in dirty)
         result["dirty_days"] = days
-        dirty_ids = {t.id for t in dirty}
-        keep = [t for t in trades if t.id not in dirty_ids]
 
-        # ── 熔断：脏数据占比过高一律不动账 ──
-        # 正常情况下脏数据只可能来自少数几个长假，占比极低。一旦这个比例失控，
-        # 更可能的解释是"休市表判据本身出了问题"（上游数据残缺、secid 走偏等），
-        # 此时按脏数据删下去就是把整本账删光。宁可留着等人来看。
-        share = len(dirty) / len(trades)
-        if share > _MAX_DIRTY_SHARE:
-            msg = (
-                f"脏数据占比 {len(dirty)}/{len(trades)} = {share:.1%} 超过阈值 "
-                f"{_MAX_DIRTY_SHARE:.0%}，判定休市表判据可疑，**已放弃本次清理**"
-            )
-            logger.error(f"{_LOG} {msg}")
-            result["skipped"] = msg
-            return result
-        if not dry_run and len(dirty) > _MAX_DIRTY_ROWS:
-            msg = (
-                f"单次将删除 {len(dirty)} 笔流水，超过安全上限 {_MAX_DIRTY_ROWS} 笔，"
-                f"**已放弃自动清理**；请人工核对后用「模拟盘假期还原 执行」"
-            )
-            logger.error(f"{_LOG} {msg}")
-            result["skipped"] = msg
-            return result
-
-        accounts = await _load_accounts(session)
-        old_positions = await _load_positions(session) if await _has_table(session, "sayupaperposition") else {}
-        cash_fixes, pos_fixes = _plan_accounts(accounts, keep, old_positions)
+        cash_fixes, _ = _plan_accounts(accounts, keep, old_positions)
         result["cash_fixed"] = cash_fixes
-        result["positions"] = pos_fixes
 
         logger.warning(
             f"{_LOG} 发现 {len(dirty)} 笔非交易日成交（{days[0]} ~ {days[-1]}，共 {len(days)} 天，"
@@ -788,10 +974,11 @@ async def heal_holiday_trades(*, dry_run: bool = False) -> HolidayHealResult:
                 {"cash": fix["new_cash"], "p": fix["new_principal"], "id": fix["account_id"]},
             )
 
-        if pos_fixes and await _has_table(session, "sayupaperposition"):
-            changed, removed = await _apply_positions(session, keep, pos_fixes)
-            result["positions_changed"] = changed
-            result["positions_removed"] = removed
+        if pos_fixes and has_pos_table:
+            logger.info(
+                f"{_LOG} 持仓对账已在上一步落库：新建 {result['positions_created']} / "
+                f"改 {result['positions_changed']} / 删 {result['positions_removed']}"
+            )
 
         if await _has_table(session, "sayupapersnapshot"):
             updated, dropped, failed = await _rewrite_snapshots(session, keep, first_dirty, closed)
