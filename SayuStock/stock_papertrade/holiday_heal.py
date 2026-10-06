@@ -22,7 +22,7 @@ from __future__ import annotations
 import json
 import asyncio
 from typing import Dict, List, Tuple, Optional, FrozenSet, TypedDict
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from dataclasses import replace, dataclass
 
 from sqlalchemy import text
@@ -32,7 +32,7 @@ from gsuid_core.logger import logger
 from gsuid_core.utils.database.base_models import async_maker
 
 from .matcher import apply_fill_qty_cost, cash_delta_for_fill
-from .trading_calendar import resolve_closed_days
+from .trading_calendar import _INDEX_SECID, _DAILY_LOOKBACK_DAYS, resolve_closed_days
 from ..utils.resource_path import DATA_PATH
 from ..utils.database.papertrade_migration import _row_date, _has_table, _has_column
 
@@ -72,6 +72,8 @@ class HolidayHealResult(TypedDict):
     skipped: Optional[str]
     source: str
     dry_run: bool
+    scanned_trades: int
+    traded_span: str
     dirty_days: List[str]
     deleted_trades: int
     deleted_decisions: int
@@ -116,6 +118,8 @@ def _empty_result(source: str, dry_run: bool, skipped: Optional[str] = None) -> 
         skipped=skipped,
         source=source,
         dry_run=dry_run,
+        scanned_trades=0,
+        traded_span="",
         dirty_days=[],
         deleted_trades=0,
         deleted_decisions=0,
@@ -603,6 +607,87 @@ async def _apply_positions(session: AsyncSession, keep: List[_Trade], fixes: Lis
     return changed, removed
 
 
+async def diagnose_holiday_heal(limit: int = 20) -> str:
+    """自愈为什么没生效的现场取证。**只读，不改任何数据。**
+
+    排查"明明有假日成交却没被清掉"时，靠猜是没用的——下面每一步都是
+    可能出错的环节，任何一个断掉都会表现为"没有脏数据"：
+      1. 权威休市表拿到没有、覆盖到哪些天
+      2. 账户与盘
+      3. 流水表读到几行、``account_id`` 分布（>0 过滤会滤掉未回填的）
+      4. 每行 ``decided_at`` 的**原始类型**与解析结果（解析失败会被静默跳过）
+      5. 每笔成交的日期是否落在休市表里
+    """
+    from ..utils.market import KlinePeriod, get_market, is_market_error
+
+    out: List[str] = ["🔍 **模拟盘 · 假期自愈诊断**"]
+
+    closed, source = await resolve_closed_days()
+    if closed is None:
+        out.append(f"1️⃣ 休市表：❌ 拿不到（{source}）")
+        ser = await get_market().kline(
+            _INDEX_SECID, KlinePeriod.D1, start=date.today() - timedelta(days=_DAILY_LOOKBACK_DAYS), end=date.today()
+        )
+        out.append(f"   原始 kline 错误：{ser.message if is_market_error(ser) else '无'}")
+    else:
+        tail = sorted(closed)[-6:]
+        out.append(f"1️⃣ 休市表：✅ {len(closed)} 天（{source}）")
+        out.append(f"   区间 {min(closed)} ~ {max(closed)}，最近几个：{tail}")
+
+    async with async_maker() as session:
+        for table in ("sayupaperaccount", "sayupapertrade", "sayupaperposition"):
+            if not await _has_table(session, table):
+                out.append(f"2️⃣ 表 `{table}` 不存在 ❌")
+                return "\n".join(out)
+
+        accs = (await session.execute(text("SELECT id, name, enabled FROM sayupaperaccount ORDER BY id"))).all()
+        out.append("2️⃣ 账户：" + ", ".join(f"#{a[0]} {a[1]}(enabled={a[2]})" for a in accs) or "(无)")
+
+        dist = (
+            await session.execute(
+                text("SELECT account_id, count(*) FROM sayupapertrade GROUP BY account_id ORDER BY account_id")
+            )
+        ).all()
+        out.append(
+            "3️⃣ 流水 account_id 分布："
+            + ", ".join(f"{d[0]}→{d[1]}笔" for d in dist)
+            + "   ⚠️ 含 0 的话会被 `account_id > 0` 过滤掉"
+        )
+
+        raw = (
+            await session.execute(
+                text(
+                    "SELECT id, account_id, stock_code, stock_name, side, qty, price, decided_at "
+                    "FROM sayupapertrade ORDER BY id DESC LIMIT :n"
+                ),
+                {"n": limit},
+            )
+        ).all()
+        total = (await session.execute(text("SELECT count(*) FROM sayupapertrade"))).scalar()
+        out.append(f"4️⃣ 流水总行数 {total}，以下列出最近 {len(raw)} 行：")
+
+        matched = 0
+        for r in raw:
+            parsed = _as_datetime(r[7])
+            if parsed is None:
+                out.append(f"   ❌ id={r[0]} decided_at 解析失败：{r[7]!r} ({type(r[7]).__name__})")
+                continue
+            d = parsed.date().isoformat()
+            hit = d in closed if closed else False
+            if hit:
+                matched += 1
+            mark = "🔴 脏数据" if hit else "　"
+            out.append(
+                f"   {mark} id={r[0]} 盘#{r[1]} {r[3]}({r[2]}) {r[4]} {r[5]}股 @{r[6]} decided_at={r[7]!r} → {d}"
+            )
+        out.append(f"5️⃣ 上面 {len(raw)} 行里命中休市表的有 {matched} 行")
+        if matched == 0 and raw:
+            out.append(
+                "   → 命中为 0：要么休市表没覆盖那些日期（看 1️⃣），要么 decided_at 的日期与实际不符（看 4️⃣ 的解析结果）"
+            )
+    return "\n".join(out)
+
+
 async def heal_holiday_trades(*, dry_run: bool = False) -> HolidayHealResult:
     """清掉落在非交易日的成交，并把现金 / 本金 / 持仓 / 净值快照重建回自洽。
 
@@ -616,17 +701,36 @@ async def heal_holiday_trades(*, dry_run: bool = False) -> HolidayHealResult:
     if not closed:
         logger.warning(f"{_LOG} 权威休市表为空，本次不处理历史脏成交")
         return _empty_result(source, dry_run, skipped="权威休市表为空")
+    logger.info(
+        f"{_LOG} 权威休市表就绪：{len(closed)} 个休市工作日（来源 {source}），区间 {min(closed)} ~ {max(closed)}"
+    )
 
     result = _empty_result(source, dry_run)
     async with async_maker() as session:
         if not await _has_table(session, "sayupapertrade"):
+            logger.warning(f"{_LOG} 库中没有 sayupapertrade 表，跳过")
             return _empty_result(source, dry_run, skipped="无 sayupapertrade 表")
         if not await _has_table(session, "sayupaperaccount"):
+            logger.warning(f"{_LOG} 库中没有 sayupaperaccount 表，跳过")
             return _empty_result(source, dry_run, skipped="无 sayupaperaccount 表")
 
         trades = await _load_trades(session)
         dirty = [t for t in trades if t.decided_at.date().isoformat() in closed]
+        # 每条出口都留痕：否则"没跑"和"跑了但没找到脏数据"在日志里长得一模一样
+        result["scanned_trades"] = len(trades)
+        if trades:
+            lo = min(t.decided_at for t in trades).strftime("%Y-%m-%d")
+            hi = max(t.decided_at for t in trades).strftime("%Y-%m-%d")
+            result["traded_span"] = f"{lo} ~ {hi}"
+        else:
+            result["traded_span"] = "(账本无成交)"
+        logger.info(f"{_LOG} 扫描 {len(trades)} 笔流水（{result['traded_span']}），命中 {len(dirty)} 笔非交易日成交")
         if not dirty:
+            tail = sorted(closed)[-5:] if closed else []
+            logger.info(
+                f"{_LOG} 无需处理：没有任何成交落在休市日。"
+                f"流水时间跨度 {result['traded_span']}，休市表最近几个休市日 {tail}"
+            )
             return result
 
         days = sorted({t.decided_at.date().isoformat() for t in dirty})

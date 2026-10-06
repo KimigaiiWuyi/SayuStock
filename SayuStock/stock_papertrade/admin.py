@@ -79,6 +79,9 @@ async def send_heal_holiday(bot: Bot, ev: Event) -> list[str] | None:
 
     tag = "预演" if summary["dry_run"] else "已执行"
     lines = [f"🧹 **模拟盘 · 假期成交还原（{tag}）**", f"休市表来源：{summary['source']}"]
+    # 诊断三件套：休市表拿到没有 / 扫了多少笔 / 时间跨度到哪天。
+    # 有了这三行，"没扫到数据"和"扫到了但没匹配"一眼可分。
+    lines.append(f"扫描流水 {summary['scanned_trades']} 笔，时间跨度 {summary['traded_span'] or '(无)'}")
 
     if summary["skipped"]:
         lines.append(f"⚠️ 未执行：{summary['skipped']}")
@@ -125,6 +128,15 @@ async def send_heal_holiday(bot: Bot, ev: Event) -> list[str] | None:
         lines.append("")
         lines.append("以上为预演，账本未改动。确认无误后发「模拟盘假期还原 执行」。")
     return await bot.send("\n".join(lines))
+
+
+@sv_papertrade_admin.on_fullmatch(("模拟盘假期诊断",))
+@sv_papertrade_admin.on_prefix(("模拟盘假期诊断",))
+async def send_holiday_diagnose(bot: Bot, ev: Event) -> list[str] | None:
+    """只读取证：自愈为什么没清掉。**不改任何数据。**"""
+    from .holiday_heal import diagnose_holiday_heal
+
+    return await bot.send(await diagnose_holiday_heal())
 
 
 # 压测专用盘：**绝不能**复用用户的真盘。压测会真买真卖、末尾还会 reset_account 把

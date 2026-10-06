@@ -24,6 +24,7 @@
 from __future__ import annotations
 
 import json
+import asyncio
 from typing import Tuple, Optional, TypedDict
 from datetime import date, time, datetime, timedelta
 
@@ -50,6 +51,8 @@ _DAILY_LOOKBACK_DAYS = 730
 _MIN_BAR_DENSITY = 0.60
 # 休市占比上限：正常年份工作日休市占比约 7%~8%，超过 30% 判据不可信。
 _MAX_CLOSED_RATIO = 0.30
+# 东财 -400016（同一 IP 高频限流）后的退避时长
+_RATE_LIMIT_BACKOFF_SECONDS = 2.0
 
 _LOG = "[SayuStock][PaperTrade][Calendar]"
 
@@ -318,6 +321,13 @@ async def refresh_daily_calendar(lookback_days: int = _DAILY_LOOKBACK_DAYS) -> O
     end = date.today()
     start = end - timedelta(days=lookback_days)
     series = await get_market().kline(_INDEX_SECID, KlinePeriod.D1, start=start, end=end)
+    # 东财对同一 IP 的高频请求会回 -400016（实测连续调用即触发）。限流是瞬时的，
+    # 退避重试一次通常就恢复；不重试的话，一次限流会让整个休市表拿不到，
+    # 连带自愈整体放弃——那正是最需要它的时刻。
+    if is_market_error(series) and "400016" in series.message:
+        await asyncio.sleep(_RATE_LIMIT_BACKOFF_SECONDS)
+        logger.warning(f"{_LOG} 命中东财限流，{_RATE_LIMIT_BACKOFF_SECONDS}s 后重试一次")
+        series = await get_market().kline(_INDEX_SECID, KlinePeriod.D1, start=start, end=end)
     if is_market_error(series):
         logger.warning(f"{_LOG} 上证日 K 不可达: {series.message}")
         return None
