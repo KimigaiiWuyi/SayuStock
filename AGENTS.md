@@ -146,6 +146,9 @@ basedpyright --pythonpath <Core venv>/python
 9. 价序列类型用 `Sequence`，不要让 `list[float]` 与 `list[float | None]` 互赋。
 10. 离线出图测：空 `DATA_PATH` 不是缓存；要有 `*_single-stock*_data.json`。
 11. 模拟盘交易日**自证**（上证 `1.000001` 分时/日 K），别再维护人工假期表——旧表只到 2026-02 就过期，长假照常撮合写脏流水；`holiday_heal` 会自动清。`text()` 查询回来的 datetime 列是**字符串**，解析失败要跳过并告警，**兜底 `now()` 会把整个账本当脏数据删光**。
+12. 持仓要跟流水**双向**对账，且**不许挂在"有没有脏成交"的早退后面**。2026-10-01 美的集团就是反方向损坏：卖出播报了、钱少了、库无流水——旧代码让 LLM 直接 `position_upsert(qty=0)` 删掉持仓行，`trade_insert` 因持仓不足被拒，于是持仓没了、钱没进、流水没有。只有"流水有 → 补持仓"和"持仓有 → 删幽灵仓"都做，且遍历范围要含**只有持仓、零流水**的盘（只遍历 `by_acc` 会整类漏掉），才算自愈。
+13. 东财限流（`-400016`）时 `get_quote` 返回 `None`，**不许当成"跳过校验"放行**。`record_trade` 的偏差校验早先是 `_live is not None and ...`——限流恰好落进"跳过"分支，等于风控期完全失守，任意价格都能落库。拿不到实时价必须**拒绝入库**。且失败缓存 TTL 要短（`QUOTE_FAIL_TTL`，别沿用 60s 成功 TTL），否则一次限流把该票锁死一分钟。注意：拒绝要**就地 return**，不能先把判断结果存进 flag 再在下一段用，否则 `_live` 丢 None 收窄，basedpyright 会报算术运算符类型错。
+14. `async_maker()` 是**普通 AsyncSession，退出 `with` 不自动提交**（实测：不 commit 时 INSERT 离开会话后查不到）。`holiday_heal` 把持仓写入放在「无脏成交」的早退分支里，所以**每条 return 前都要确认该 commit 的 commit 了**，否则"重启即自动修复"只是看起来成立：日志写着已对账，库里什么都没有。验证这类"以为落库了"的改动必须**另开独立连接复查**——同一个 session 会命中未提交事务，骗过自己。
 
 ## Security notes
 

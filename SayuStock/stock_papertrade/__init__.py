@@ -131,19 +131,37 @@ async def _papertrade_holiday_boot() -> None:
 
     挂 ``on_core_start``（WS 已开始服务）而不是 ``on_core_start_before``：
     两步都要打行情接口，不该阻塞启动。异常只记日志，绝不让模拟盘拖挂 core。
+
+    开头那行 ``booting`` 是**故意**的：它是"这个钩子到底有没有被调用"的第一手
+    证据。Core 那边 ``on_core_start`` 是 ``create_task`` 出来的后台任务，不阻塞
+    启动日志；没有这行就分不清"钩子没跑"和"跑了但没找到脏数据"。
     """
+    logger.info("[SayuStock][PaperTrade] 启动自愈开始：刷交易日历 → 清假期脏成交")
     from .trading_calendar import refresh_intraday, refresh_daily_calendar
 
     try:
-        await refresh_daily_calendar()
-        await refresh_intraday()
+        closed = await refresh_daily_calendar()
+        logger.info(
+            "[SayuStock][PaperTrade] 权威休市表刷新："
+            + (f"成功，{len(closed)} 个休市工作日" if closed else "失败（将退回缓存/兜底表）")
+        )
     except Exception as e:
         logger.warning(f"[SayuStock][PaperTrade] 交易日历刷新异常（沿用缓存/兜底表）: {e}")
 
     try:
+        await refresh_intraday()
+    except Exception as e:
+        logger.warning(f"[SayuStock][PaperTrade] 分时自证异常（沿用缓存）: {e}")
+
+    try:
         from .holiday_heal import heal_holiday_trades
 
-        await heal_holiday_trades()
+        summary = await heal_holiday_trades()
+        logger.info(
+            "[SayuStock][PaperTrade] 启动自愈结束："
+            f"删除流水 {summary['deleted_trades']} 笔 / 决策 {summary['deleted_decisions']} 条，"
+            f"跳过原因={summary['skipped'] or '无'}"
+        )
     except Exception as e:
         logger.exception(f"[SayuStock][PaperTrade] 假期成交自愈异常，账本保持原样: {e}")
 

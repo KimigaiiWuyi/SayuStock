@@ -79,13 +79,58 @@ async def send_heal_holiday(bot: Bot, ev: Event) -> list[str] | None:
 
     tag = "预演" if summary["dry_run"] else "已执行"
     lines = [f"🧹 **模拟盘 · 假期成交还原（{tag}）**", f"休市表来源：{summary['source']}"]
+    # 诊断三件套：休市表拿到没有 / 扫了多少笔 / 时间跨度到哪天。
+    # 有了这三行，"没扫到数据"和"扫到了但没匹配"一眼可分。
+    lines.append(f"扫描流水 {summary['scanned_trades']} 笔，时间跨度 {summary['traded_span'] or '(无)'}")
 
     if summary["skipped"]:
         lines.append(f"⚠️ 未执行：{summary['skipped']}")
         return await bot.send("\n".join(lines))
 
+    if summary["unparsed_trades"]:
+        lines.append(f"⚠️ {summary['unparsed_trades']} 笔流水时间戳无法解析，回放不完整，本次不动账。")
+        return await bot.send("\n".join(lines))
+
+    # 持仓对账与脏成交是两件事，各自独立汇报。
+    # 「卖出播报了、钱少了、库里没流水」是持仓被别处删掉——没有脏流水也照样要修。
+    pos = summary["positions"]
+    if pos:
+        made = sum(1 for p in pos if p["created"])
+        changed = sum(1 for p in pos if not p["created"] and not p["removed"])
+        gone = sum(1 for p in pos if p["removed"])
+        cost_only = sum(1 for p in pos if p["cost_only"])
+        verb = "将修复" if summary["dry_run"] else "已修复"
+        tail = f" / 仅成本口径 {cost_only}" if cost_only else ""
+        lines.append(f"{verb}持仓 {len(pos)} 处与流水不一致（新建 {made} / 改 {changed} / 删 {gone}{tail}）：")
+        for p in pos:
+            name = p["stock_name"] or p["stock_code"]
+            if p["cost_only"]:
+                lines.append(
+                    f"  · 盘#{p['account_id']} {name}({p['stock_code']}) 仅成本价口径不同"
+                    f"（{p['old_avg_cost']:.3f} / {p['new_avg_cost']:.3f}），不动"
+                )
+            elif p["created"]:
+                lines.append(
+                    f"  · 盘#{p['account_id']} {name}({p['stock_code']}) "
+                    f"补建持仓 {p['new_qty']}股@{p['new_avg_cost']:.3f}"
+                )
+            elif p["removed"]:
+                lines.append(
+                    f"  · 盘#{p['account_id']} {name}({p['stock_code']}) {p['old_qty']} 股 → 0（幽灵仓，删除）"
+                )
+            else:
+                lines.append(
+                    f"  · 盘#{p['account_id']} {name}({p['stock_code']}) "
+                    f"{p['old_qty']}股@{p['old_avg_cost']:.3f} → {p['new_qty']}股@{p['new_avg_cost']:.3f}"
+                )
+    else:
+        lines.append("✅ 持仓与流水自洽，无需修复。")
+
     if not summary["dirty_days"]:
         lines.append("✅ 没有落在非交易日的成交，账本无需还原。")
+        if summary["dry_run"] and pos:
+            lines.append("")
+            lines.append("以上为预演，账本未改动。确认无误后发「模拟盘假期还原 执行」。")
         return await bot.send("\n".join(lines))
 
     days = summary["dirty_days"]
@@ -98,17 +143,6 @@ async def send_heal_holiday(bot: Bot, ev: Event) -> list[str] | None:
             f"现金 {fix['old_cash']:,.2f} → {fix['new_cash']:,.2f}；"
             f"本金 {fix['old_principal']:,.2f} → {fix['new_principal']:,.2f}"
         )
-
-    for p in summary["positions"]:
-        if p["removed"]:
-            lines.append(
-                f"  · 盘#{p['account_id']} {p['stock_name']}({p['stock_code']}) {p['old_qty']} 股 → 0（删除持仓行）"
-            )
-        else:
-            lines.append(
-                f"  · 盘#{p['account_id']} {p['stock_name']}({p['stock_code']}) "
-                f"{p['old_qty']}股@{p['old_avg_cost']:.3f} → {p['new_qty']}股@{p['new_avg_cost']:.3f}"
-            )
 
     if summary["deleted_decisions"]:
         lines.append(f"清理 buy/sell 决策日志 {summary['deleted_decisions']} 条（hold 保留）")
@@ -125,6 +159,15 @@ async def send_heal_holiday(bot: Bot, ev: Event) -> list[str] | None:
         lines.append("")
         lines.append("以上为预演，账本未改动。确认无误后发「模拟盘假期还原 执行」。")
     return await bot.send("\n".join(lines))
+
+
+@sv_papertrade_admin.on_fullmatch(("模拟盘假期诊断",))
+@sv_papertrade_admin.on_prefix(("模拟盘假期诊断",))
+async def send_holiday_diagnose(bot: Bot, ev: Event) -> list[str] | None:
+    """只读取证：自愈为什么没清掉。**不改任何数据。**"""
+    from .holiday_heal import diagnose_holiday_heal
+
+    return await bot.send(await diagnose_holiday_heal())
 
 
 # 压测专用盘：**绝不能**复用用户的真盘。压测会真买真卖、末尾还会 reset_account 把

@@ -214,12 +214,32 @@ class PaperTradeExecutor(TradeExecutor):
         mode: str = "balanced",
     ) -> RecordResult:
         # ── 实时价偏差校验：拦截"按候选池入池旧价成交"的失真流水 ──
+        #
+        # 这里是**兜底**，主闸在 ``match()``（拿不到实时价直接拒单）。但 LLM 可以
+        # 不调 match_order 直接调 trade_insert，所以这一层必须自己站得住。
+        #
+        # 关键在"拿不到价"时怎么办：早先实现是 `_live = None` → 整段 if 跳过 →
+        # 任意价格都能落库。东财限流（-400016）时恰好就是这个分支，等于风控
+        # 期间完全失去校验。因此拿不到价必须**拒绝**，而不是放行。
         try:
             _secid = f"1.{stock_code}" if stock_code.startswith("6") else f"0.{stock_code}"
             _live: Optional[float] = await quote_service.get_quote(_secid)
         except Exception:
             _live = None
-        if _live is not None and _live > 0 and price > 0:
+        # 早退必须写成"就地 return"，不能把判断结果先存进 flag 再在下一段用：
+        # 那样 `_live` 在后面的算术里就丢了 None 收窄（basedpyright 会报
+        # "Operator - not supported for float and None"）。
+        if _live is None or _live <= 0:
+            return RecordResult(
+                ok=False,
+                message=(
+                    f"⚠️ trade_insert 拒绝：{stock_code} 实时行情不可达（东财接口限流或网络异常），"
+                    f"无法校验传入 price={price:.2f} 的真实性。"
+                    f"为避免写入无法验证的成交价，本次不入库；"
+                    f"请等行情接口恢复后重新调 papertrade_match_order 取得实时成交价再下单。"
+                ),
+            )
+        if price > 0:
             _dev_pct: float = abs(price - _live) / _live * 100.0
             if _dev_pct > 3.0:
                 return RecordResult(

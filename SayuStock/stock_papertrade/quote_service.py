@@ -23,6 +23,11 @@ API：
   - 老库 ``last_quote_price`` 列尚未迁移完（重启前）→ 该方法仍能跑，但写回 DB
     的 ``bulk_set_quote`` 会因列不存在抛 OperationalError；调用方需要 try/except 兜。
 
+TTL 分两种（见 :data:`QUOTE_FAIL_TTL`）：成功条目 60s，失败条目 5s。
+失败也要缓存——否则东财限流期间每秒重试会把它继续逼进 ``-400016``——但沿用
+60s 会让一次限流把该票整整一分钟锁死，即便东财早已恢复也照样返回 None。
+撮合层把 ``None`` 当作"行情不可达"直接拒单，所以这个 TTL 直接决定拒单持续多久。
+
 并发：
   - ``_lock`` 保护同一 ``(secid, ts_window)`` 内并发触发的重复 API。一次会话内
     同一秒里 N 个并发 ``get_quote(secid)`` 只发一次 HTTP。
@@ -43,8 +48,12 @@ from gsuid_core.logger import logger
 # ============================================================
 # 常量
 # ============================================================
-QUOTE_CACHE_TTL: float = 60.0  # 内存缓存秒数；超过即穿透去拉
+QUOTE_CACHE_TTL: float = 60.0  # 成功取价的内存缓存秒数；超过即穿透去拉
 QUOTE_TIMEOUT_S: float = 8.0  # 单只 HTTP 超时
+# 失败缓存 TTL 必须**远小于**成功 TTL。失败也要缓存（否则限流期间每秒重试
+# 会把东财继续逼进 -400016），但锁 60s 太长：一次限流会让该票整整一分钟
+# 拿不到价，即便东财早已恢复也照样拒单。5s 足够挡住抖动，又不至于拖死整轮决策。
+QUOTE_FAIL_TTL: float = 5.0
 
 
 # ============================================================
@@ -60,6 +69,15 @@ class QuoteCacheEntry:
     name: Optional[str] = None  # 仅诊断用，不暴露给业务
     last_close: Optional[float] = None  # f60 昨收价
     change_pct: Optional[float] = None  # f45 涨跌幅（%，如 9.99）
+
+    @property
+    def ttl(self) -> float:
+        """本条目该活多久。失败条目用短 TTL，不让它拖住恢复后的取价。"""
+        return QUOTE_FAIL_TTL if self.price is None else QUOTE_CACHE_TTL
+
+    def is_fresh(self, now: Optional[float] = None) -> bool:
+        ts = time.time() if now is None else now
+        return (ts - self.fetched_at) < self.ttl
 
 
 # ============================================================
@@ -108,7 +126,7 @@ class QuoteService:
             return None
         now = time.time()
         cached = self._cache.get(secid)
-        if cached is not None and (now - cached.fetched_at) < QUOTE_CACHE_TTL:
+        if cached is not None and cached.is_fresh(now):
             self._hits += 1
             return cached.price
 
@@ -116,7 +134,7 @@ class QuoteService:
         async with lock:
             # 双重检查：拿锁期间其它协程可能已经拉过
             cached = self._cache.get(secid)
-            if cached is not None and (time.time() - cached.fetched_at) < QUOTE_CACHE_TTL:
+            if cached is not None and cached.is_fresh():
                 self._hits += 1
                 return cached.price
 
@@ -150,7 +168,7 @@ class QuoteService:
             return None
         now = time.time()
         cached = self._cache.get(secid)
-        if cached is not None and (now - cached.fetched_at) < QUOTE_CACHE_TTL:
+        if cached is not None and cached.is_fresh(now):
             return cached
         # 穿透一次 get_quote 让它把整条 cache entry 写齐
         await self.get_quote(secid)
@@ -179,7 +197,7 @@ class QuoteService:
         misses: List[str] = []
         for secid in unique_secids:
             entry = self._cache.get(secid)
-            if entry is not None and (now - entry.fetched_at) < QUOTE_CACHE_TTL:
+            if entry is not None and entry.is_fresh(now):
                 result[secid] = entry.price
                 self._hits += 1
             else:
