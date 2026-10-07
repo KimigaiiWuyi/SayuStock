@@ -193,6 +193,7 @@ if not isinstance(raw_data, KlineSeries):
 | 脚本 E402 | pre-commit / lint 红 | 路径补丁后的 import 加 `# noqa: E402` |
 | 对比图默认窗口 | 用户觉得「只有一个月」 | 对比默认 `KlinePeriod.D1_YEAR`（365 天），勿改回 `D1_RECENT`（50 天） |
 | 场外基金当 K 线 | `个股 日k 720001` 只有一根柱 | 东财 `150.*` 无真 K 线；走天天基金净值，命令层改 `compare-stock` |
+| 拿精确色扫出货图 | 「柱色全丢了」——`(187,26,26)` 在成品图上 0 像素 | 渲染收尾 `convert_img` 统一转 **JPEG**，有损量化改色。像素级验收在 `convert_img` **之前**接画布，或按容差匹配 |
 
 ## 9.17 改完自查清单
 
