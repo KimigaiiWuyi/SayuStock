@@ -350,8 +350,16 @@ class EastMoneyMarketData:
     async def market_turnover(self) -> MarketTurnover | MarketError:
         from ....stock.request import get_hours_from_em
 
-        prev_amount, amount, ltd = await get_hours_from_em()
-        return MarketTurnover(prev_amount=prev_amount, amount=amount, last_trade_date=ltd)
+        # get_hours_from_em 的返回是 (今日成交额, 今日-昨日, 日期)，不是 (昨, 今, 日期)：
+        # calculate_difference 回的是 (all_today_data, today - yesterday, actual_date)。
+        # 名字像「昨日」的 ya 其实是**今日成交额**，昨日要用 今日-差值 反解。
+        today_amount, diff, ltd = await get_hours_from_em()
+        # trends2 失败时它只 warning 再 continue，两个市场都挂就回 (0, 0, None)。
+        # 不能把这种「拉取失败」当成「成交额 0 亿」上报：那样请求链不会顺延，
+        # 大盘概览会在东财限流期间静默显示 0 亿（实测 -400016 时就是这个表现）。
+        if today_amount <= 0:
+            return network_error("两市成交额拉取失败（trends2 无有效数据）", provider=PROVIDER)
+        return MarketTurnover(prev_amount=today_amount - diff, amount=today_amount, last_trade_date=ltd)
 
     async def northbound(self) -> NorthboundFlow | MarketError:
         url = "https://push2.eastmoney.com/api/qt/kamt/get"
