@@ -561,7 +561,7 @@ def _chain(self, group: str | None = None) -> list[tuple[str, MarketDataPort]]: 
 | `breadth` | ok* | ok | ok | ok | ok | ok* | ok* | ok |
 | `market_turnover` | ok* | ok | ok | ok | ok | ok* | ok | ok |
 | `northbound` | ⛔ 单源 | ⛔ 单源 | ⛔ 单源 | ⛔ 单源 | ⛔ 单源 | ⛔ 单源 | ⛔ 单源 | ⛔ 单源 |
-| `valuation_series` | ok* | eastmoney | eastmoney | eastmoney | eastmoney | ok* | eastmoney | eastmoney |
+| `valuation_series` | ok* | eastmoney | eastmoney | eastmoney | eastmoney | eastmoney | eastmoney | eastmoney |
 | `financial_snapshot` | ok | ok | ok | ok | ok | ok | ok | ok |
 
 读表要点：
@@ -575,6 +575,12 @@ def _chain(self, group: str | None = None) -> list[tuple[str, MarketDataPort]]: 
   这恰好演示了「东财抽风时板块/排行仍有数据」。
 - `ok*` = 当日首跑该格曾出现瞬时错误（东财限流高峰），45s 间隔复跑后全部 ok；
   属环境瞬态、与配置无关，判读依据见 §12。
+- 表中 provider 为实测值；另有几格在**两轮实测之间互换**过瞬时状态而不影响结论：
+  `valuation_series` 在 `real` 档（首跑 `not_found` → 复跑 ok）与 `bad` 档（首跑 eastmoney
+  → 复跑 `not_found`）各出现一次瞬态。该接口先跑 `resolve`（东财代码表、真发网络请求），
+  抖动时返回 None 即判 `not_found` 并**短路整链**（既有设计，见 §12.4 末条）。两档的有效链
+  完全一致（`bad` 的乱写项被忽略后回落默认链），且该接口直连 eastmoney adapter 实测 OK
+  （§12.2）→ 属环境瞬态，不是配置问题。
 - `⛔ 单源 = intraday(5d) / northbound`：只有东财实现，其余三源明确 `unsupported`（§12 有逐源实测），
   因此**任何配置**下都只能落到东财；当时东财侧不可用（trends2 被限流 / 北向上游停发），
   不是配置缺陷。八档失败集合完全一致，这本身就是「链已经把能试的源都试过了」的证据。
