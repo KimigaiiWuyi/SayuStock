@@ -62,16 +62,16 @@
 | 5 | `kline` | ✅ | ⚠️ | ⚠️ | ⚠️ | 周期/复权差异极大，见 §5 |
 | 6 | `board` | ✅ | ❌ | ⚠️ | ❌ | 新浪无概念板块 |
 | 7 | `rank_list` | ✅ | ❌ | ⚠️ | ❌ | 新浪仅 3/7 维度 |
-| 8 | `hotmap` | ✅ | ❌ | ❌ | ❌ | **东财独占** |
-| 9 | `sector_menu` | ✅ | ❌ | ⚠️ | ❌ | 新浪仅 industry |
-| 10 | `breadth` | ✅ | ❌ | ❌ | ❌ | **东财独占** |
-| 11 | `market_turnover` | ✅ | ❌ | ❌ | ❌ | **东财独占** |
-| 12 | `northbound` | ✅ | ❌ | ❌ | ❌ | **东财独占** |
+| 8 | `hotmap` | ✅ | ❌ | ❌ | ❌ | **东财独占**（见 §9.1 为何不补） |
+| 9 | `sector_menu` | ✅ | ❌ | ✅ | ❌ | 新浪 industry + concept（已补） |
+| 10 | `breadth` | ✅ | ❌ | ✅ | ❌ | 新浪已补（全 A 5571 只，约 70 页） |
+| 11 | `market_turnover` | ✅ | ❌ | ✅ | ❌ | 新浪已补（上证+深证 1 次请求） |
+| 12 | `northbound` | ✅ | ❌ | ❌ | ❌ | **东财独占**（无独立源） |
 | 13 | `valuation_series` | ✅ | ❌ | ❌ | ❌ | **东财独占** |
 | 14 | `financial_snapshot` | ✅ | ❌ | ❌ | ❌ | **东财独占** |
-| | **覆盖数** | **14/14** | **5/14** | **8/14** | **4/14** | |
+| | **覆盖数** | **14/14** | **5/14** | **10/14** | **4/14** | 新浪本轮 +2 |
 
-> ⚠️ 注意最后一行：**14 个接口里有 6 个（`hotmap`/`breadth`/`market_turnover`/`northbound`/`valuation_series`/`financial_snapshot`）是东财独占、零兜底**。东财挂掉或被设为 0，这 6 个直接报错，不会「换个源接着出图」。
+> ⚠️ 注意最后一行：**14 个接口里仍有 4 个（`hotmap`/`northbound`/`valuation_series`/`financial_snapshot`）是东财独占、零兜底**。东财挂掉或被设为 0，这 4 个直接报错，不会「换个源接着出图」。
 
 ---
 
@@ -293,3 +293,346 @@ market_api_overrides = "kline:新浪→东财;intraday:东财→腾讯;northboun
 `parse_priority_chain` 已在 `provider_registry.py` 里（当前被 `_LEGACY_PRIORITY_CONFIG_KEY` 迁移路径引用，而该路径的旧键 `market_api_priority` 从未进过 `config_default.py`、实际不可达）—— 正好可以把这套解析器从「永不执行的迁移遗留」复用成「单接口覆盖的解析入口」。
 
 另一个更符合用户心智的方案是按**能力组**给 2–3 个覆盖点（行情类 / 板块类 / 财务类），配置项更少，也更容易想明白「我要锁的是哪一块」。
+
+---
+
+## 8. 线上接口核查（2026-10-08 实测）
+
+> 本节为针对 §3 矩阵的**外部核查**：哪些「东财独占」其实有等价源、哪些确实补不上。所有结论都带实测或可溯源证据，不靠文档描述推断。
+
+### 8.1 意外发现：腾讯盘口列索引 —— **PR 是对的，网上流传的那篇博客是错的**
+
+各源对 `qt.gtimg.cn` 的 `~` 分隔字段表说法冲突。实测裁决（`sh600000`，2026-10-08，共 88 字段）：
+
+| 下标 | 实测值 | 正确含义 |
+|---|---|---|
+| 38 | 0.44 | 换手率 % |
+| 39 | 6.16 | 市盈率 TTM |
+| 40 | *(空)* | — |
+| 41 | 9.49 | 最高（冗余，同 33） |
+| 42 | 9.16 | 最低（冗余，同 34） |
+| 43 | 3.59 | 振幅 % |
+| 44 | 3157.39 | 流通市值（亿） |
+| 45 | 3157.39 | 总市值（亿） |
+| 46 | 0.42 | **市净率 PB** |
+| 47 | 10.10 | **涨停价** |
+| 48 | 8.26 | **跌停价** |
+
+数值交叉校验（三条独立约束全部闭合）：
+
+- 昨收 `9.18 × 1.1 = 10.098` → **[47] = 10.10** ✅
+- 昨收 `9.18 × 0.9 = 8.262` → **[48] = 8.26** ✅
+- 振幅 `(9.49 − 9.16) / 9.18 = 3.59%` → **[43] = 3.59** ✅
+- 浦发银行为破净银行股 → **PB ≈ 0.42** 合理 ✅
+
+**结论**：`tencent/parse.py::parse_qt_line` 使用的 `44/45/46/47/48` **完全正确**。
+
+需要注意的是，网上一篇标称「结合 2026-06-10 实测数据」的博客（cnblogs.com/soarowl）把 47/48/49 标成「量比 / 市净率 / 每股净资产」，**该文表格标错了** —— 它贴出的原始字符串实际是 `46=0.42, 47=10.31, 48=8.43`，与经典表一致，是它自己的对照表错了位。
+
+> 这条要记下来：腾讯字段表在网上至少有三套互相矛盾的版本（经典表 / 该博客 / 另一套把 43 当 PB 的）。**唯一可靠的判据是拉真实数据 + 用昨收算涨跌停、用最高最低算振幅做数值校验**，不能信任何一篇文章的表格。
+
+### 8.2 新浪概念/申万行业板块 —— **实测可用，PR 判「不支持」是漏了**
+
+PR 的 `SinaMarketData.board` 只认 `行业板块 / 行业 / industry` 和 `hs_a / hs_s` 节点，对概念板块走 `else: unsupported`。但新浪**有**独立的概念与行业板块汇总端点，实测（2026-10-08）：
+
+```python
+# 概念板块 —— 22602 字节，正常返回
+http://money.finance.sina.com.cn/q/view/newFLJK.php?param=class
+var S_Finance_bankuai_class = {"gn_hwqc":"gn_hwqc,华为汽车,97,23.956875,
+  -0.28739583333333,-1.1854175170251,2069201242,31890354954,
+  sz002454,10.000,5.610,0.510,松芝股份", ...}
+
+# 申万行业 —— 11253 字节，正常返回
+http://money.finance.sina.com.cn/q/view/newFLJK.php?param=industry
+var S_Finance_bankuai_industry = {"hangye_ZA01":"hangye_ZA01,农业,16,9.828125,
+  0.34875,3.6790400210984,772991490,5723859279,sh601118,10.017,6.370,0.580,海南橡胶", ...}
+
+# 地域板块
+http://money.finance.sina.com.cn/q/view/newFLJK.php?param=area
+```
+
+行内字段：**代码, 名称, 家数, 均价, 涨跌额, 涨跌幅, 总成交量(手), 总成交额(元), 领涨股代码, 领涨股涨跌幅, 领涨股现价, 领涨股涨跌额, 领涨股名称**。
+
+注意行业代码是**申万三级**（`hangye_ZA01` / `hangye_ZL01` …），与插件现有 `newSinaHy` 的行业口径不同，换源时要注意板块 ID 映射。
+
+配套还有新浪已有的 `Market_Center.getHQNodeData`（分页取成分股，PR 已在用）→ 概念板块**成分股**也能补齐。
+
+新浪还有资金流排行（可补 `rank_list` 的资金流维度）：
+
+```
+# 行业级资金流排行
+vip.stock.finance.sina.com.cn/quotes_service/api/json_v2.php/MoneyFlow.ssl_bkzj_bk
+    ?page=1&num=20&sort=&asc=0&fenlei={0|1|2}      # 0=申万 1=概念 2=证监会
+# 个股级资金流排行
+.../json_v2.php/MoneyFlow.ssl_bkzj_ssggzj
+```
+
+### 8.3 同花顺扶摇 —— **主力资金明确未开放**
+
+扶摇官方文档（fuyao.aicubes.cn/docs/api-reference/capital-flow）原文：
+
+> 该能力**暂未开放外部接入**，相关数据能力已经接入同花顺AI客户端。
+
+这印证了 PR 文档「分时/分钟 K 的高频动向接口未开放外部接入」的判断。**同花顺短期内补不出资金流/分时。**
+
+可用的只有 `/api/a-share/prices/snapshot` 和 `/api/a-share/prices/historical`（即 PR 已实现的部分）。
+
+### 8.4 北向资金 —— **没有独立源**
+
+扫描下来，akshare 的 `stock_hsgt_flow_em` / `stock_hsgt_hist_em` / `stock_hsgt_hold_stock_em` 底层**全部是东财封装**。多个技术栈文档都明确标注这一点。
+
+叠加 2024 年 8 月起交易所已取消北向资金实时披露、只保留收盘后总额的大环境，`northbound` 属于**真·无兜底**。
+
+### 8.5 业界佐证：breadth / turnover 是可冗余的
+
+某生产级行情服务（finscope）的数据源路由表（实操验证结论）：
+
+| 数据 | 其路由 |
+|---|---|
+| A 股市场宽度（涨/跌/平家数、涨跌停家数、成交额） | 东方财富全 A → **新浪全 A** → 同业务日快照 |
+| 实时行情 | 腾讯 → 新浪 → 东财 |
+| 历史日 K（前复权） | 扶摇同花顺 API |
+| 资金流（分钟/日级主力） | AkShare(日级) → 东财(分钟+日级) |
+| 个股资料 | AkShare → 东财 |
+
+**与本插件的判断一致**：盘口/K线/宽度可以多源冗余，**资金流/估值/财务是真·东财域**。
+
+---
+
+## 9. 可补充清单
+
+按「补的性价比」排序。
+
+| 接口 | 现状 | 能否补 | 怎么补 | 成本 |
+|---|:--:|:--:|---|:--:|
+| `sector_menu` (concept) | 新浪拒 | ✅ **能** | `newFLJK.php?param=class` | 极低 |
+| `board` 概念板块 | 东财独占 | ✅ **能** | `param=class` 拿板块汇总 + `getHQNodeData` 拿成分 | 低 |
+| `board` 申万三级 | 新浪仅 `newSinaHy` | ⚠️ 部分 | `param=industry` 口径更标准，但板块 ID 与现有不同，需映射 | 中 |
+| `rank_list` 资金流维度 | 新浪仅 3/7 | ✅ **能** | `MoneyFlow.ssl_bkzj_ssggzj` / `_bk` | 中 |
+| `breadth` 涨跌家数 | 东财独占 | ✅ **能** | `getHQNodeData` 全 A 分页 → 自行统计涨跌平 | 中 |
+| `market_turnover` 成交额 | 东财独占 | ✅ **能** | 同上，成交额求和 | 中 |
+| `hotmap` 云图 | 东财独占 | ⚠️ 部分 | 概念+行业板块汇总能拼出雏形，但缺东财的热力分档口径 | 中高 |
+| `rank_list` ROE / 净利同比 | 东财独占 | ❌ 难 | 新浪无财务排行；需自建 F10 拉取+计算 | 高 |
+| `valuation_series` | 东财独占 | ❌ 难 | 需逐日 PE/PB 历史序列，腾讯/新浪盘口只有**当前值** | 高 |
+| `financial_snapshot` | 东财独占 | ❌ 难 | 腾讯 F10 / akshare 有原始财报，但字段口径与东财 `eastmoney_finance` 差异大，对齐成本高 | 高 |
+| `northbound` | 东财独占 | ❌ **不能** | 无独立源，交易所已取消实时披露 | — |
+
+**如果只做一件事**：补 `breadth` + `market_turnover` 的新浪兜底。这两个是大盘概览的高频入口，也是「东财挂了首页就空白」的直接原因，而新浪全 A 数据拿得到、成本可控。
+
+**不建议碰的**：`valuation_series` / `financial_snapshot` —— 口径对齐的风险大于收益，不如保留东财独占并在文档里写清楚。
+
+---
+
+## 10. 按接口区分优先级的配置项设计
+
+### 10.1 核心判断：不要按 14 个接口逐个配
+
+14 接口 × 4 源 = **56 个输入框**，网页控制台没法用，且用户根本记不住「哪个是 `market_turnover`」。
+
+真正需要区分的是**语义**不同源的地方，而不是接口名。按覆盖矩阵，14 个接口天然分成 **4 个域**：
+
+| 域 | 覆盖接口 | 分开的理由 |
+|---|---|---|
+| **A. 盘口/分时** | `quote` `quotes` `intraday` | 高频低延迟，腾讯/新浪最快；但新浪 `ndays>1` 被拒，五日分时仍须东财 |
+| **B. K 线** | `kline` | **复权口径敏感** —— 新浪不复权，排到前面会静默毁掉历史指标 |
+| **C. 板块/排行/云图** | `board` `rank_list` `hotmap` `sector_menu` | 新浪有概念/行业能力但排行只有 3 个维度；腾讯同花顺全无 |
+| **D. 市场/资金/财务** | `breadth` `market_turnover` `northbound` `valuation_series` `financial_snapshot` | 真·东财域；补源后 breadth/turnover 可开，其余锁死 |
+
+`resolve` 不需要配 —— 解析层四源共用，恒走链头。
+
+### 10.2 配置形态：链串，不是数字
+
+```python
+"market_api_chain": GsStrConfig(
+    "默认行情源链",
+    "所有未单独指定的接口按此顺序尝试，顺序即优先级。留空的源视为禁用；支持 东财/东方财富/新浪/腾讯/同花顺 及英文 id。",
+    "东财→腾讯→新浪→同花顺",
+),
+"market_api_chain_quote": GsStrConfig(
+    "A. 盘口/分时链", "只作用于盘口与分时。留空 = 用默认链。建议：新浪→东财→腾讯（同花顺无分时）。", ""
+),
+"market_api_chain_kline": GsStrConfig(
+    "B. K线链", "只作用于 K 线。留空 = 用默认链。建议只放前复权源（腾讯/同花顺），新浪为不复权。", ""
+),
+"market_api_chain_board": GsStrConfig(
+    "C. 板块/排行/云图链", "只作用于板块、排行、云图、板块菜单。留空 = 用默认链。", ""
+),
+"market_api_chain_market": GsStrConfig(
+    "D. 市场/资金/财务链", "只作用于涨跌家数、成交额、北向、估值、财报。留空 = 用默认链。建议锁东财。", ""
+),
+```
+
+**5 个配置项**覆盖全部 14 个接口。
+
+### 10.3 为什么用链串而不是继续用 int
+
+| | 现在的 int（40/30/20/10） | 建议的链串 |
+|---|---|---|
+| 用户心智 | 要理解「数字×10 + 内禀序号」的平局裁决 | 「东财→腾讯」，顺序即优先级 |
+| 0 的语义 | 特殊值 0 = 禁用 | **不写这个源** = 禁用，天然 |
+| 加减源 | 要改数字，还要猜会不会触发平局 | 增删一个名字 |
+| 解析代码 | `build_priority_chain` + `_PROVIDER_RANKS` | **复用 `_CHAIN_SPLIT` + `parse_priority_chain`（已存在）** |
+| 平局歧义 | 内禀序号是实现细节泄漏到配置 | 不存在 |
+
+### 10.4 语义规则（必须写死在配置描述里）
+
+1. **空值 = 用默认链** → 默认链填 `东财→腾讯→新浪→同花顺`，与当前 `40/30/20/10` 完全等价，**零行为变化，向后兼容**
+2. 链串里**没有的源 = 禁用**（不是排最后）
+3. **全局链也为空** → 保底东财（保留现有「全部禁用防整体瘫痪」行为）
+4. 别名复用 `_PROVIDER_ALIASES`：`东财`/`东方财富`/`eastmoney` 等价
+5. 分隔符沿用 `_CHAIN_SPLIT`：`→` `>` `，` `,` 及空白
+
+### 10.5 迁移
+
+现有 4 个 int 按 `_DEFAULT_PRIORITY_NUMBERS`（40/30/20/10）**反解成链串**：
+
+```python
+# 幂等：仅当四个新链串键全为空时才写
+# 数字 → 顺序：按数字降序排，0 视为禁用不入链
+```
+
+这正好**复用并激活 `migrate_legacy_priority_config` 的骨架** —— 目前那个旧键 `market_api_priority` 从未进过 `config_default.py`、永远不可达（见 §7），改成迁移到新链串键后，那段代码和 `legacy_chain_to_numbers` / `parse_priority_chain` 就都活过来了。
+
+### 10.6 实现改动量
+
+管道已经铺好 90%（§7）：`_dispatch(iface, ...)` 的第一个参数就是接口名，12 个调用点全传了，只是 `_chain()` 没用它。
+
+```python
+# provider_registry.py
+_IFACE_GROUPS: dict[str, str] = {          # 14 个接口 → 4 个域
+    "quote": "quote", "quotes": "quote", "intraday": "quote",
+    "kline": "kline",
+    "board": "board", "rank_list": "board", "hotmap": "board", "sector_menu": "board",
+    "breadth": "market", "market_turnover": "market", "northbound": "market",
+    "valuation_series": "market", "financial_snapshot": "market",
+}
+
+def _chain(self, iface: str) -> list[tuple[str, MarketDataPort]]:
+    group = _IFACE_GROUPS.get(iface)
+    raw = self._reader(f"market_api_chain_{group}", "") if group else ""
+    pids = parse_priority_chain(raw) or parse_priority_chain(
+        self._reader("market_api_chain", DEFAULT_CHAIN)
+    ) or [FALLBACK_PROVIDER_ID]
+    ...
+```
+
+业务层和 adapter **一行都不用改**，只有 `config_default.py` 换掉 4 个 int 为 5 个 str。
+
+---
+
+## 11. 本轮落地结果（分支 `feat/sina-coverage`）
+
+基线：`main`（3b41f2c）+ 合入 PR #19（c6e0c90）。改动集中在 `adapters/sina/`、`models/stats.py`、以及下文 §11.4 的四条消费方链路；新增 `test/market/test_sina_coverage.py`、`test/market/test_eastmoney_breadth.py`。
+
+### 11.1 已补齐的接口（4 个，全部实网验证通过）
+
+| 接口 | 实现 | 实测结果（2026-10-08） |
+|---|---|---|
+| `sector_menu("concept")` | `newFLJK.php?param=class` | **175 个概念板块**，样例 华为汽车/BC电池/华为海思 |
+| `board("概念板块")` | 同上，`BoardKind.CONCEPT` | **175 行**，CXO概念 +4.65%、创新药 +3.62%（领涨康希诺 +20.005%） |
+| `board(sector="gn_xxx")` | `getHQNodeData?node=gn_xxx` | 成分可取，华为汽车 → 松芝股份/东风科技/江淮汽车 |
+| `rank_list(MAIN_INFLOW)` | `MoneyFlow.ssl_bkzj_ssggzj` | 净额降序，江淮汽车 +5.492% 净流入 11.96 亿 |
+| `rank_list(MAIN_OUTFLOW)` | 同上，升序 | 净额升序，N力勤 +206.594% 净流出 21.31 亿 |
+| `market_turnover` | 上证+深证指数盘口，**1 次请求** | **14379.89 亿**，交易日 2026-09-30 16:19 |
+| `breadth` | 全 A 分页并发（`_BREADTH_CONCURRENCY=6`） | **6.4s**，涨停63 涨2503 平181 跌2803 跌停21 |
+
+**关键校验**：`breadth` 五项合计 = **5571**，与 `Market_Center.getHQNodeStockCount?node=hs_a` 返回的 `"5571"` **精确一致** → 70 页翻页无遗漏、无重复。
+
+`market_turnover` 的 14379.89 亿 = 手工探测的沪 6793.99 亿 + 深 7585.90 亿，两条独立路径吻合。
+
+### 11.2 两个必须知道的模型适配
+
+1. **`MarketTurnover.prev_amount: float` → `float | None`**
+   新浪指数盘口只有当日成交额；指数日 K 也**不含 amount 字段**（只有成交量），实测确认。
+   原字段全仓库**零消费方**（只有东财产出），放宽无兼容风险。
+   渲染层如需「较昨缩量」判断，**必须判空**，不能拿 `None` 参与算术。
+
+2. **资金流排行 `changeratio` 是小数比例，必须 ×100**
+   该接口返回 `-0.0000852594` 表示 **-0.0085%**，与行情中心 `changepercent` 的百分数口径不同。
+   `parse_money_flow_rank` 已统一 ×100 对齐内部模型。实测校准：江淮 +5.492%、兆易 -3.719%、N力勤 +206.594%。
+
+### 11.3 `hotmap` 为什么没补（不是漏了，是补了会坏）
+
+`build_cloudmap_render_data`（`utils/render_data.py:920`）第一行就是：
+
+```python
+if row.market_cap is None or row.change_pct is None or not row.name:
+    continue          # market_cap 为 None 直接丢弃
+```
+
+云图是**个股级 treemap**（`value=market_cap`，`category=row.industry`），不是板块云图。两条路都走不通：
+
+- **用板块汇总替代**：`newFLJK` 板块行只有家数/均价/涨跌幅/成交额/领涨股，**没有 market_cap** → 所有行被上面这行过滤 → 出一张空白图。
+- **用全 A 个股替代**：`getHQNodeData` 有 `mktcap`，但**没有 industry 字段** → `row.industry` 全为 None → `category` 全塌成 `"-"` → treemap 退化成单一大类，等于没有分类。
+
+补 `hotmap` 需要额外拉「股票 → 申万三级行业」映射表来补 industry，工作量与收益不成比例。**建议保持东财独占并在 UI 明确提示**，而不是塞一个语义不符的实现。
+
+### 11.4 ⚠️ 最重要的发现：四处生产代码绕过优先级链（已全部改造）
+
+补适配器只是把能力做进端口。但扫描消费方时发现，**真正在用这些数据的生产代码有四条链路直连东财、完全不经过 `get_market()`**：
+
+| 位置 | 绕过的内容 |
+|---|---|
+| `stock_ai_func/ai_tools.py:87` | `get_bar()` 直连东财取涨跌家数 —— **不改造的话本轮补的 `breadth` 对该工具零效果** |
+| `stock_info/draw_info.py:160,373` | `get_bar()` + `get_hours_from_em()` —— 大盘概览图在东财挂掉时仍出不来 |
+| `stock_papertrade/quote_service.py::_fetch_one` | `EASTMONEY_REQUESTER` 直连 —— 模拟盘撮合价与涨跌停拦截锁死东财 |
+| `stock_analysis/universe.py::fetch_clist` / `resolve_industry_fs` / `resolve_concept_fs` | `EASTMONEY_REQUESTER.stock_request` / `get_menu` —— 选股池数据源仍单一 |
+
+也就是说：**即便四个源全部接通，这四条链路仍然只认东财。** 链式容错只在「已经走 `get_market()` 的」地方生效。
+
+东财限流时四条链路的实测对照（2026-10-08，连续探测触发 `-400016` 期间）：
+
+```
+旧 clist 全A 3页: n=0  err=-400016        ← universe.py 改造前：直接空池
+端口 board(A_SHARE, limit=100): n=100     ← 同一时刻，走链顺延到新浪，有数据
+```
+
+改造后：
+
+| 位置 | 改造后 | 行为差异 |
+|---|---|---|
+| `ai_tools.py:87` | `market.breadth()` + `breadth_counts()` | LLM 看的分档从东财 10 档原始分布 → 统一 13 档语义分桶（`BREADTH_BANDS`） |
+| `draw_info.py:160` | `market.breadth()` | 同上，口径与 AI 工具一致 |
+| `draw_info.py:373` | `market.turnover()` | `prev_amount is None` 时不再谎报放量/缩量（新浪指数盘口没有昨额） |
+| `quote_service._fetch_one` | `get_market().quote(secid)` | 东财限流时按链顺延腾讯/新浪；**拿不到价仍返回全 None**，撮合层据此拒单 |
+| `universe.py::resolve_industry_fs` / `resolve_concept_fs` | `market.sector_menu()` + `match_sector_menu` | 概念菜单 175（新浪）→ 504（东财）；匹配落到申万一级更准（「医药」→ 医药生物 BK1216） |
+| `universe.py::fetch_board_members` | `market.board(code, limit=None)` | 成分股不再被 10 页截断；与 `sector_resolve.fetch_named_board` 同一形状 |
+
+**仍然保留一处东财直连**：`universe.py::fetch_a_share_universe`，理由见 §11.5 —— 那是端口的能力缺口，不是绕过。
+
+改造 `fetch_board_members` 时踩到的两个边界，都实测过：
+
+- **板块代码空间是各源私有的。** 传东财菜单给的 `BK1036` 给新浪 → `unsupported 新浪不支持列表 BK1036`；
+  换成传中文名 `board(sector="半导体")` 也一样（新浪的 `newSinaHy` 只有 49 个一级行业，命名体系不同，`_sector_node` 认不出）。
+  所以**东财限流期间行业/概念选股仍会整体失败**——`fetch_board_members` 走端口拿到的是「单一入口 + 统一形状」，
+  **不是**「东财挂了也能出成分」这个能力。别把这两件事混为一谈。
+- 代码与 `sector_menu` 同源这点仍然有价值：链切到新浪时，菜单就会给出 `gn_xxx` / `hangye_xxx`，成分跟着走新浪，配对不会错位。
+
+### 11.5 `fetch_a_share_universe` 为什么保留直连（能力缺口，不是绕过）
+
+这个函数要的是「沪深A **按总市值降序**的前 ~2000 只」。端口 `board()` 的两条走法都不成立（2026-10-08 实测）：
+
+| 走法 | 实测 | 问题 |
+|---|---|---|
+| `board(BoardKind.A_SHARE, limit=2000)` | **只回 100 行** | clist 的 `pz` 上限就是 100，`limit` 填多大都被静默截断 |
+| `board(BoardKind.A_SHARE, limit=None)` | 1600 行 / **49.4s**（首次未命中缓存） | `is_loop` 全市场翻 50+ 页、每批 `sleep(0.4~0.9)`；限流时中途断流，拿到的还不完整 |
+
+而且 `board()` 走 `get_market_list` 的排序字段固定是 `f3`（涨跌幅），**不是 `f20`（总市值）**——旧路径特意用市值排序，避免选股池「严重偏涨」。机器人命令等不起 49 秒。
+
+结论：这里保留 `fs` 表达式直连，函数 docstring 里写死了原因。**这是 `MarketDataPort` 的能力缺口**——端口目前没有「筛选表达式 + 指定排序字段 + 可控翻页上限」的列表能力；要补得新开一个接口（并给新浪/腾讯实现），超出本 PR 范围。
+
+### 11.6 质量门状态
+
+| 门 | 结果 |
+|---|---|
+| `ruff check SayuStock test` | ✅ All checks passed |
+| `ruff format --check` | ✅ 251 files already formatted |
+| `basedpyright`（adapters / models / stock_analysis / 新测试） | ✅ 改动文件 **0 errors** |
+| 单测（runner 脱离 pytest） | ✅ **37 passed / 0 failed** |
+| 实网回归（重构后重跑） | ✅ 全部接口仍通 |
+
+> ⚠️ **本地 `pytest test` 跑不起来**：本机 `F:\gsuid_core\.venv` 缺 `pandas`，41 个模块 collection error。
+> 已用 `git stash` 验证**改动前同样 41 个 error**，属环境问题而非本次回归。
+> 替代验证：新增的纯函数断言用包壳 + 内存版 `async_file_cache` 脱离 pytest 直接执行，全部通过。
+> `test/test_papertrade_quote_resilience.py` 同样只是因为 `quote_service → utils.market → convert` 需要 pandas
+> 而无法在本机跑（这条 import 链在改造前就存在：旧代码同样 import 了 `utils.market.errors`）。CI 装了 pandas，正常收敛。
