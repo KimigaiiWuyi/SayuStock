@@ -628,7 +628,7 @@ if row.market_cap is None or row.change_pct is None or not row.name:
 | `ruff check SayuStock test` | ✅ All checks passed |
 | `ruff format --check` | ✅ 251 files already formatted |
 | `basedpyright`（adapters / models / stock_analysis / 新测试） | ✅ 改动文件 **0 errors** |
-| 单测（runner 脱离 pytest） | ✅ **37 passed / 0 failed** |
+| 单测（runner 脱离 pytest） | ✅ **42 passed / 0 failed** |
 | 实网回归（重构后重跑） | ✅ 全部接口仍通 |
 
 > ⚠️ **本地 `pytest test` 跑不起来**：本机 `F:\gsuid_core\.venv` 缺 `pandas`，41 个模块 collection error。
@@ -636,3 +636,41 @@ if row.market_cap is None or row.change_pct is None or not row.name:
 > 替代验证：新增的纯函数断言用包壳 + 内存版 `async_file_cache` 脱离 pytest 直接执行，全部通过。
 > `test/test_papertrade_quote_resilience.py` 同样只是因为 `quote_service → utils.market → convert` 需要 pandas
 > 而无法在本机跑（这条 import 链在改造前就存在：旧代码同样 import 了 `utils.market.errors`）。CI 装了 pandas，正常收敛。
+
+### 11.7 命令级覆盖：5 条常用命令各源能不能单独撑起来
+
+**接口覆盖 ≠ 命令可用**：一条命令往往同时要 `board` + `breadth` + `market_turnover` + `intraday`。
+逐源实测（2026-10-08，标的 `1.600519`；东财此时处于 `-400016` 限流）：
+
+| 命令 | 用到的端口调用 | 东财 | 腾讯 | 新浪 | 同花顺 |
+|---|---|:--:|:--:|:--:|:--:|
+| `大盘概览` | `board(主要指数/行业板块/概念板块)` + `quote(118.AU9999)` + `quote(220.TLM)` + `breadth` + `market_turnover` | ⚠️ 限流中部分项失败 | ❌ | ✅ 黄金/三十债两条报价跳过 | ❌ |
+| `我的自选` | `board(主要指数)` + `intraday` × N | ✅ | ❌ 无 board | ✅ | ❌ 无 intraday |
+| `我的个股` | `intraday` × 5 | ✅ | ✅ | ✅ | ❌ |
+| `个股xx` | `intraday` | ✅ | ✅ | ✅ | ❌ |
+| `个股 五日xx` | `intraday(ndays=5)` | ✅ | ❌ | ❌ | ❌ |
+| `个股 日k xx` | `kline(101)` | ✅ | ✅ | ✅ | ✅ |
+
+**只有 `个股 日k xx` 是四源全通。** 几个必须知道的边界：
+
+- **同花顺没有 `intraday`**（4/14 覆盖里就不含），所以 `我的自选`/`我的个股`/`个股xx` 在「只配同花顺」的链里直接不可用。
+- **黄金 `118.AU9999` 与三十债 `220.TLM` 是东财独占报价**，新浪/腾讯/同花顺都 `unsupported`。
+  在 `draw_info` 里这两条是「失败就跳过 + warning」的非致命项，所以东财挂掉时大盘概览仍能出图，只是少这两格。
+- **五日分时只有东财**：`个股 五日贵州茅台` 在新浪/腾讯/同花顺都会落到「当日分时」以外的失败。
+- 链式容错能掩盖一部分（腾讯缺 `board` 会顺延到东财/新浪），但**单源配置必须知道这些边界**。
+
+### 11.8 两个只有「走端口之后」才会暴露的成交额问题（已修）
+
+1. **字段错位。** `get_hours_from_em` 返回的是 `(今日成交额, 今日-昨日, 日期)`
+   ——`calculate_difference` 的第一项是 `all_today_data`。EM adapter 却映射成
+   `prev_amount=今日`、`amount=差值`。这条错位长期没暴露，因为 `draw_info` 改造前
+   直接调底层函数按下标取用（`all_f6, f6diff = ...`），**`market_turnover` 是零消费方的死代码**。
+   走端口后的症状：大盘概览的「成交额」显示成差值，放量/缩量算成「差值 − 今日成交额」。
+2. **失败伪装成功。** trends2 两个市场都挂时 `get_hours_from_em` 只 warning 再 `continue`，
+   返回 `(0, 0, None)`；adapter 原样上报成「成交额 0 亿」这个**成功结果**，于是请求链
+   **不会顺延**。实测 `-400016` 期间大盘概览就是静默显示 0 亿。现在返回 `network` 错误，
+   同一时刻实测顺延到新浪得到 **14380 亿**。
+
+顺带对齐了 `last_trade_date` 的语义：东财「正常交易日回 `None`」，新浪「回数据所属
+交易日（盘中即今天）」。`draw_info` 原来只判 `is not None` ⇒ **新浪供数时盘中会显示休市**。
+改为看「数据是不是今天的」（天数按 `.date()` 相减；带时分相减会把同一天算成 -1 天）。
