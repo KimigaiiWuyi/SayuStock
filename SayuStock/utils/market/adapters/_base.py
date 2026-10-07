@@ -22,6 +22,10 @@ from ..models import (
     FinancialSnapshot,
 )
 
+# 北交所代码前缀：东财 secid 与沪深同为 0.，但行情符号必须走 bj 前缀。
+# 各适配器统一引用本常量，避免再出现 0.920000 → sz920000 这类误映射。
+BJ_CODE_PREFIXES: tuple[str, ...] = ("43", "83", "87", "88", "92")
+
 
 async def resolve_em_symbol(query: str) -> SymbolRef | None:
     """名称/代码 → SymbolRef，各 equity 源共用。

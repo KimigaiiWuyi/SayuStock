@@ -38,6 +38,7 @@ from .parse_quote import parse_quote_payload
 from .parse_value import parse_value_series_payload
 from ....eastmoney import EASTMONEY_REQUESTER
 from ....load_data import get_full_security_code
+from .parse_breadth import parse_breadth_payload
 from .parse_intraday import extract_trends_from_payload, parse_intraday_from_trends_list
 from ....eastmoney_finance import get_financial_snapshot as _fetch_fin_snapshot
 
@@ -76,6 +77,9 @@ def _sec_type_to_asset(sec_type: str, *, secid: str = "") -> AssetClass:
 def _exchange_of(secid: str, sec_type: str) -> str:
     if secid.startswith("1."):
         return "SSE"
+    if "京" in sec_type:
+        # 北交所 secid 前缀与深市同为 0.，须先按 sec_type 判定
+        return "BSE"
     if secid.startswith("0."):
         return "SZSE"
     if "港" in sec_type or secid.startswith("116."):
@@ -341,8 +345,7 @@ class EastMoneyMarketData:
         raw = await get_bar()
         if isinstance(raw, str):
             return network_error(raw, provider=PROVIDER)
-        # 旧 draw 依赖原始结构；语义 buckets 暂空
-        return BreadthBar(buckets=(), raw=raw)
+        return parse_breadth_payload(raw)
 
     async def market_turnover(self) -> MarketTurnover | MarketError:
         from ....stock.request import get_hours_from_em

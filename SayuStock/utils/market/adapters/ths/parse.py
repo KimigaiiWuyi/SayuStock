@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any, Mapping
 from datetime import datetime, timezone, timedelta
 
+from .._base import BJ_CODE_PREFIXES as _BJ_CODE_PREFIXES
 from .client import PROVIDER
 from ...enums import AssetClass
 from ...errors import MarketError, parse_error
@@ -13,7 +14,6 @@ from ...models import Bar, Quote, SymbolRef
 _BJ_TZ = timezone(timedelta(hours=8))
 
 # 北交所代码段（东财 secid 前缀 0 下的特殊段）→ ths 后缀 .BJ
-_BJ_CODE_PREFIXES = ("43", "83", "87", "88", "92")
 
 
 def _is_index_code(prefix: str, code: str) -> bool:

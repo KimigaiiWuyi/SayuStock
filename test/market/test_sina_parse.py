@@ -65,6 +65,22 @@ def test_sina_symbol_from_secid() -> None:
     assert sina_symbol_from_secid("1.600519") == "sh600519"
     assert sina_symbol_from_secid("0.000001") == "sz000001"
     assert sina_symbol_from_secid("1.000001") == "sh000001"
+
+
+def test_sina_symbol_from_secid_maps_bse_to_bj_prefix() -> None:
+    """北交所 secid 前缀与深市同为 0.，但新浪行情中心用 bj 符号。
+
+    映射成 sz 会让 hq 返回空串 → 被误报 not_found → 短路整条优先级链，
+    使北交所股票在东财不可用时彻底取不到价。
+    """
+    assert sina_symbol_from_secid("0.920000") == "bj920000"
+    assert sina_symbol_from_secid("0.830799") == "bj830799"
+    assert sina_symbol_from_secid("0.430047") == "bj430047"
+    assert sina_symbol_from_secid("0.871981") == "bj871981"
+    # 深市普通股票不受影响
+    assert sina_symbol_from_secid("0.000001") == "sz000001"
+    assert sina_symbol_from_secid("0.300750") == "sz300750"
+
     # 美股 → gb_ 前缀且必须小写（gb_QQQ 返回空）
     assert sina_symbol_from_secid("105.QQQ") == "gb_qqq"
     assert sina_symbol_from_secid("106.BABA") == "gb_baba"

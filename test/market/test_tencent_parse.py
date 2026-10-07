@@ -123,6 +123,9 @@ def _sym_us(secid: str = "106.BABA", name: str = "阿里巴巴") -> SymbolRef:
 def test_tencent_symbol_from_secid() -> None:
     assert tencent_symbol_from_secid("1.600519") == "sh600519"
     assert tencent_symbol_from_secid("0.000001") == "sz000001"
+    # 北交所：secid 前缀同为 0.，但腾讯行情用 bj 符号（sz 返回空值）
+    assert tencent_symbol_from_secid("0.920000") == "bj920000"
+    assert tencent_symbol_from_secid("0.830799") == "bj830799"
     # 美股：纳斯达克/纽交所/美交所/粉单 → us 前缀（仅盘口可用）
     assert tencent_symbol_from_secid("105.AAPL") == "usAAPL"
     assert tencent_symbol_from_secid("106.BABA") == "usBABA"

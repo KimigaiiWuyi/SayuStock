@@ -5,10 +5,12 @@ from __future__ import annotations
 from typing import Mapping, Sequence
 from datetime import date, datetime
 
+from .._base import BJ_CODE_PREFIXES
 from .client import PROVIDER
 from ...enums import RankBy, BoardKind, KlinePeriod
 from ...errors import MarketError, empty_error, parse_error, unsupported
 from ...models import (
+    BREADTH_BANDS,
     RANKING_CAVEAT,
     Bar,
     Quote,
@@ -50,14 +52,18 @@ US_INDEX_MINK: dict[str, str] = {
 
 
 def sina_symbol_from_secid(secid: str) -> str | None:
-    """东财 secid → 新浪盘口符号：1.600519→sh600519，105.QQQ→gb_qqq，100.SPX→gb_inx。"""
+    """东财 secid → 新浪盘口符号：1.600519→sh600519，0.920000→bj920000。
+
+    北交所 secid 与深市同为 ``0.`` 前缀，但新浪行情中心用 ``bj`` 符号
+    （``sz920000`` 返回空串）；不区分会把北交所股票误报成「不存在」。
+    """
     if "." not in secid:
         return None
     prefix, code = secid.split(".", 1)
     if prefix == "1":
         return f"sh{code}"
     if prefix == "0":
-        return f"sz{code}"
+        return f"bj{code}" if code.startswith(BJ_CODE_PREFIXES) else f"sz{code}"
     if prefix in ("105", "106", "107", "153"):
         # 美股符号必须小写（gb_QQQ 返回空）
         return f"gb_{code.lower()}"
@@ -121,6 +127,10 @@ def parse_hq_line(line: str, *, symbol: SymbolRef) -> Quote | MarketError:
         price = prev_close or open_px
     if price is None:
         return parse_error("新浪盘口缺少现价", provider=PROVIDER)
+    if price <= 0:
+        # 新浪对已转板/退市代码返回全零占位行（并附日期与状态位）。若当成成功，
+        # 会用一个 0 价 Quote 阻断优先级链顺延，故按空数据报错交给下一个源。
+        return empty_error("新浪盘口无有效报价（疑似转板/退市占位）", provider=PROVIDER)
     high = _f(parts, 4)
     low = _f(parts, 5)
     volume = _f(parts, 8)
@@ -826,6 +836,11 @@ def parse_money_flow_rank(
 
 
 # 名义涨跌停阈值（%）：科创/创业 20、北交所 30、主板 10；ST 收窄到 5
+# 涨跌停判定留 5% 容差：涨跌停价按昨收四舍五入到分，低价股实际涨跌幅会偏离名义值
+# （如昨收 3.33 → 涨停价 3.66 → +9.91%），按名义值硬判会漏掉真实涨停。
+_LIMIT_TOLERANCE = 0.95
+
+
 def _limit_threshold_pct(code: str, name: str) -> float:
     """按板块判定名义涨跌停幅度；ST/*ST 按名称前缀收窄到 5。"""
     if name.upper().replace(" ", "").replace("　", "").startswith(("ST", "*ST", "SST", "S*ST", "PT")):
@@ -838,14 +853,14 @@ def _limit_threshold_pct(code: str, name: str) -> float:
 
 
 def parse_breadth_rows(rows: object) -> BreadthBar | MarketError:
-    """全 A 行（行情中心 hs_a）→ 涨跌分布。
+    """全 A 行（行情中心 hs_a）→ 涨跌分布，口径与东财 updowndistribution 一致。
 
-    涨跌停按名义阈值 ×95% 判定（留出四舍五入余量），与模拟盘拦截口径一致；
-    涨跌停股同时计入「涨/跌」，保证五项之和等于总数。
+    分档用「涨停 → 5~10 → … → 平 → … → 跌停」。`5~10` 实际覆盖「5% 到涨停」
+    （东财把主板/双创/北交所的涨停带合并进同一档），故按各板名义阈值判定首尾档。
     """
     if not isinstance(rows, list) or not rows:
         return empty_error("新浪全A列表为空", provider=PROVIDER)
-    limit_up = rise = flat = fall = limit_down = 0
+    counts: dict[str, int] = {label: 0 for label in BREADTH_BANDS}
     for row in rows:
         if not isinstance(row, Mapping):
             continue
@@ -856,30 +871,29 @@ def parse_breadth_rows(rows: object) -> BreadthBar | MarketError:
         name = row.get("name")
         code_text = code.strip() if isinstance(code, str) else ""
         name_text = name.strip() if isinstance(name, str) else ""
-        threshold = _limit_threshold_pct(code_text, name_text) * 0.95
-        if pct >= threshold:
-            limit_up += 1
-            rise += 1
-        elif pct <= -threshold:
-            limit_down += 1
-            fall += 1
-        elif pct > 0:
-            rise += 1
-        elif pct < 0:
-            fall += 1
-        else:
-            flat += 1
-    if limit_up + rise + fall + limit_down + flat == 0:
+        limit = _limit_threshold_pct(code_text, name_text) * _LIMIT_TOLERANCE
+        counts[_band_label(pct, limit)] += 1
+    if not any(counts.values()):
         return empty_error("新浪全A涨跌分布解析后全零", provider=PROVIDER)
-    return BreadthBar(
-        buckets=(
-            BreadthBucket(label="涨停", count=limit_up),
-            BreadthBucket(label="涨", count=rise - limit_up),
-            BreadthBucket(label="平", count=flat),
-            BreadthBucket(label="跌", count=fall - limit_down),
-            BreadthBucket(label="跌停", count=limit_down),
-        )
-    )
+    return BreadthBar(buckets=tuple(BreadthBucket(label=k, count=counts[k]) for k in BREADTH_BANDS))
+
+
+def _band_label(pct: float, limit: float) -> str:
+    """涨跌幅 + 生效涨跌停阈值 → 标准档位标签（limit 已含容差）。"""
+    if pct >= limit:
+        return "涨停"
+    if pct <= -limit:
+        return "跌停"
+    mag = abs(pct)
+    if pct > 0:
+        for lo, label in ((5, "5~10"), (3, "3~5"), (2, "2~3"), (1, "1~2")):
+            if mag >= lo:
+                return label
+        return "0~1" if mag > 0 else "平"
+    for lo, label in ((5, "-5~-10"), (3, "-3~-5"), (2, "-2~-3"), (1, "-1~-2")):
+        if mag >= lo:
+            return label
+    return "0~-1" if mag > 0 else "平"
 
 
 def parse_turnover_quotes(quotes: Sequence[Quote]) -> MarketTurnover | MarketError:

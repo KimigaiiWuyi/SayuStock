@@ -4,6 +4,7 @@ from .port import MarketDataPort
 from .enums import RankBy, BoardKind, ValueKind, AssetClass, KlinePeriod
 from .errors import MarketError, is_market_error
 from .models import (
+    BREADTH_BANDS,
     RANKING_CAVEAT,
     Bar,
     Quote,
@@ -22,6 +23,7 @@ from .models import (
     MarketTurnover,
     NorthboundFlow,
     FinancialSnapshot,
+    breadth_counts,
 )
 from .convert import board_to_df, kline_to_df, quote_fields, kline_to_cn_df
 from .display import DisplayItem, from_quote, from_board_row, pick_display_items, board_rows_to_items
@@ -42,6 +44,8 @@ __all__ = [
     "BoardRow",
     "BoardSnapshot",
     "BreadthBar",
+    "BREADTH_BANDS",
+    "breadth_counts",
     "ConfigurableEquityMarket",
     "FinancialSnapshot",
     "IntradayPoint",

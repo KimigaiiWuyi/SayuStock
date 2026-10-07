@@ -106,9 +106,14 @@ def test_breadth_rows_count_by_board_limit_threshold() -> None:
     bar = parse_breadth_rows(NODE_HS_A)
     assert not is_market_error(bar)
     counts = {b.label: b.count for b in bar.buckets}
-    # 浦发 +3.27 → 涨；平安 -0.42 → 跌；ST某某 +4.90 → 主板 ST 阈值 5%*0.95=4.75 → 涨停
-    # 宁德 +19.98 → 创业板 20%*0.95=19.0 → 涨停；安徽凤凰 +0.56 → 涨；停牌 0 → 平
-    assert counts == {"涨停": 2, "涨": 2, "平": 1, "跌": 1, "跌停": 0}
+    # 浦发 +3.27 → 3~5；平安 -0.42 → 0~-1；ST某某 +4.90 → 主板阈值 5 → 涨停
+    # 宁德 +19.98 → 创业板阈值 20 → 涨停；安徽凤凰 +0.56 → 0~1；停牌 0 → 平
+    assert counts["涨停"] == 2
+    assert counts["3~5"] == 1
+    assert counts["0~1"] == 1
+    assert counts["0~-1"] == 1
+    assert counts["平"] == 1
+    assert counts["跌停"] == 0
     assert sum(counts.values()) == len(NODE_HS_A)
 
 

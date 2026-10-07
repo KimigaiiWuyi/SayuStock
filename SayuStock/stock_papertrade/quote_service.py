@@ -214,17 +214,17 @@ class QuoteService:
     async def _fetch_one(self, secid: str) -> tuple[Optional[float], Optional[float], Optional[float], Optional[str]]:
         """拉一次；返回 ``(price, last_close, change_pct, name)``。
 
-        经东财 adapter 解析：现价/昨收/涨跌幅(f170)/名称(f58)，不再误用 f45/f57。
+        走 ``get_market().quote()``：现价/昨收/涨跌幅/名称语义由端口保证，
+        东财限流时按优先级链顺延到腾讯/新浪，不再整条链路失守。
+
+        **失败必须返回全 None**（不可放行任何价格）：调用方以 None 表示
+        「拿不到实时价」，据此拒绝入库，勿改成兜底默认值。
         """
-        from ..utils.eastmoney import EASTMONEY_REQUESTER
+        from ..utils.market import get_market
         from ..utils.market.errors import is_market_error
-        from ..utils.market.adapters.eastmoney.parse_quote import parse_quote_payload
 
         try:
-            resp = await asyncio.wait_for(
-                EASTMONEY_REQUESTER.get_single_stock(secid, ""),
-                timeout=QUOTE_TIMEOUT_S,
-            )
+            quote = await asyncio.wait_for(get_market().quote(secid), timeout=QUOTE_TIMEOUT_S)
         except asyncio.TimeoutError:
             logger.debug(f"[PaperTrade][Quote] secid={secid} 超时 (>={QUOTE_TIMEOUT_S}s)")
             return (None, None, None, None)
@@ -232,12 +232,9 @@ class QuoteService:
             logger.debug(f"[PaperTrade][Quote] secid={secid} HTTP 失败: {e}")
             return (None, None, None, None)
 
-        if isinstance(resp, str):
+        if is_market_error(quote) or quote.price <= 0:
             return (None, None, None, None)
-        parsed = parse_quote_payload(resp, provider_symbol=secid, sec_type="")
-        if is_market_error(parsed) or parsed.price <= 0:
-            return (None, None, None, None)
-        return (parsed.price, parsed.prev_close, parsed.change_pct, parsed.symbol.name)
+        return (quote.price, quote.prev_close, quote.change_pct, quote.symbol.name)
 
     # ----------------------------------------------------------------
     # 调试 / 维护

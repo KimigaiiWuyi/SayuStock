@@ -19,6 +19,7 @@ from gsuid_core.utils.html_render import render_md_to_bytes
 from ..utils.market import (
     KlinePeriod,
     get_market,
+    breadth_counts,
     is_market_error,
 )
 from ..utils.get_OKX import get_all_crypto_price
@@ -60,8 +61,6 @@ async def get_market_overview(
     import json as _json
     from datetime import datetime as _dt
 
-    from ..utils.stock.request import get_bar
-
     market = get_market()
     as_of = _dt.now().strftime("%Y-%m-%d %H:%M:%S")
     INDEX_NAMES = ["上证指数", "深证成指", "创业板指", "沪深300", "中证500", "科创50"]
@@ -82,59 +81,21 @@ async def get_market_overview(
             }
         )
 
-    # 涨跌家数：专用分布接口（勿用 clist 前 N 只冒充全市场）
+    # 涨跌家数：走 market.breadth()，多源链自动顺延（勿用 clist 前 N 只冒充全市场）
     breadth = {"rise": 0, "fall": 0, "flat": 0, "limit_up": 0, "limit_down": 0}
-    bars_raw = await get_bar()
-    if isinstance(bars_raw, str):
+    bar = await market.breadth()
+    if is_market_error(bar):
         truncated.append("breadth")
     else:
-
-        def _int_list(key: str, size: int) -> list[int]:
-            raw = bars_raw[key] if key in bars_raw else []
-            if not isinstance(raw, list):
-                return [0] * size
-            vals: list[int] = []
-            for x in raw:
-                if isinstance(x, bool):
-                    vals.append(int(x))
-                elif isinstance(x, (int, float)):
-                    vals.append(int(x))
-                elif isinstance(x, str):
-                    try:
-                        vals.append(int(float(x)))
-                    except ValueError:
-                        vals.append(0)
-                else:
-                    vals.append(0)
-            if len(vals) < size:
-                vals.extend([0] * (size - len(vals)))
-            return vals[:size]
-
-        def _int_val(key: str) -> int:
-            raw = bars_raw[key] if key in bars_raw else 0
-            if isinstance(raw, bool):
-                return int(raw)
-            if isinstance(raw, (int, float)):
-                return int(raw)
-            if isinstance(raw, str):
-                try:
-                    return int(float(raw))
-                except ValueError:
-                    return 0
-            return 0
-
-        zf = _int_list("2", 10)
-        df = _int_list("3", 10)
-        limit_up = _int_val("5")
-        limit_down = _int_val("6")
-        rise = zf[0] + zf[1] + zf[2] + zf[3] + zf[4] + zf[5] + zf[6] + zf[7] + zf[8] + zf[9] + limit_up
-        fall = df[0] + df[1] + df[2] + df[3] + df[4] + df[5] + df[6] + df[7] + df[8] + df[9] + limit_down
+        counts = breadth_counts(bar)
+        up_mid = sum(counts.get(k, 0) for k in ("5~10", "3~5", "2~3", "1~2", "0~1"))
+        down_mid = sum(counts.get(k, 0) for k in ("-5~-10", "-3~-5", "-2~-3", "-1~-2", "0~-1"))
         breadth = {
-            "rise": rise,
-            "fall": fall,
-            "flat": 0,
-            "limit_up": limit_up,
-            "limit_down": limit_down,
+            "rise": up_mid + counts.get("涨停", 0),
+            "fall": down_mid + counts.get("跌停", 0),
+            "flat": counts.get("平", 0),
+            "limit_up": counts.get("涨停", 0),
+            "limit_down": counts.get("跌停", 0),
         }
 
     north_bound: float | None = None

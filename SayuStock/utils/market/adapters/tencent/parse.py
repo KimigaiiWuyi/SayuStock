@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any, Mapping, Sequence
 from datetime import datetime
 
+from .._base import BJ_CODE_PREFIXES
 from .client import PROVIDER
 from ...enums import KlinePeriod
 from ...errors import MarketError, empty_error, parse_error
@@ -19,14 +20,18 @@ _US_INDEX_SYMBOLS: dict[str, str] = {
 
 
 def tencent_symbol_from_secid(secid: str) -> str | None:
-    """东财 secid → 腾讯符号：1.600519→sh600519，105.QQQ→usQQQ，100.SPX→usINX。"""
+    """东财 secid → 腾讯符号：1.600519→sh600519，0.920000→bj920000，105.QQQ→usQQQ。
+
+    北交所 secid 与深市同为 ``0.`` 前缀，但腾讯行情用 ``bj`` 符号
+    （``sz920000`` 返回空值）；不区分会把北交所股票误报成「不存在」。
+    """
     if "." not in secid:
         return None
     prefix, code = secid.split(".", 1)
     if prefix == "1":
         return f"sh{code}"
     if prefix == "0":
-        return f"sz{code}"
+        return f"bj{code}" if code.startswith(BJ_CODE_PREFIXES) else f"sz{code}"
     if prefix in ("105", "106", "107", "153"):
         # 美股纳斯达克/纽交所/美交所/粉单；腾讯仅盘口可用（K线/分时无数据）
         return f"us{code}"
@@ -66,6 +71,10 @@ def parse_qt_line(line: str, *, symbol: SymbolRef) -> Quote | MarketError:
         price = prev_close or open_px
     if price is None:
         return parse_error("腾讯盘口缺少现价", provider=PROVIDER)
+    if price <= 0:
+        # 转板/退市代码可能返回全零占位行：按空数据报错，让优先级链顺延而非
+        # 用一个 0 价 Quote 阻断后续数据源。
+        return empty_error("腾讯盘口无有效报价（疑似转板/退市占位）", provider=PROVIDER)
     as_of = None
     raw_ts = parts[30].strip() if len(parts) > 30 else ""
     if len(raw_ts) >= 14 and raw_ts[:14].isdigit():
