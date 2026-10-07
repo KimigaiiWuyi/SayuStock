@@ -821,3 +821,10 @@ if row.market_cap is None or row.change_pct is None or not row.name:
   **本次已顺带加固**：`valuation_series` 原先漏用 `_resolve_code` 的加固解析（`quote`/
   `intraday` 都用了），瞬断被误报成 `not_found`；现已改为瞬断报 `network` 顺延、
   真·查无此票才 `not_found`，并补两条回归测试（`test/market/test_resolve_layer.py`）。
+- **同花顺没有证券名称**：快照接口无名称字段，适配器沿用解析层结果，而解析层对
+  `secid` 形态输入（`1.600519`，模拟盘取价用的就是这种）**本地短路返回空名**
+  （`_get_code_id_one` 的 `.` 分支），最终 `Quote.symbol.name` 退化成代码本身。
+  影响面：只有「同花顺排到报价链前面」时才会命中；东财/腾讯/新浪都会从各自报文里
+  带回真名。后果是 `matcher._is_st(name)` 判不出 ST，主板 ST 涨跌停拦截会从
+  ±5% 退回 ±10%（模拟盘风控变宽）。零成本修法是补一张本地「代码→名称」表
+  （当前仓库没有），已在配置描述里提示，暂按已知边界记录。
