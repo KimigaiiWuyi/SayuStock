@@ -580,7 +580,8 @@ def _chain(self, group: str | None = None) -> list[tuple[str, MarketDataPort]]: 
   → 复跑 `not_found`）各出现一次瞬态。该接口先跑 `resolve`（东财代码表、真发网络请求），
   抖动时返回 None 即判 `not_found` 并**短路整链**（既有设计，见 §12.4 末条）。两档的有效链
   完全一致（`bad` 的乱写项被忽略后回落默认链），且该接口直连 eastmoney adapter 实测 OK
-  （§12.2）→ 属环境瞬态，不是配置问题。
+  （§12.2）→ 属环境瞬态，不是配置问题。**该瞬态已顺带修复**（§12.4 末条）：现改为报
+  `network` 顺延其他源，不再短路。
 - `⛔ 单源 = intraday(5d) / northbound`：只有东财实现，其余三源明确 `unsupported`（§12 有逐源实测），
   因此**任何配置**下都只能落到东财；当时东财侧不可用（trends2 被限流 / 北向上游停发），
   不是配置缺陷。八档失败集合完全一致，这本身就是「链已经把能试的源都试过了」的证据。
@@ -816,4 +817,7 @@ if row.market_cap is None or row.change_pct is None or not row.name:
   这不是配置能解决的问题。
 - `fetch_a_share_universe` 保留东财直连（端口能力缺口，见 §11.5）。
 - 个别瞬态：`resolve` 走东财代码表（网络），偶发网络抖动会让依赖 resolve 的接口返回
-  `not_found` 并短路整链（既有设计：解析层各源共用、换源无意义；非本次改动引入）。
+  `not_found` 并短路整链（既有设计：解析层各源共用、换源无意义）。
+  **本次已顺带加固**：`valuation_series` 原先漏用 `_resolve_code` 的加固解析（`quote`/
+  `intraday` 都用了），瞬断被误报成 `not_found`；现已改为瞬断报 `network` 顺延、
+  真·查无此票才 `not_found`，并补两条回归测试（`test/market/test_resolve_layer.py`）。

@@ -11,6 +11,7 @@ import asyncio
 import pytest
 
 from SayuStock.utils.stock import request_utils
+from SayuStock.utils.market.enums import ValueKind
 from SayuStock.utils.market.errors import is_market_error
 from SayuStock.utils.stock.request_utils import (
     ResolveLayerError,
@@ -77,6 +78,30 @@ def test_em_quote_layer_error_returns_network(monkeypatch) -> None:
     assert is_market_error(result)
     assert result.code == "network"
     assert result.provider == "eastmoney"
+
+
+def test_em_valuation_series_layer_error_returns_network(monkeypatch) -> None:
+    # valuation_series 曾漏用加固解析：解析层瞬断被误报 not_found，
+    # 会短路整条优先级链（实测矩阵里出现过两次瞬时「不存在该股票」）
+    async def fake_strict(code, priority=None):
+        raise ResolveLayerError("searchapi down")
+
+    monkeypatch.setattr(request_utils, "get_code_id_strict", fake_strict)
+    result = asyncio.run(EastMoneyMarketData().valuation_series("QQQ", ValueKind.PE))
+    assert is_market_error(result)
+    assert result.code == "network"
+    assert result.provider == "eastmoney"
+
+
+def test_em_valuation_series_absent_symbol_stays_not_found(monkeypatch) -> None:
+    # 标的不存在仍是 not_found（短路语义不变，勿把「查无此票」改成顺延）
+    async def fake_strict(code, priority=None):
+        return None
+
+    monkeypatch.setattr(request_utils, "get_code_id_strict", fake_strict)
+    result = asyncio.run(EastMoneyMarketData().valuation_series("QQQ", ValueKind.PE))
+    assert is_market_error(result)
+    assert result.code == "not_found"
 
 
 def _patch_resolve_em(monkeypatch, module_path: str) -> None:

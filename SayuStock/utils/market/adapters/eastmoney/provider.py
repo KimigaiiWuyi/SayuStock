@@ -36,7 +36,7 @@ from .parse_board import parse_board_payload
 from .parse_kline import parse_kline_payload
 from .parse_quote import parse_quote_payload
 from .parse_value import parse_value_series_payload
-from ....eastmoney import EASTMONEY_REQUESTER
+from ....eastmoney import EASTMONEY_REQUESTER, EastMoneyStockItem
 from ....load_data import get_full_security_code
 from .parse_breadth import parse_breadth_payload
 from .parse_intraday import extract_trends_from_payload, parse_intraday_from_trends_list
@@ -146,6 +146,24 @@ async def _resolve_code(query: str) -> tuple[str, str, str] | MarketError:
     if code_info is None:
         return not_found(ErroText["notStock"], provider=PROVIDER)
     return code_info
+
+
+async def _resolve_stock_item(query: str) -> EastMoneyStockItem | MarketError:
+    """query → EastMoneyStockItem（估值序列等按 ``resolve_stock`` 形状的调用方复用）。
+
+    与 :func:`_resolve_code` 同语义：解析层瞬断返回 network 顺延其他源，
+    只有标的不存在才返回 not_found。
+    """
+    code_info = await _resolve_code(query)
+    if isinstance(code_info, MarketError):
+        return code_info
+    secid = get_full_security_code(code_info[0])
+    return {
+        "secid": secid,
+        "code": secid.split(".")[-1],
+        "name": code_info[1] or secid,
+        "sec_type": code_info[2],
+    }
 
 
 class EastMoneyMarketData:
@@ -380,9 +398,9 @@ class EastMoneyMarketData:
         return NorthboundFlow(sh_net_yi=sh / 10000.0, sz_net_yi=sz / 10000.0)
 
     async def valuation_series(self, query: str, kind: ValueKind) -> ValueSeries | MarketError:
-        stock = await EASTMONEY_REQUESTER.resolve_stock(query)
-        if stock is None:
-            return not_found(ErroText["notStock"], provider=PROVIDER)
+        stock = await _resolve_stock_item(query)
+        if isinstance(stock, MarketError):
+            return stock
         if kind == ValueKind.PE:
             raw = await EASTMONEY_REQUESTER.get_pe_series(stock)
         elif kind == ValueKind.PB:
