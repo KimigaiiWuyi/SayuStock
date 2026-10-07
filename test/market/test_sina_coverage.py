@@ -53,14 +53,64 @@ MONEY_FLOW_IN: list[dict[str, object]] = [
     },
 ]
 
-# Market_Center.getHQNodeData?node=hs_a 实网采样（精简字段）
+# Market_Center.getHQNodeData?node=hs_a 实网采样（精简字段；含 2026-10-08 收盘样本）
 NODE_HS_A: list[dict[str, object]] = [
-    {"code": "600000", "name": "浦发银行", "trade": "9.48", "changepercent": 3.27, "mktcap": 3157.39},
-    {"code": "000001", "name": "平安银行", "trade": "11.20", "changepercent": -0.42, "mktcap": 2170.00},
-    {"code": "600519", "name": "ST某某", "trade": "5.00", "changepercent": 4.90, "mktcap": 100.00},
-    {"code": "300750", "name": "宁德时代", "trade": "260.00", "changepercent": 19.98, "mktcap": 11400.00},
-    {"code": "920000", "name": "安徽凤凰", "trade": "14.33", "changepercent": 0.56, "mktcap": 30.00},
-    {"code": "600001", "name": "某停牌", "trade": "0", "changepercent": 0.00, "mktcap": 10.00},
+    {
+        "code": "600000",
+        "name": "浦发银行",
+        "trade": "9.48",
+        "changepercent": 3.27,
+        "settlement": "9.18",
+        "volume": 1000,
+    },
+    {
+        "code": "000001",
+        "name": "平安银行",
+        "trade": "11.20",
+        "changepercent": -0.42,
+        "settlement": "11.25",
+        "volume": 2000,
+    },
+    # *ST广糖实网样本：主板 ST 同为 10% 限制，收盘 5.40 = 昨收 4.91 × 1.1 → 涨停
+    {"code": "000911", "name": "*ST广糖", "trade": "5.40", "changepercent": 9.98, "settlement": "4.91", "volume": 3000},
+    # 南模生物实网样本：+19.867% 未封板（收盘 64.98 < 涨停价 65.05）→ 5~10
+    {
+        "code": "688265",
+        "name": "南模生物",
+        "trade": "64.98",
+        "changepercent": 19.867,
+        "settlement": "54.21",
+        "volume": 4000,
+    },
+    # N力勤实网样本：新股首日无涨跌幅限制，收盘远超涨停价 → 不计涨停（落 5~10 档）
+    {
+        "code": "001246",
+        "name": "N力勤",
+        "trade": "65.09",
+        "changepercent": 206.594,
+        "settlement": "21.23",
+        "volume": 5000,
+    },
+    # 宁德时代：创业板 20% 封板（昨收 260 → 涨停价 312）
+    {
+        "code": "300750",
+        "name": "宁德时代",
+        "trade": "312.00",
+        "changepercent": 20.0,
+        "settlement": "260.00",
+        "volume": 6000,
+    },
+    {
+        "code": "920000",
+        "name": "安徽凤凰",
+        "trade": "14.33",
+        "changepercent": 0.56,
+        "settlement": "14.25",
+        "volume": 7000,
+    },
+    # 停牌两式：现价为 0 / 成交量为 0 —— 均不计入任何档位
+    {"code": "600001", "name": "某停牌", "trade": "0", "changepercent": 0.0, "settlement": "2.46", "volume": 8000},
+    {"code": "600002", "name": "某停牌2", "trade": "3.93", "changepercent": 0.0, "settlement": "3.93", "volume": 0},
 ]
 
 
@@ -102,19 +152,37 @@ def test_money_flow_rank_rejects_non_money_flow_rank_by() -> None:
     assert is_market_error(snap)
 
 
-def test_breadth_rows_count_by_board_limit_threshold() -> None:
+def test_breadth_rows_sealed_limit_detection() -> None:
+    """首尾两档按「收盘价 == 涨停价/跌停价」精确判定，不按幅度阈值。"""
     bar = parse_breadth_rows(NODE_HS_A)
     assert not is_market_error(bar)
     counts = {b.label: b.count for b in bar.buckets}
-    # 浦发 +3.27 → 3~5；平安 -0.42 → 0~-1；ST某某 +4.90 → 主板阈值 5 → 涨停
-    # 宁德 +19.98 → 创业板阈值 20 → 涨停；安徽凤凰 +0.56 → 0~1；停牌 0 → 平
+    # 封板：*ST广糖（主板 10%）、宁德时代（创业板 20%）
     assert counts["涨停"] == 2
-    assert counts["3~5"] == 1
-    assert counts["0~1"] == 1
-    assert counts["0~-1"] == 1
-    assert counts["平"] == 1
     assert counts["跌停"] == 0
-    assert sum(counts.values()) == len(NODE_HS_A)
+    # 未封板：南模生物 +19.867%、N力勤 +206.6%（新股首日无限制）→ 5~10 档
+    assert counts["5~10"] == 2
+
+
+def test_breadth_rows_mid_bands_and_suspended_skip() -> None:
+    bar = parse_breadth_rows(NODE_HS_A)
+    assert not is_market_error(bar)
+    counts = {b.label: b.count for b in bar.buckets}
+    assert counts["3~5"] == 1  # 浦发 +3.27
+    assert counts["0~-1"] == 1  # 平安 -0.42
+    assert counts["0~1"] == 1  # 安徽凤凰 +0.56
+    # 停牌（现价/成交量为 0）不计入任何档位，也不进「平」
+    assert counts["平"] == 0
+    assert sum(counts.values()) == len(NODE_HS_A) - 2
+
+
+def test_breadth_rows_fallback_without_settlement() -> None:
+    """昨收缺失时回退到名义阈值 × 容差；ST 名称不再收窄到 5%。"""
+    bar = parse_breadth_rows([{"code": "600519", "name": "ST某某", "trade": "5.00", "changepercent": 4.90}])
+    assert not is_market_error(bar)
+    counts = {b.label: b.count for b in bar.buckets}
+    assert counts["3~5"] == 1
+    assert counts["涨停"] == 0
 
 
 def test_breadth_rows_empty_input_is_error() -> None:
@@ -123,12 +191,12 @@ def test_breadth_rows_empty_input_is_error() -> None:
 
 
 def test_limit_threshold_covers_each_board() -> None:
-    assert _limit_threshold_pct("600000", "浦发银行") == 10.0
-    assert _limit_threshold_pct("688001", "某科创") == 20.0
-    assert _limit_threshold_pct("300750", "宁德时代") == 20.0
-    assert _limit_threshold_pct("920000", "安徽凤凰") == 30.0
-    assert _limit_threshold_pct("600001", "ST某某") == 5.0
-    assert _limit_threshold_pct("600001", "*ST某某") == 5.0
+    assert _limit_threshold_pct("600000") == 10.0
+    assert _limit_threshold_pct("688001") == 20.0
+    assert _limit_threshold_pct("300750") == 20.0
+    assert _limit_threshold_pct("920000") == 30.0
+    # 主板 ST 也是 10%（实测腾讯盘口「涨停价」字段），不按名称收窄
+    assert _limit_threshold_pct("600001") == 10.0
 
 
 def test_turnover_sums_sh_and_sz_and_leaves_prev_none() -> None:

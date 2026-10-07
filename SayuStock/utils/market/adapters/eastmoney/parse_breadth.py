@@ -9,7 +9,8 @@ from ...models import BREADTH_BANDS, BreadthBar, BreadthBucket
 
 PROVIDER = "eastmoney"
 
-# 原始结构：key="2" 为正侧 10 档计数，key="3" 为负侧 10 档，key="5"/"6" 为涨跌停家数。
+# 原始结构：key="2" 为正侧 10 档计数，key="3" 为负侧 10 档，key="4" 为平盘家数、
+# key="5"/"6" 为涨跌停家数（实测：'4' 与同花顺 fuyao up_down_distribution 的 flat 一致）。
 # 东财把不同板块的涨停带（主板10/双创20/北交所30）拆成 5 个槽并入同一展示档，
 # 故正负侧各取 sum 合并，与自算全A的 BREADTH_BANDS 口径一致。
 _POS_SLOT_MAP: tuple[tuple[str, tuple[int, ...]], ...] = (
@@ -68,14 +69,15 @@ def _int_val(raw: Mapping[str, object], key: str) -> int:
 def parse_breadth_payload(raw: object) -> BreadthBar | MarketError:
     """updowndistribution 原始 dict → BreadthBar。
 
-    `平` 档该接口不提供（原始结构无对应键），按 0 填充，与改造前
-    ai_tools/draw_info 的 `flat: 0` 行为一致，不引入新的口径偏差。
+    `平` 档取 key="4"（实测与同花顺同口径 flat 一致）；停牌家数该接口不返回，
+    与东财行情中心「平盘」展示口径一致。
     """
     if not isinstance(raw, Mapping):
         return parse_error("东财涨跌分布响应非对象", provider=PROVIDER)
     pos = _int_list(raw, "2", 10)
     neg = _int_list(raw, "3", 10)
     counts: dict[str, int] = {label: 0 for label in BREADTH_BANDS}
+    counts["平"] = _int_val(raw, "4")
     counts["涨停"] = _int_val(raw, "5")
     counts["跌停"] = _int_val(raw, "6")
     for label, slots in _POS_SLOT_MAP:

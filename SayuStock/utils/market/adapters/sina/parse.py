@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from typing import Mapping, Sequence
+from decimal import ROUND_HALF_UP, Decimal
 from datetime import date, datetime
 
 from .._base import BJ_CODE_PREFIXES
@@ -835,28 +836,35 @@ def parse_money_flow_rank(
     )
 
 
-# 名义涨跌停阈值（%）：科创/创业 20、北交所 30、主板 10；ST 收窄到 5
-# 涨跌停判定留 5% 容差：涨跌停价按昨收四舍五入到分，低价股实际涨跌幅会偏离名义值
-# （如昨收 3.33 → 涨停价 3.66 → +9.91%），按名义值硬判会漏掉真实涨停。
+# 名义涨跌停阈值（%）：科创/创业 20、北交所 30、主板 10。
+# 实测（2026-10-08 收盘，比对腾讯盘口「涨停价/跌停价」字段）：主板 ST/*ST 同样 ±10%，
+# 名称里的 ST 不改变涨跌幅限制，故本函数不接收名称。
 _LIMIT_TOLERANCE = 0.95
 
 
-def _limit_threshold_pct(code: str, name: str) -> float:
-    """按板块判定名义涨跌停幅度；ST/*ST 按名称前缀收窄到 5。"""
-    if name.upper().replace(" ", "").replace("　", "").startswith(("ST", "*ST", "SST", "S*ST", "PT")):
-        return 5.0
+def _limit_threshold_pct(code: str) -> float:
+    """按板块判定名义涨跌停幅度。"""
     if code.startswith(("688", "689")) or code[:3] in ("300", "301"):
         return 20.0
-    if code.startswith(("83", "87", "920")):
+    if code.startswith(BJ_CODE_PREFIXES):
         return 30.0
     return 10.0
+
+
+def _limit_price(prev_close: float, nominal_pct: float, *, up: bool) -> float:
+    """昨收 × (1±阈值) → 涨跌停价：交易所口径四舍五入到分（Decimal 半进位）。"""
+    ratio = Decimal(1) + Decimal(str(nominal_pct)) / Decimal(100) * (1 if up else -1)
+    return float((Decimal(str(prev_close)) * ratio).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP))
 
 
 def parse_breadth_rows(rows: object) -> BreadthBar | MarketError:
     """全 A 行（行情中心 hs_a）→ 涨跌分布，口径与东财 updowndistribution 一致。
 
-    分档用「涨停 → 5~10 → … → 平 → … → 跌停」。`5~10` 实际覆盖「5% 到涨停」
-    （东财把主板/双创/北交所的涨停带合并进同一档），故按各板名义阈值判定首尾档。
+    分档用「涨停 → 5~10 → … → 平 → … → 跌停」；`5~10` 实际覆盖「5% 到涨停」
+    （东财把主板/双创/北交所的涨停带合并进同一档）。
+    首尾两档按「收盘价 == 涨停价/跌停价」逐分比对：涨幅超阈值但未封板（新股首日、
+    冲高回落）不计入涨停；昨收缺失时回退到名义阈值 × 容差。停牌（现价或成交量为 0）
+    不计入任何档位（东财/同花顺同样把停牌单列，不进「平」档）。
     """
     if not isinstance(rows, list) or not rows:
         return empty_error("新浪全A列表为空", provider=PROVIDER)
@@ -867,33 +875,52 @@ def parse_breadth_rows(rows: object) -> BreadthBar | MarketError:
         pct = _row_float(row, "changepercent")
         if pct is None:
             continue
+        close = _row_float(row, "trade")
+        prev_close = _row_float(row, "settlement")
+        volume = _row_float(row, "volume")
+        if (close is not None and close <= 0) or (volume is not None and volume <= 0):
+            continue
         code = row.get("code")
-        name = row.get("name")
         code_text = code.strip() if isinstance(code, str) else ""
-        name_text = name.strip() if isinstance(name, str) else ""
-        limit = _limit_threshold_pct(code_text, name_text) * _LIMIT_TOLERANCE
-        counts[_band_label(pct, limit)] += 1
+        nominal = _limit_threshold_pct(code_text)
+        if close is not None and close > 0 and prev_close is not None and prev_close > 0:
+            counts[_sealed_band_label(pct, close, prev_close, nominal)] += 1
+        else:
+            limit = nominal * _LIMIT_TOLERANCE
+            if pct >= limit:
+                counts["涨停"] += 1
+            elif pct <= -limit:
+                counts["跌停"] += 1
+            else:
+                counts[_band_label(pct)] += 1
     if not any(counts.values()):
         return empty_error("新浪全A涨跌分布解析后全零", provider=PROVIDER)
     return BreadthBar(buckets=tuple(BreadthBucket(label=k, count=counts[k]) for k in BREADTH_BANDS))
 
 
-def _band_label(pct: float, limit: float) -> str:
-    """涨跌幅 + 生效涨跌停阈值 → 标准档位标签（limit 已含容差）。"""
-    if pct >= limit:
+def _sealed_band_label(pct: float, close: float, prev_close: float, nominal_pct: float) -> str:
+    """收盘价与涨停价/跌停价逐分比对 → 首尾档；否则按幅度落中间档。"""
+    if abs(close - _limit_price(prev_close, nominal_pct, up=True)) < 1e-4:
         return "涨停"
-    if pct <= -limit:
+    if abs(close - _limit_price(prev_close, nominal_pct, up=False)) < 1e-4:
         return "跌停"
+    return _band_label(pct)
+
+
+def _band_label(pct: float) -> str:
+    """涨跌幅 → 中间档位标签（不含首尾涨停/跌停档）。"""
     mag = abs(pct)
     if pct > 0:
         for lo, label in ((5, "5~10"), (3, "3~5"), (2, "2~3"), (1, "1~2")):
             if mag >= lo:
                 return label
-        return "0~1" if mag > 0 else "平"
-    for lo, label in ((5, "-5~-10"), (3, "-3~-5"), (2, "-2~-3"), (1, "-1~-2")):
-        if mag >= lo:
-            return label
-    return "0~-1" if mag > 0 else "平"
+        return "0~1"
+    if pct < 0:
+        for lo, label in ((5, "-5~-10"), (3, "-3~-5"), (2, "-2~-3"), (1, "-1~-2")):
+            if mag >= lo:
+                return label
+        return "0~-1"
+    return "平"
 
 
 def parse_turnover_quotes(quotes: Sequence[Quote]) -> MarketTurnover | MarketError:

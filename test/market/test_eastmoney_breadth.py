@@ -1,7 +1,8 @@
 """东财涨跌分布（updowndistribution）分桶解析测试。
 
-原始结构：key="2" 为正侧 10 档计数、key="3" 为负侧 10 档、key="5"/"6" 为涨跌停家数。
-对拍依据：改造前 ai_tools/draw_info 直接按同样下标取值，本测试锁住口径不变。
+原始结构：key="2" 为正侧 10 档计数、key="3" 为负侧 10 档、key="4" 为平盘家数、
+key="5"/"6" 为涨跌停家数。对拍依据：改造前 ai_tools/draw_info 直接按同样下标取值，
+本测试锁住口径不变。
 """
 
 from __future__ import annotations
@@ -10,10 +11,11 @@ from SayuStock.utils.market.errors import is_market_error
 from SayuStock.utils.market.models import BREADTH_BANDS, breadth_counts as counts_of
 from SayuStock.utils.market.adapters.eastmoney.parse_breadth import parse_breadth_payload
 
-# 真实响应形状（20 档计数 + 涨跌停家数），非真实数值
+# 真实响应形状（20 档计数 + 平盘 + 涨跌停家数），非真实数值
 PAYLOAD: dict[str, object] = {
     "2": [1200, 900, 600, 400, 300, 180, 120, 80, 50, 30],
     "3": [1100, 800, 500, 350, 250, 150, 100, 70, 45, 25],
+    "4": 200,
     "5": 61,
     "6": 18,
 }
@@ -46,11 +48,11 @@ def test_tail_slots_merge_into_5_to_limit_band() -> None:
     assert counts["0~-1"] == 1100
 
 
-def test_flat_band_is_zero_filled() -> None:
-    """该接口不提供平盘档；按 0 填充，与改造前 flat: 0 行为一致。"""
+def test_flat_count_comes_from_key_4() -> None:
+    """平盘家数取 key="4"（实测与同花顺同口径 flat 一致），不再按 0 填充。"""
     bar = parse_breadth_payload(PAYLOAD)
     assert not is_market_error(bar)
-    assert counts_of(bar)["平"] == 0
+    assert counts_of(bar)["平"] == 200
 
 
 def test_raw_payload_is_retained_for_legacy_draw() -> None:
