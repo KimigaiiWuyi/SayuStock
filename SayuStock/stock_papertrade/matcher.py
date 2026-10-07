@@ -99,6 +99,27 @@ def _limit_threshold_for(code: str, name: Optional[str] = None) -> float:
     return LIMIT_THRESHOLD_MAIN
 
 
+# 需要名称才能定阈值的板块：主板 60xxxx / 00xxxx（含 001/002/003）。
+# 名称是判定 ST 的唯一依据，而主板 ST(±5%) 与普通主板(±10%) 差一倍。
+_NAME_REQUIRED_PREFIXES = ("60", "00")
+
+
+def _missing_name_reason(code: str, name: Optional[str]) -> str:
+    """主板拿不到证券名称时的拒单原因；无需名称或已有名称时返回空串。
+
+    容灾换源时（例：东财限流顺延到同花顺，快照不带名称、本地表又没这只票）
+    名称会退化/缺失。此时不能当成普通主板放行——那等于把 ST 的涨跌停从 ±5%
+    悄悄放宽到 ±10%，正好在最需要风控的时候失守。科创/创业(±20%)、北交所(±30%)
+    的阈值与 ST 无关，缺名不影响判定，不拦。
+    """
+    if name or len(code) < 6 or not code.startswith(_NAME_REQUIRED_PREFIXES):
+        return ""
+    return (
+        f"涨跌停风控不可用：主板 {code} 未取得证券名称，无法判定 ST/风险警示"
+        f"（ST ±{LIMIT_THRESHOLD_ST:.0f}% 与普通主板 ±{LIMIT_THRESHOLD_MAIN:.0f}% 差一倍），拒绝撮合"
+    )
+
+
 def _board_label(threshold: float, is_st: bool) -> str:
     if is_st:
         return "ST 主板"
@@ -218,6 +239,22 @@ def match_order(
 
     # ── 涨跌停板拦截 ──
     if last_close is not None or change_pct is not None:
+        # 名称缺失先拒：宁可不出价，也不能拿普通主板的 ±10% 去替 ST 的 ±5%
+        naming_reason = _missing_name_reason(code, name)
+        if naming_reason:
+            return MatchResult(
+                ok=False,
+                side=side,
+                code=code,
+                requested_qty=qty,
+                actual_qty=0,
+                price=price,
+                amount=0.0,
+                commission=0.0,
+                stamp_tax=0.0,
+                fee_total=0.0,
+                reason=naming_reason,
+            )
         blocked, block_reason = _is_at_limit(side, price, code, last_close, change_pct, name)
         if blocked:
             return MatchResult(

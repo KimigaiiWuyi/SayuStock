@@ -184,7 +184,10 @@ class EastMoneyRequester:
                         params=params,
                         json=_json,
                         data=data,
-                        timeout=ClientTimeout(total=300),
+                        # 与其它行情源一致的单请求超时。原先 300s 等于没有超时：
+                        # 一个卡住的连接会把优先级链的取数预算整个吃光，
+                        # 后面的源根本没机会被轮到。
+                        timeout=ClientTimeout(total=20),
                     ) as resp:
                         try:
                             raw_data = await resp.json(content_type=None)

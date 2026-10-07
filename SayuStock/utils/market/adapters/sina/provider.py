@@ -45,7 +45,7 @@ from .client import (
     fetch_industry_summary,
 )
 from ...enums import RankBy, BoardKind, AssetClass, KlinePeriod, resolve_rank_by
-from ...errors import MarketError, not_found, parse_error, unsupported, network_error
+from ...errors import MarketError, not_found, empty_error, parse_error, unsupported, network_error
 from ...models import (
     Quote,
     SymbolRef,
@@ -130,7 +130,10 @@ class SinaMarketData(PartialMarketData):
             return lines
         line = lines.get(sina_sym)
         if line is None or not line.strip():
-            return not_found(ErroText["notStock"], provider=PROVIDER)
+            # 符号已映射成功、只是这一行空（占位行/瞬时缺行）≠ 标的不存在。
+            # 报 not_found 会短路整条源链，后面的源一个都试不到；
+            # 报 empty 让注册表顺延，"没有这只票"由解析层（not_found）负责。
+            return empty_error(f"新浪盘口无数据行: {sina_sym}", provider=PROVIDER)
         return _parse_us_or_cn(line, sina_sym=sina_sym, symbol=symbol)
 
     async def quotes(self, queries: Sequence[str]) -> list[Quote | MarketError]:
@@ -156,7 +159,8 @@ class SinaMarketData(PartialMarketData):
                     continue
                 line = lines.get(sina_sym)
                 if line is None or not line.strip():
-                    results[i] = not_found(ErroText["notStock"], provider=PROVIDER)
+                    # 同 quote()：空行是缺行不是「没这只票」，用 empty 语义
+                    results[i] = empty_error(f"新浪盘口无数据行: {sina_sym}", provider=PROVIDER)
                     continue
                 results[i] = _parse_us_or_cn(line, sina_sym=sina_sym, symbol=sym_by_idx[i])
         return [r if r is not None else not_found(ErroText["notStock"], provider=PROVIDER) for r in results]
@@ -243,7 +247,10 @@ class SinaMarketData(PartialMarketData):
         if end is not None:
             bars = tuple(b for b in bars if b.ts.date() <= end)
         if not bars:
-            return series
+            # 日期窗内一根都没有（本源只回最近 N 根，窗口更早时会被滤空）。
+            # 不能把**未过滤**的原序列当答案返回：调用方拿到的日期范围就是错的。
+            # 报 empty 交给注册表顺延到能给这个窗口的源。
+            return empty_error(f"新浪 K 线在 {start}~{end} 窗口内无数据", provider=PROVIDER)
         return replace(series, bars=bars)
 
     async def board(
@@ -298,8 +305,12 @@ class SinaMarketData(PartialMarketData):
         return parse_node_board(rows, kind=board_kind, title=title, limit=limit)
 
     async def _sector_node(self, sector: str) -> str | None:
-        """板块名 → 行情中心 node；概念(newFLJK) 优先，行业(newSinaHy) 次之。"""
-        for fetcher in (fetch_fljk_summary("class"), await fetch_industry_summary()):
+        """板块名 → 行情中心 node；概念(newFLJK) 优先，行业(newSinaHy) 次之。
+
+        概念那条必须 await：漏了的话拿到的是协程对象，isinstance(..., str) 为假、
+        industry_menu 收到协程必然出错，概念名会永远匹配不上。
+        """
+        for fetcher in (await fetch_fljk_summary("class"), await fetch_industry_summary()):
             if isinstance(fetcher, str):
                 continue
             menu = industry_menu(fetcher)

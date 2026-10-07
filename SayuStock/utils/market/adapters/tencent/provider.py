@@ -17,7 +17,7 @@ from .parse import (
 from .._base import PartialMarketData, resolve_em_symbol, resolve_em_symbol_safe
 from .client import PROVIDER, fetch_minute, fetch_mkline, fetch_fqkline, fetch_qt_lines
 from ...enums import KlinePeriod
-from ...errors import MarketError, not_found, unsupported, network_error
+from ...errors import MarketError, not_found, empty_error, unsupported, network_error
 from ...models import Quote, SymbolRef, KlineSeries, IntradaySeries
 from ....constant import ErroText
 
@@ -92,7 +92,10 @@ class TencentMarketData(PartialMarketData):
             return lines
         line = lines.get(qt_sym)
         if line is None or not line.strip():
-            return not_found(ErroText["notStock"], provider=PROVIDER)
+            # 符号已映射成功、只是这一行空（占位行/瞬时缺行）≠ 标的不存在。
+            # 报 not_found 会短路整条源链，后面的源一个都试不到；
+            # 报 empty 让注册表顺延，"没有这只票"由解析层（not_found）负责。
+            return empty_error(f"腾讯盘口无数据行: {qt_sym}", provider=PROVIDER)
         return _parse_us_or_cn(line, qt_sym=qt_sym, symbol=symbol)
 
     async def quotes(self, queries: Sequence[str]) -> list[Quote | MarketError]:
@@ -118,7 +121,8 @@ class TencentMarketData(PartialMarketData):
                     continue
                 line = lines.get(qt_sym)
                 if line is None or not line.strip():
-                    results[i] = not_found(ErroText["notStock"], provider=PROVIDER)
+                    # 同 quote()：空行是缺行不是「没这只票」，用 empty 语义
+                    results[i] = empty_error(f"腾讯盘口无数据行: {qt_sym}", provider=PROVIDER)
                     continue
                 results[i] = _parse_us_or_cn(line, qt_sym=qt_sym, symbol=sym_by_idx[i])
         return [r if r is not None else not_found(ErroText["notStock"], provider=PROVIDER) for r in results]
@@ -197,5 +201,8 @@ class TencentMarketData(PartialMarketData):
         if end is not None:
             bars = tuple(b for b in bars if b.ts.date() <= end)
         if not bars:
-            return series
+            # 日期窗内一根都没有（本源只回最近 N 根，窗口更早时会被滤空）。
+            # 不能把**未过滤**的原序列当答案返回：调用方拿到的日期范围就是错的。
+            # 报 empty 交给注册表顺延到能给这个窗口的源。
+            return empty_error(f"腾讯 K 线在 {start}~{end} 窗口内无数据", provider=PROVIDER)
         return replace(series, bars=bars)

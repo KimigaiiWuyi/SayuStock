@@ -53,7 +53,12 @@ from gsuid_core.logger import logger
 # 常量
 # ============================================================
 QUOTE_CACHE_TTL: float = 60.0  # 成功取价的内存缓存秒数；超过即穿透去拉
-QUOTE_TIMEOUT_S: float = 8.0  # 单只 HTTP 超时
+# 单只股票的**取价总预算**（秒）。它同时是链上每个源的时间片来源：
+# chain_deadline 让链上各源按「剩余预算 / 剩余源数」分摊（4 源时各约 3s），
+# 所以东财挂起时腾讯/新浪仍轮得到。只包一层 wait_for 的话，第一个源挂起
+# 就把预算吃光、后面的源一个都不会开始，而容灾恰恰是在那时才需要生效。
+# 12s = 4 源 × 3s，远大于实测健康单源取价最慢值（0.85s）。
+QUOTE_TIMEOUT_S: float = 12.0
 # 失败缓存 TTL 必须**远小于**成功 TTL。失败也要缓存（否则限流期间每秒重试
 # 会把东财继续逼进 -400016），但锁 60s 太长：一次限流会让该票整整一分钟
 # 拿不到价，即便东财早已恢复也照样拒单。5s 足够挡住抖动，又不至于拖死整轮决策。
@@ -242,11 +247,14 @@ class QuoteService:
         **失败必须返回全 None**（不可放行任何价格）：调用方以 None 表示
         「拿不到实时价」，据此拒绝入库，勿改成兜底默认值。
         """
-        from ..utils.market import get_market
+        from ..utils.market import get_market, chain_deadline
         from ..utils.market.errors import is_market_error
 
         try:
-            quote = await asyncio.wait_for(get_market().quote(secid), timeout=QUOTE_TIMEOUT_S)
+            # chain_deadline 把总预算摊到每个源（同步上下文管理器，只写 ContextVar）；
+            # 外层 wait_for 只是硬保险，防的是链外还有别的耗时
+            with chain_deadline(QUOTE_TIMEOUT_S):
+                quote = await asyncio.wait_for(get_market().quote(secid), timeout=QUOTE_TIMEOUT_S)
         except asyncio.TimeoutError:
             logger.debug(f"[PaperTrade][Quote] secid={secid} 超时 (>={QUOTE_TIMEOUT_S}s)")
             return (None, None, None, None)

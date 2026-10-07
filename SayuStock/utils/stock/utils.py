@@ -3,7 +3,7 @@ import inspect
 import functools
 from typing import Any, List, Tuple, TypeVar, Callable, Optional, Coroutine, ParamSpec, cast
 from pathlib import Path
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 
 import aiofiles
 from PIL import Image
@@ -163,32 +163,38 @@ def get_adjusted_date() -> datetime:
 
 
 def calculate_difference(data: List[str]) -> Tuple[float, float, Optional[datetime]]:
-    # 获取今天的日期
-    today = get_adjusted_date()
+    """trends2（ndays≥2）→ (最近交易日成交额, 与前一交易日同时刻之差, 该交易日)。
 
-    date_dict: dict[int, list[float]] = {}
+    日期一律按**完整日期**比较，不再用「几号」：
+    ① 按 ``.day`` 比较时，跨月会把 30 号当成「今天之后」；
+    ② 原来「最多回退 4 天」的探法在长假（连休 >4 天）探不到任何交易日，
+       直接回 (0, 0, None)，下游把它当成网络失败而降级换源——休市日的大盘概览
+       于是悄悄改用另一个源、日期口径也不同。这里改成取数据里**最近的那个
+       交易日**，休市日照样由东财自己给出「上一交易日成交额 + 实际日期」。
+    """
+    today = get_adjusted_date().date()
+
+    amounts: dict[date, list[float]] = {}
     for item in data:
         item_part = item.split(",")
-        date_day = datetime.strptime(item_part[0], "%Y-%m-%d %H:%M")
-        if date_day.day not in date_dict:
-            date_dict[date_day.day] = []
-        date_dict[date_day.day].append(float(item_part[6]))
+        stamp = datetime.strptime(item_part[0], "%Y-%m-%d %H:%M")
+        amounts.setdefault(stamp.date(), []).append(float(item_part[6]))
 
-    is_trading_day = today.day in date_dict
-    for _ in range(4):
-        if today.day not in date_dict:
-            today = today - timedelta(days=1)
-        else:
-            break
-    else:
+    days = sorted(amounts)
+    if len(days) < 2:
+        # 只有一个交易日（甚至没有）时给不出「放量/缩量」，按拿不到处理
         return 0.0, 0.0, None
 
-    logger.info(f"[SayuStock]今天交易日: {today}")
-    all_today_data = sum(date_dict[today.day])
-    all_today_len = len(date_dict[today.day])
-    del date_dict[today.day]
+    target = today if today in amounts else days[-1]
+    index = days.index(target)
+    if index == 0:
+        return 0.0, 0.0, None
 
-    all_yestoday_data = sum(list(date_dict.values())[0][:all_today_len])
-    # 返回实际交易日期，若是今天则返回None表示正常交易日
-    actual_date = None if is_trading_day else today.replace(hour=0, minute=0, second=0, microsecond=0)
-    return all_today_data, all_today_data - all_yestoday_data, actual_date
+    series = amounts[target]
+    today_amount = sum(series)
+    # 与前一交易日「同一时刻」的量相比，避免早盘拿全天量比
+    prev_amount = sum(amounts[days[index - 1]][: len(series)])
+    logger.info(f"[SayuStock]今天交易日: {target}")
+    is_trading_day = target == today
+    actual_date = None if is_trading_day else datetime(target.year, target.month, target.day)
+    return today_amount, today_amount - prev_amount, actual_date

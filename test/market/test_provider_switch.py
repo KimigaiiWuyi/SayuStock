@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import time
 import asyncio
 from typing import Literal
 from datetime import date
@@ -46,7 +47,13 @@ class _StubPort:
         self.tag = tag
         self.unsupported_ifaces = unsupported_ifaces
         self.fail_ifaces: dict[str, str] = fail_ifaces or {}
+        self.sleep_ifaces: dict[str, float] = {}
         self.calls: list[str] = []
+
+    async def _sleep_gate(self, iface: str) -> None:
+        """模拟「连上了但不回包」的挂起源（超时/切片逻辑需要它）。"""
+        if iface in self.sleep_ifaces:
+            await asyncio.sleep(self.sleep_ifaces[iface])
 
     def _ret(self, iface: str) -> object:
         self.calls.append(iface)
@@ -72,6 +79,7 @@ class _StubPort:
         )
 
     async def quote(self, query: str) -> Quote | MarketError:
+        await self._sleep_gate("quote")
         result = self._ret("quote")
         return (
             result
@@ -396,9 +404,9 @@ def test_provider_exception_falls_through(stub_registry) -> None:
 
 def test_out_of_chain_eastmoney_still_backstops(stub_registry) -> None:
     async def _run() -> None:
-        # 市场域链不含东财：北向（三源皆不支持）由链尾兜底的东财接住，
+        # 独占域链不含东财：北向（另三源皆不支持）由链尾兜底的东财接住，
         # 而不是报「northbound 无源可用」—— 这是「任何配置下全功能可用」的核心保证
-        m = _market({"market_api_chain_market": ["腾讯财经", "新浪财经", "同花顺"]})
+        m = _market({"market_api_chain_exclusive": ["腾讯财经", "新浪财经", "同花顺"]})
         nb = await m.northbound()
         assert nb == "eastmoney:northbound"
         assert "northbound" in stub_registry["tencent"].calls
@@ -435,6 +443,96 @@ def test_resolve_uses_chain_head(stub_registry) -> None:
         ref2 = await m2.resolve("600519")
         assert ref2 is not None
         assert ref2.exchange == "eastmoney"
+
+    asyncio.run(_run())
+
+
+# -- 分域表与配置键的一致性 ---------------------------------------------------
+
+
+def test_every_routed_interface_group_has_a_config_key() -> None:
+    """接口表的每个域都必须有对应配置键，否则该接口会静默回落全局链。"""
+    assert set(pr._IFACE_GROUPS.values()) <= set(pr._GROUP_CHAIN_CONFIG_KEYS)
+
+
+def test_exclusive_group_owns_the_single_source_interfaces() -> None:
+    """只有东财实现的接口归 exclusive 组：用户在别的组里调优先级毫无意义。"""
+    assert pr._IFACE_GROUPS["hotmap"] == "exclusive"
+    assert pr._IFACE_GROUPS["northbound"] == "exclusive"
+    assert pr._IFACE_GROUPS["valuation_series"] == "exclusive"
+    assert pr._IFACE_GROUPS["financial_snapshot"] == "exclusive"
+    # 多源接口不许混进独占组
+    assert pr._IFACE_GROUPS["board"] == "board"
+    assert pr._IFACE_GROUPS["breadth"] == "market"
+
+
+def test_exclusive_chain_follows_its_own_key(stub_registry) -> None:
+    async def _run() -> None:
+        # exclusive 组有自己的键：配置生效（腾讯在链头，跳过不支持后仍由东财供数）
+        m = _market({"market_api_chain_exclusive": ["腾讯财经"]})
+        hm = await m.hotmap()
+        assert hm == "eastmoney:hotmap"
+        assert "hotmap" in stub_registry["tencent"].calls
+        # 组间隔离：board 组没配 → 仍走全局默认链链头（东财），不受 exclusive 影响
+        assert pr.build_priority_chain(_reader({"market_api_chain_exclusive": ["腾讯财经"]}), "board") == [
+            "eastmoney",
+            "tencent",
+            "sina",
+            "ths",
+        ]
+
+    asyncio.run(_run())
+
+
+# -- 时间预算：慢源不许吃掉整条链 --------------------------------------------
+
+
+def test_source_timeout_falls_through(stub_registry, monkeypatch: pytest.MonkeyPatch) -> None:
+    """一个挂起的源必须被每源顶格切断并顺延，否则容灾形同虚设。"""
+
+    async def _run() -> None:
+        monkeypatch.setattr(pr, "SOURCE_TIMEOUT_S", 0.05)
+        stub_registry["eastmoney"].sleep_ifaces = {"quote": 30.0}
+        m = _market({})
+        q = await m.quote("600519")
+        assert isinstance(q, Quote)
+        assert q.symbol.name == "tencent:quote"
+        assert "quote" in stub_registry["tencent"].calls
+
+    asyncio.run(_run())
+
+
+def test_chain_deadline_reserves_time_for_the_rest_of_the_chain(stub_registry) -> None:
+    """声明总预算后按「剩余预算/剩余源数」分片：链头挂起也轮得到后面的源。
+
+    这正是模拟盘取价的场景——外层只有 wait_for(timeout) 时，链头一挂
+    就把预算吃光，后面的源一个都不会开始。
+    """
+
+    async def _run() -> None:
+        stub_registry["eastmoney"].sleep_ifaces = {"quote": 30.0}
+        m = _market({})
+        started = time.monotonic()
+        with pr.chain_deadline(0.8):
+            q = await m.quote("600519")
+        assert time.monotonic() - started < 2.0
+        assert isinstance(q, Quote)
+        assert q.symbol.name == "tencent:quote"
+
+    asyncio.run(_run())
+
+
+def test_exhausted_budget_stops_chain_with_market_error(stub_registry) -> None:
+    """预算耗尽要就地停链并回 MarketError，不能把 None 漏给调用方。"""
+
+    async def _run() -> None:
+        stub_registry["eastmoney"].sleep_ifaces = {"quote": 30.0}
+        m = _market({})
+        with pr.chain_deadline(-1.0):
+            q = await m.quote("600519")
+        assert is_market_error(q)
+        assert q.code == "network"
+        assert stub_registry["tencent"].calls == []
 
     asyncio.run(_run())
 

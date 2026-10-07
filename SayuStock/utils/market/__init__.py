@@ -6,6 +6,7 @@ from .errors import MarketError, is_market_error
 from .models import (
     BREADTH_BANDS,
     RANKING_CAVEAT,
+    BREADTH_DIRECTION,
     Bar,
     Quote,
     RankRow,
@@ -24,6 +25,7 @@ from .models import (
     NorthboundFlow,
     FinancialSnapshot,
     breadth_counts,
+    breadth_up_down,
 )
 from .convert import board_to_df, kline_to_df, quote_fields, kline_to_cn_df
 from .display import DisplayItem, from_quote, from_board_row, pick_display_items, board_rows_to_items
@@ -31,7 +33,9 @@ from .registry import get_market, set_market
 from .fund_route import maybe_otc_fund_query
 from .provider_registry import (
     PROVIDER_LABELS,
+    SOURCE_TIMEOUT_S,
     ConfigurableEquityMarket,
+    chain_deadline,
     parse_priority_chain,
     normalize_provider_id,
 )
@@ -45,7 +49,9 @@ __all__ = [
     "BoardSnapshot",
     "BreadthBar",
     "BREADTH_BANDS",
+    "BREADTH_DIRECTION",
     "breadth_counts",
+    "breadth_up_down",
     "ConfigurableEquityMarket",
     "FinancialSnapshot",
     "IntradayPoint",
@@ -57,6 +63,7 @@ __all__ = [
     "MarketTurnover",
     "NorthboundFlow",
     "PROVIDER_LABELS",
+    "SOURCE_TIMEOUT_S",
     "Quote",
     "RANKING_CAVEAT",
     "RankBy",
@@ -69,6 +76,7 @@ __all__ = [
     "DisplayItem",
     "board_rows_to_items",
     "board_to_df",
+    "chain_deadline",
     "from_board_row",
     "from_quote",
     "pick_display_items",

@@ -71,13 +71,23 @@ async def get_fund_pos_list(fcode: Union[str, int]) -> Optional[Dict[str, object
     return None
 
 
+# 显式市场后缀（与 _get_code_id_one 里的剥离顺序一致：.hk 要在 .h 前判定）
+_MARKET_SUFFIXES: tuple[str, ...] = (".hk", ".us", ".kr", ".h", ".a")
+
+
 def _code_query_candidates(raw: str) -> List[str]:
-    """拆分「600519 贵州茅台」等复合查询，优先纯代码再名称。"""
+    """拆分「600519 贵州茅台」等复合查询，优先纯代码再名称。
+
+    带显式市场后缀（.us/.h/.kr/.a）时**只回整串**：否则「600519.us」会先被抽出
+    裸代码「600519」，以 priority=None 命中 A 股，用户指定的市场被前面的候选架空。
+    """
     import re
 
     text = (raw or "").strip()
     if not text:
         return []
+    if text.lower().endswith(_MARKET_SUFFIXES):
+        return [text]
     out: List[str] = []
     seen: set[str] = set()
 
@@ -154,6 +164,16 @@ _LOCAL_NAME_MARKET: Dict[str, str] = {
     "83": "0",
     "87": "0",
     "92": "0",
+}
+
+
+# 市场后缀（.h/.us/.kr/.a）→ 该市场在东财 searchapi 里对应的 SecurityTypeName。
+# 搜索有结果但一个都不属于目标市场时按「没有这只票」处理，绝不跨市场兜底。
+_MARKET_SEC_TYPES: Dict[str, frozenset] = {
+    "h": frozenset({"港股"}),
+    "us": frozenset({"美股", "粉单"}),
+    "kr": frozenset({"韩股"}),
+    "a": frozenset({"沪深A", "沪A", "深A", "创业板", "科创板", "京A"}),
 }
 
 
@@ -236,54 +256,27 @@ async def _get_code_id_one(code: str, priority: Optional[str] = None) -> Optiona
                     # 排序：SecurityTypeName为"债券"的排到最后
                     if not is_bond:
                         code_dict.sort(key=lambda x: x.get("SecurityTypeName") == "债券")
+                    if priority is None:
+                        # 未指定市场：取搜索首项（债券已排到最后）
+                        first = code_dict[0]
+                        return (
+                            first["QuoteID"],
+                            first["Name"],
+                            first["SecurityTypeName"],
+                        )
+                    accepted = _MARKET_SEC_TYPES[priority]
                     for i in code_dict:
-                        if priority is None:
+                        if i["SecurityTypeName"] in accepted:
                             return (
                                 i["QuoteID"],
                                 i["Name"],
                                 i["SecurityTypeName"],
                             )
-                        elif priority == "h":
-                            if i["SecurityTypeName"] in ["港股"]:
-                                return (
-                                    i["QuoteID"],
-                                    i["Name"],
-                                    i["SecurityTypeName"],
-                                )
-                        elif priority == "us":
-                            if i["SecurityTypeName"] in ["美股", "粉单"]:
-                                return (
-                                    i["QuoteID"],
-                                    i["Name"],
-                                    i["SecurityTypeName"],
-                                )
-                        elif priority == "kr":
-                            if i["SecurityTypeName"] in ["韩股"]:
-                                return (
-                                    i["QuoteID"],
-                                    i["Name"],
-                                    i["SecurityTypeName"],
-                                )
-                        elif priority == "a":
-                            if i["SecurityTypeName"] in [
-                                "沪深A",
-                                "沪A",
-                                "深A",
-                                "创业板",
-                                "科创板",
-                                "京A",
-                            ]:
-                                return (
-                                    i["QuoteID"],
-                                    i["Name"],
-                                    i["SecurityTypeName"],
-                                )
-                    else:
-                        return (
-                            code_dict[0]["QuoteID"],
-                            code_dict[0]["Name"],
-                            i["SecurityTypeName"],
-                        )
+                    # 有搜索结果但没有该市场的标的（例：600519.us 只搜到沪A 贵州茅台）。
+                    # 此时必须返回 None：曾经的 for/else 兜底回的是
+                    # 「第一项的 QuoteID/名称 + 最后一项的证券类型」，
+                    # A 股会被当成美股解析出去，下游按错误的 secid 取价。
+                    return None
                 else:
                     # HTTP 200 且无结果：标的确切不存在
                     return None

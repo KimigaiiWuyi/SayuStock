@@ -32,7 +32,7 @@ STOCK_CONFIG = StringConfig("SayuStock", CONFIG_PATH, CONFIG_DEFAULT)
 | `stock_cache_retention_days` | 每日清理保留天数 | 7 |
 | `eastmoney_cookie` | 东财 Cookie | 内置字符串 |
 | `market_api_chain` | 全局行情源链（`GsListStrConfig` 字符串列表，列表顺序即优先级）；留空 = 东财→腾讯→新浪→同花顺。**链外源自动排链尾兜底**（不是禁用），因此任何配置下 14 接口都有源可用；失败/不支持自动顺延；网页控制台改完热生效 | `[]` |
-| `market_api_chain_quote` / `_kline` / `_board` / `_market` | 四域源链覆盖（盘口/分时、K线、板块/排行/云图、市场统计/资金/财务）；留空 = 跟随全局链；`_IFACE_GROUPS` 把 14 接口映射到域，`resolve` 不配 | `[]` |
+| `market_api_chain_quote` / `_kline` / `_board` / `_market` / `_exclusive` | 五域源链覆盖（盘口/分时、K线、板块/排行/菜单、大盘统计/资金、东财独占）；留空 = 跟随全局链；`_IFACE_GROUPS` 把 14 接口映射到域，`resolve` 不配。每键 `options` 只列**真正实现了该组接口的源**（④⑤ 组的依据见覆盖面矩阵 §13.9），某组只有一个可选值 = 该组是它独占的 | `[]`（`_exclusive` 为 `["东方财富"]`） |
 | `ths_api_key` | 同花顺金融数据 API（扶摇 fuyao.aicubes.cn）的 X-api-key | 内置公共 Key |
 | `holdings_analysis_unlimited_users` | 持仓分析免每日限额的 `user_id` 列表；网页控制台改完热生效 | `[]` |
 | `news_push_hourly_groups` | 雪球新闻「小时汇总」群列表（类别2，每小时整点合并推送） | `[]` |

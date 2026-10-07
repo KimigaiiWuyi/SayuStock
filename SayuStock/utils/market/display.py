@@ -5,7 +5,16 @@ from __future__ import annotations
 from typing import TypeVar, cast
 from dataclasses import replace, dataclass
 
-from .models import Quote, BoardRow, KlineSeries, ValueSeries, RankSnapshot, BoardSnapshot, IntradaySeries
+from .models import (
+    Quote,
+    BoardRow,
+    KlineSeries,
+    ValueSeries,
+    RankSnapshot,
+    BoardSnapshot,
+    IntradaySeries,
+    MarketTurnover,
+)
 
 # 数据源 id → 展示名（图表左下角「数据来源」标签用）
 PROVIDER_DISPLAY: dict[str, str] = {
@@ -19,7 +28,7 @@ PROVIDER_DISPLAY: dict[str, str] = {
 }
 
 # 可盖章（写入 provider 字段）的结果模型
-_STAMPABLE = (Quote, KlineSeries, IntradaySeries, BoardSnapshot, RankSnapshot, ValueSeries)
+_STAMPABLE = (Quote, KlineSeries, IntradaySeries, BoardSnapshot, RankSnapshot, ValueSeries, MarketTurnover)
 
 _T = TypeVar("_T")
 

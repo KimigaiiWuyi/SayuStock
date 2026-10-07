@@ -262,7 +262,7 @@ for pid in 链:
 > 保留作为问题推导过程：「管道已铺 90%」的结论仍然成立（`_dispatch` 第一个参数就是接口名）。
 > 但本节末尾提到的 `_LEGACY_PRIORITY_CONFIG_KEY` 迁移遗留、`market_api_overrides` 单串
 > 提案**都不在最终实现里** —— 旧 int 配置从未上线、无迁移需求；最终形态是 §10 的
-> 四域 `GsListStrConfig` 列表链 + 链外源排链尾兜底。
+> 五域 `GsListStrConfig` 列表链 + 链外源排链尾兜底。
 
 配置里只有 4 个 `market_api_priority_<id>` 整数键（东财 40 / 腾讯 30 / 新浪 20 / 同花顺 10），**一套全局链，14 个接口全部共用**，没有任何 interface 维度的配置项。
 
@@ -454,35 +454,48 @@ vip.stock.finance.sina.com.cn/quotes_service/api/json_v2.php/MoneyFlow.ssl_bkzj_
 > 不是禁用表达** —— 链外源自动排链尾兜底，以兑现「任何配置组合下 14 个接口都有源可用」
 > 这条硬约束（东财独占接口不能被配置饿死）。实网矩阵见 §10.6。
 
-### 10.1 核心判断：不按 14 个接口逐个配，按 4 个能力域配
+### 10.1 核心判断：不按 14 个接口逐个配，按「有没有第二源」分 5 个域
 
 14 接口 × 4 源 = **56 个输入框**，网页控制台没法用，且用户根本记不住「哪个是 `market_turnover`」。
 
-真正需要区分的是**语义**不同源的地方，而不是接口名。按覆盖矩阵，14 个接口天然分成 **4 个域**：
+真正需要区分的是**语义**不同源的地方，而不是接口名。按覆盖矩阵，14 个接口天然分成 **5 个域**：
 
-| 域 | 覆盖接口 | 分开的理由 |
-|---|---|---|
-| **A. 盘口/分时** | `quote` `quotes` `intraday` | 高频低延迟，腾讯/新浪最快；但 `ndays>1`（五日分时）只有东财实现，其他三源都只支持当日 |
-| **B. K 线** | `kline` | **复权口径敏感** —— 新浪不复权，排到前面会静默毁掉历史指标 |
-| **C. 板块/排行/云图** | `board` `rank_list` `hotmap` `sector_menu` | 新浪有概念/行业能力但排行只有 3 个维度；腾讯同花顺全无 |
-| **D. 市场/资金/财务** | `breadth` `market_turnover` `northbound` `valuation_series` `financial_snapshot` | 真·东财域；补源后 breadth/turnover 可开，其余仍是东财独有能力 |
+| 域 | 覆盖接口 | 真正可选的源 | 分开的理由 |
+|---|---|---|---|
+| **A. 盘口/分时** | `quote` `quotes` `intraday` | 东财/腾讯/新浪/同花顺 | 高频低延迟，腾讯/新浪最快；`ndays>1`（五日分时）只有东财实现，同花顺连当日分时都没有 |
+| **B. K 线** | `kline` | 东财/腾讯/新浪/同花顺 | **复权口径敏感** —— 新浪不复权，排到前面会静默毁掉历史指标 |
+| **C. 板块/排行/菜单** | `board` `rank_list` `sector_menu` | 东财/新浪 | 腾讯同花顺没有板块能力；新浪排行只有 3 个维度 |
+| **D. 大盘统计/资金** | `breadth` `market_turnover` | 东财/新浪 | 只有这两家能算全 A 涨跌分布与两市成交额 |
+| **E. 东财独占** | `hotmap` `northbound` `valuation_series` `financial_snapshot` | 仅东财 | 另三个源全部返回 `unsupported`（逐源实测见 §12）；单列成键是为了让后台点开就看见「只有东财」 |
 
 `resolve` 不配 —— 解析层各源共用，恒走全局链链头（`_IFACE_GROUPS` 里没有它）。
 
-### 10.2 配置形态：`GsListStrConfig`，5 个键覆盖 14 接口
+> 分域判据是「**该接口还有没有第二个源**」。只有一个源的接口单独并进 E 组：
+> 把 `hotmap` 留在 C 组会让用户以为「把新浪排前面就能让云图走新浪」，那是必然失败的尝试。
+
+### 10.2 配置形态：`GsListStrConfig`，6 个键覆盖 14 接口
+
+每个域键的 `options` 只列**该域真正实现了接口的源**（依据是 §12 的逐源实测），
+所以「某组只有一个可选值」本身就是「这组接口是它独占的」的说明：
+
+| 配置键 | 标题 | `options` | 默认值 |
+|---|---|---|---|
+| `market_api_chain` | 全局行情源链（默认） | 东方财富 / 腾讯财经 / 新浪财经 / 同花顺 | `[]`（= 内置默认链） |
+| `market_api_chain_quote` | ① 盘口 / 分时源链 | 东方财富 / 腾讯财经 / 新浪财经 / 同花顺 | `[]`（跟随全局链） |
+| `market_api_chain_kline` | ② K线源链 | 东方财富 / 腾讯财经 / 新浪财经 / 同花顺 | `[]`（跟随全局链） |
+| `market_api_chain_board` | ③ 板块 / 排行 / 菜单源链 | 东方财富 / 新浪财经 | `[]`（跟随全局链） |
+| `market_api_chain_market` | ④ 大盘统计 / 资金源链 | 东方财富 / 新浪财经 | `[]`（跟随全局链） |
+| `market_api_chain_exclusive` | ⑤ 东财独占：云图 / 北向 / 估值 / 财报 | 东方财富 | `["东方财富"]` |
 
 ```python
-"market_api_chain": GsListStrConfig(
-    "全局行情源链（默认）",
-    "所有行情接口的默认优先级；留空 = 东方财富→腾讯财经→新浪财经→同花顺。"
-    "每项填一个数据源：东方财富 / 腾讯财经 / 新浪财经 / 同花顺",
-    [],
-    options=["东方财富", "腾讯财经", "新浪财经", "同花顺"],
+"market_api_chain_exclusive": GsListStrConfig(
+    "⑤ 东财独占：云图 / 北向 / 估值 / 财报",
+    "大盘云图、北向资金、估值序列、财报快照这四类**只有东方财富提供**："
+    "其他三个源会返回「不支持」并自动兜底到东方财富，所以这一组填别的也不会生效。"
+    "单独列出来是为了让你一眼看出「其他家没有」，不必在这组上试错。",
+    ["东方财富"],
+    options=["东方财富"],
 ),
-"market_api_chain_quote":  GsListStrConfig("盘口/分时源链", "...留空 = 跟随全局链...", [], options=[...]),
-"market_api_chain_kline":  GsListStrConfig("K线源链", "...留空 = 跟随全局链...", [], options=[...]),
-"market_api_chain_board":  GsListStrConfig("板块/排行/云图源链", "...", [], options=[...]),
-"market_api_chain_market": GsListStrConfig("市场统计/资金/财务源链", "...", [], options=[...]),
 ```
 
 **为什么是列表不是字符串？** 链本质就是有序列表：`GsListStrConfig` 在网页控制台给出
@@ -504,9 +517,10 @@ vip.stock.finance.sina.com.cn/quotes_service/api/json_v2.php/MoneyFlow.ssl_bkzj_
 
 ### 10.4 语义规则：源链只表达优先级，不是禁用表达
 
-1. **三级回落**：域链（`market_api_chain_{quote,kline,board,market}`）→ 全局链
+1. **三级回落**：域链（`market_api_chain_{quote,kline,board,market,exclusive}`）→ 全局链
    （`market_api_chain`）→ 内置默认链（东财→腾讯→新浪→同花顺）。域链留空用全局链；
-   全局链也留空用内置默认链。
+   全局链也留空用内置默认链。`exclusive` 组默认值是 `["东方财富"]` 而非空 ——
+   它只有一个可选值，预填即「推荐」。
 2. **链外源自动排链尾兜底**：链走完后，`_SYSTEM_ORDER`（东财→腾讯→新浪→同花顺）里没出现
    在链上的源**自动追加到链尾**。因此任何配置（空列表 / 单源 / 乱写）下四个源都在链上 ——
    把全局链配成「只留腾讯」，东财只是排到最后，而不是消失。
@@ -521,12 +535,13 @@ vip.stock.finance.sina.com.cn/quotes_service/api/json_v2.php/MoneyFlow.ssl_bkzj_
 
 ```python
 # provider_registry.py
-_IFACE_GROUPS: dict[str, str] = {          # 14 个接口 → 4 个域
+_IFACE_GROUPS: dict[str, str] = {          # 14 个接口 → 5 个域
     "quote": "quote", "quotes": "quote", "intraday": "quote",
     "kline": "kline",
-    "board": "board", "rank_list": "board", "hotmap": "board", "sector_menu": "board",
-    "breadth": "market", "market_turnover": "market", "northbound": "market",
-    "valuation_series": "market", "financial_snapshot": "market",
+    "board": "board", "rank_list": "board", "sector_menu": "board",
+    "breadth": "market", "market_turnover": "market",
+    "hotmap": "exclusive", "northbound": "exclusive",
+    "valuation_series": "exclusive", "financial_snapshot": "exclusive",
 }
 
 def build_priority_chain(reader, group=None) -> list[str]:
@@ -831,3 +846,153 @@ if row.market_cap is None or row.change_pct is None or not row.name:
   残留边界：表外代码（ETF / 新上市）仍无名；ST 新鲜度跟随 `chinese_stocks.json` 的重新
   生成节奏（维护脚本 `utils/update_stocks.py`）。东财/腾讯/新浪从各自报文带回真名，不受影响。
   实测：同花顺单源链取 `1.600340` → `*ST华幸` → 阈值 5.0%（修复前为 10%）。
+
+---
+
+## 13. 评审整改（2026-10-08）：8 条缺陷 + 配置按「有没有第二源」重切
+
+起因是一次外部逐行评审，提出 8 条缺陷与一条配置诉求（「其他家没有的内容单独成键，
+点开就能看出推荐里只有一个」）。逐条实测复现 → 修复 → 补回归，并借机跑出**全接口 ×
+全源能力矩阵**（§13.9）作为配置 `options` 的收窄依据。
+
+### 13.1 涨跌分布柱：13 档画出画布外 + 平盘被涂成上涨红（高）
+
+加入「平」档后 `BREADTH_BANDS` 从 12 档变 13 档，而渲染端两处仍按 12 档写死：
+
+| 现象 | 根因 | 修法 |
+|---|---|---|
+| 末柱右缘 873 > `div.png` 宽 850，家数标签一起被裁 | 柱间距硬编码 `dindex * 66`（12 档时 45 + 11×66 + 36 = 807 正好在内） | 末柱右缘固定 807、间距按档数自算（`breadth_bar_left`）。12 档仍逐像素等于原 66px，13 档及以上自动压缩 |
+| 平盘柱被涂成上涨红 | 配色按「第 6 根柱」对半切（`dindex <= 5`），插入「平」后它落到第 7 根 | 方向改由 `models/stats.py` 的 `BREADTH_DIRECTION` 单点给出（+1 涨 / 0 平 / -1 跌），涨跌家数合计也改由它派生 |
+
+两条**不换源也会发生**（东财正常供数同样越界/错色）。测试：`test/test_breadth_layout.py`
+（7 条，含「12 档间距不回归」与「任意档数末柱在画布内」）。
+
+### 13.2 主板拿不到名称时按普通主板放行（高）
+
+§12.4 记录的「同花顺无名称」已用本地表补名，但**表外代码**（新上市 / ETF）仍无名，
+而 `matcher._is_st("")` 返回 False → 主板阈值按 ±10% 走。容灾换源恰好是缺名最容易发生的
+时候，所以这条不能靠「补名覆盖率」兜住，得在风控入口兜：**名称缺失直接拒单**。
+
+- 实现：`matcher._missing_name_reason(code, name)`，主板（60/00）缺名 → `ok=False`，
+  reason 写明「涨跌停风控不可用」；科创/创业（±20%）、北交所（±30%）阈值与 ST 无关，不拦。
+- 只在**本来就要做涨跌停判定**时生效（没有昨收/涨跌幅时判定与名称无关）。
+- 测试：`test/test_papertrade_matcher.py` 4 条，含「同名同价、有名字则正常成交」的对照。
+
+### 13.3 空盘口行被当成 `not_found`，短路整条链（中）
+
+`not_found` 是**短路**语义（解析层共用，换源无意义）。腾讯/新浪在「符号已映射成功、
+返回行却是空占位」时也报 `not_found` —— 东财失败后，腾讯一行空占位就把新浪和同花顺一起
+挡在门外。改为 `empty`（顺延语义），「没有这只票」仍由解析层负责。
+测试：`test/market/test_empty_quote_falls_through.py`。
+
+### 13.4 休市日悄悄改走新浪成交额（中）
+
+`calculate_difference` 原来按「几号」比较日期、且**最多回退 4 天**：国庆连休 7 天时探不到
+任何交易日 → `(0, 0, None)` → adapter 判为拉取失败 → 顺延到新浪（`prev_amount=None`、
+日期口径也不同），而图上那个数**看不出是哪来的**。
+
+- 改为按**完整日期**取数据里最近的交易日：休市日照样由东财给出「上一交易日成交额 +
+  实际日期」，`prev_amount` 也在，放量/缩量不再丢。跨月（09-30 / 10-02）不再被 `.day` 比较搞错。
+- `MarketTurnover` 增加 `provider` 字段并进 `_STAMPABLE`；概览图左下角补
+  「数据来源：X | SayuStock」——成交额会在源之间顺延，数字必须能标出来源。
+- 测试：`test/market/test_turnover_calendar.py` 7 条（长假 / 短假 / 交易日 / 同时刻对比 /
+  跨月 / 单日 / 空数据）。
+
+### 13.5 `.us/.h/.kr/.a`：两层独立缺陷，只修一层仍然错（中）
+
+评审指出的是第一层，实测发现还有第二层，**两层是串联的**：
+
+1. **`for ... else` 错配**：搜索有结果但无目标市场时，回的是「第一项的 QuoteID/名称 +
+   循环变量（最后一项）的证券类型」——一份自相矛盾的三元组。改为返回 `None`，
+   并把 `priority → 可接受 SecurityTypeName` 收成 `_MARKET_SEC_TYPES` 单表。
+2. **候选拆分把后缀架空**：`_code_query_candidates("600519.us")` 会先抽出裸代码
+   `600519`，以 `priority=None` 命中 A 股并**先返回**——`.us` 根本没生效。
+   （名字式查询如 `三星电子.kr` 不受影响，所以此前没暴露。）
+   修法：带显式市场后缀时只回整串候选。
+
+测试：`test/market/test_symbol_display_and_suffix.py` 2 条（`600519.us` → None、
+`600519.h` → 三项同源的港股、无后缀主路径不变）。
+
+### 13.6 新浪概念菜单缺 `await`（中）
+
+`sina/provider.py` 的 `_sector_node` 把 `fetch_fljk_summary("class")` 的**协程对象**放进
+元组没 await，`isinstance(..., str)` 为假 → `industry_menu` 收到协程必然出错 →
+概念名永远匹配不上。当前无调用方传 `sector=`，属潜伏缺陷，一并修掉。
+
+### 13.7 时间预算：8 秒包住整条链，慢源一挂就没人接班（中）
+
+`quote_service` 的 `asyncio.wait_for(..., 8s)` 取消的是**整个** `quote()`：东财快速失败时
+8 秒内来得及试腾讯，东财**挂起**时预算被吃光、后面的源一个都不会开始 —— 而容灾恰恰只在
+那种时候才需要生效。叠加 `stock_request` 的 `ClientTimeout(total=300)`（等于没有超时）。
+
+- `eastmoney.stock_request` 300s → **20s**，与其它源一致。
+- `_dispatch` 加**每源封顶** `SOURCE_TIMEOUT_S = 25.0`（> 各源自身 20s，让源自己报错而
+  不是被取消；> 实测最慢健康调用 7.29s）。
+- 新增 `chain_deadline(seconds)`：调用方声明整链总预算后，链内按「剩余预算 / 剩余源数」
+  分片，保证每个源都轮得到。模拟盘取价用它包住 `QUOTE_TIMEOUT_S = 8.0 → 12.0`
+  （4 源 × 3s，远大于实测最慢取价 0.85s）。
+- 预算耗尽时**就地停链并回 `MarketError`**（不能让 `None` 漏给调用方）。
+- 测试：`test/market/test_provider_switch.py` 新增 3 条（慢源顺延 / 分片轮转 / 预算耗尽）。
+
+### 13.8 K 线日期窗滤空时返回未过滤的原序列（中）
+
+新浪/腾讯客户端过滤后若窗口内一根都没有，原实现 `return series` 把**未过滤**的整段返回 ——
+调用方拿到的日期范围就是错的（且 `datalen` 只够最近 N 根，窗口更早时必然触发）。
+改为 `empty` 让注册表顺延到能给这个窗口的源。
+
+### 13.9 全接口 × 全源能力矩阵（`options` 收窄的依据）
+
+对四个 adapter 逐一直接调用 18 个入口（绕过源链）：
+
+| 接口 | eastmoney | tencent | sina | ths |
+|---|---|---|---|---|
+| `quote` / `quotes` | Y | Y | Y | Y |
+| `intraday(1d)` | Y | Y | Y | **N** |
+| `intraday(5d)` | **Y** | N | N | N |
+| `kline(D1)` | Y | Y | Y | Y |
+| `board`（行业 / 概念 / 沪深A / 主要指数） | Y | **N** | Y | **N** |
+| `rank_list` | Y | **N** | Y | **N** |
+| `sector_menu`（industry / concept） | Y | **N** | Y | **N** |
+| `breadth` | Y | **N** | Y | **N** |
+| `market_turnover` | Y | **N** | Y | **N** |
+| `hotmap` | **Y** | N | N | N |
+| `northbound` | **Y** | N | N | N |
+| `valuation_series` | **Y** | N | N | N |
+| `financial_snapshot` | **Y** | N | N | N |
+
+（Y = 实现了该接口，N = 返回 `unsupported`。）注意**腾讯不支持板块/排行/菜单/涨跌家数/
+成交额**，所以 D 组只有东财 + 新浪两家。
+
+耗时实测（成功调用的最慢值）：`breadth` 7.29s（新浪全 A 扫描，最慢）、
+`board(limit=None)` 0.99s、`quote` 0.85s、`kline` 0.48s、`hotmap` 0.47s、`market_turnover` 0.05s。
+
+### 13.10 配置重切：按「有没有第二源」分 5 组
+
+`market_api_chain_board` 里混着 `hotmap`（东财独占）会让用户以为「把新浪排前面云图就能走
+新浪」；`market_api_chain_market` 同理混着北向/估值/财报。重切后：
+
+| 组 | 接口 | options |
+|---|---|---|
+| ① quote | quote / quotes / intraday | 4 源 |
+| ② kline | kline | 4 源 |
+| ③ board | board / rank_list / sector_menu | 东方财富 / 新浪财经 |
+| ④ market | breadth / market_turnover | 东方财富 / 新浪财经 |
+| **⑤ exclusive** | hotmap / northbound / valuation_series / financial_snapshot | **仅东方财富**（默认值预填，即「推荐」） |
+
+判据：**分域依据是「该接口还有没有第二个源」**。只有一个源的接口并进 ⑤，用户点开看到
+候选里只有一个，就知道其他家没有。⑤ 的功能语义是「说明」而非「控制」——填别的也不会生效
+（不支持的源会被跳过、链尾兜底仍是东财），配置描述里已如实写明。
+
+同步新增测试：`test/market/test_provider_switch.py` 的
+`test_every_routed_interface_group_has_a_config_key`（接口表新增域却没有配置键会直接红，
+防止新接口静默回落全局链）与 `test_exclusive_group_owns_the_single_source_interfaces`。
+
+### 13.11 评审提到但**不改**的两条（附判断）
+
+- **「源链关不掉任何一个源」**：这是刻意的设计（§10.4 第 2/5 条）。链只表达优先级，
+  链外源排链尾兜底，为的是兑现「任意配置下每个接口都有源」。真要禁用会与那条硬约束冲突。
+- **「`resolve()` 只用链头，四个 equity 源的解析都打东财 searchapi，searchapi 挂了则一起失败」**：
+  事实描述正确，但 searchapi 是唯一的代码↔secid 解析源（各源都用它把用户输入转成自己的符号），
+  换不了源；`resolve` 因此不参与源链配置（`_IFACE_GROUPS` 里没有它）。
+- 附带一条评审提到的取舍：**「排在前面的源口径错了，后面的源不会再试」** —— 这也是刻意的
+  （成功即返回）。口径差异已写在各组配置描述里（如 K 线的新浪不复权）。

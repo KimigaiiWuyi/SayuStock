@@ -1,9 +1,10 @@
 """权益行情供应商注册表：后台「行情API」四域源链配置驱动。
 
-- 五个源链配置（`GsListStrConfig` 列表）：全局 `market_api_chain` + 四域
-  （`_GROUP_CHAIN_CONFIG_KEYS`：盘口/分时 quote、K线 kline、板块/排行/云图
-  board、市场/资金/财务 market）。域链只作用于该域接口，留空回落全局链；
-  全局链留空用内置默认链。
+- 六个源链配置（`GsListStrConfig` 列表）：全局 `market_api_chain` + 五域
+  （`_GROUP_CHAIN_CONFIG_KEYS`：盘口/分时 quote、K线 kline、板块/排行/菜单
+  board、大盘统计/资金 market、东财独占 exclusive）。域链只作用于该域接口，
+  留空回落全局链；全局链留空用内置默认链。每个域键的 `options` 只列该域
+  真正实现了接口的源，点开控制台就能看出「有没有第二个源」。
 - 源链只表达优先级，不是禁用表达：链内源按顺序先行，链外源按系统内禀
   次序（`_SYSTEM_ORDER`：东财→腾讯→新浪→同花顺）自动排到链尾兜底。
   因此任何配置下四个源都在链上 —— 东财独占接口（云图/北向/估值/财报/
@@ -12,13 +13,19 @@
   （不支持该接口）直接跳过；其余错误（网络/解析/空数据）顺延到下一个源；
   `not_found` 短路返回（标的解析层共用，换源无意义）。全部失败才报错，
   报「优先级最高且真正出错」的那个源的错误。
+- 时间预算：每个源最多占 `SOURCE_TIMEOUT_S`；调用方可用 `chain_deadline()`
+  再声明整链总预算，链内按「剩余预算 / 剩余源数」分片。没有分片时，
+  一个挂起的源会把预算吃光，后面的源一个都轮不到。
 """
 
 from __future__ import annotations
 
+import time
 import asyncio
-from typing import Literal, Callable, cast
+from typing import Literal, Callable, Iterator, cast
 from datetime import date
+from contextlib import contextmanager
+from contextvars import ContextVar
 from collections.abc import Sequence
 
 try:
@@ -73,14 +80,19 @@ CHAIN_CONFIG_KEY = "market_api_chain"
 DEFAULT_PRIORITY: tuple[str, ...] = ("eastmoney", "tencent", "sina")
 
 # 域 → 链串配置键（域链留空回落全局链）
+# exclusive 是「东财独占」组：组内四个接口别的源都没实现（见 doc 覆盖矩阵），
+# 单列成键是为了让后台点开就能看见「只有东方财富一个可选」。
 _GROUP_CHAIN_CONFIG_KEYS: dict[str, str] = {
     "quote": "market_api_chain_quote",
     "kline": "market_api_chain_kline",
     "board": "market_api_chain_board",
     "market": "market_api_chain_market",
+    "exclusive": "market_api_chain_exclusive",
 }
 
-# 接口 → 功能域；未列出的接口（resolve 等）走全局链
+# 接口 → 功能域；未列出的接口（resolve 等）走全局链。
+# 分域依据是「该接口还有没有第二个源」：有第二源的才值得让用户调优先级，
+# 只有一个源的接口并进 exclusive，避免用户在必然失败的选择上浪费时间。
 _IFACE_GROUPS: dict[str, str] = {
     "quote": "quote",
     "quotes": "quote",
@@ -88,17 +100,54 @@ _IFACE_GROUPS: dict[str, str] = {
     "kline": "kline",
     "board": "board",
     "rank_list": "board",
-    "hotmap": "board",
     "sector_menu": "board",
     "breadth": "market",
     "market_turnover": "market",
-    "northbound": "market",
-    "valuation_series": "market",
-    "financial_snapshot": "market",
+    "hotmap": "exclusive",
+    "northbound": "exclusive",
+    "valuation_series": "exclusive",
+    "financial_snapshot": "exclusive",
 }
 
 # 系统内禀次序：链外源兜底追加用
 _SYSTEM_ORDER: tuple[str, ...] = ("eastmoney", "tencent", "sina", "ths")
+
+# 单个源在链上最多占用多少秒。东财 stock_request 是全局 ClientTimeout(total=20)，
+# 但一个"连上了却不回包"的源仍然能把整条链拖住，所以每源再封一层顶，
+# 超时即顺延到下一个源。取值要**大于**各源自身 20s 的 HTTP 超时（否则会先取消
+# 掉本该由源自己报错返回的请求），也要远大于实测健康调用的最慢值
+# （quote 0.85s / kline 0.48s / board 0.99s / hotmap 0.47s / breadth 7.29s）。
+SOURCE_TIMEOUT_S: float = 25.0
+
+# 取数总预算。调用方（如模拟盘取价）用 chain_deadline() 声明后，链上每个源按
+# 「剩余预算 / 剩余源数」分到时间片，保证慢源挂起时后面的源仍能轮到；
+# 不声明预算的调用方（大盘概览、云图等）走 SOURCE_TIMEOUT_S 每源顶格。
+_deadline: ContextVar[float | None] = ContextVar("sayustock_market_chain_deadline", default=None)
+
+
+@contextmanager
+def chain_deadline(seconds: float) -> Iterator[None]:
+    """在 with 块内声明「这条取数链总共只有 seconds 秒」。
+
+    没有它时，外层 ``asyncio.wait_for`` 取消的是整个 ``quote()``：
+    第一个源挂起就把预算吃光，后面的源一个都轮不到。
+    """
+    token = _deadline.set(time.monotonic() + seconds)
+    try:
+        yield
+    finally:
+        _deadline.reset(token)
+
+
+def _source_budget(sources_left: int) -> float:
+    """当前源可用的秒数；0 表示预算已耗尽，链应就地停止。"""
+    deadline = _deadline.get()
+    if deadline is None:
+        return SOURCE_TIMEOUT_S
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        return 0.0
+    return min(SOURCE_TIMEOUT_S, remaining / sources_left)
 
 
 def normalize_provider_id(value: object) -> str | None:
@@ -238,8 +287,16 @@ class ConfigurableEquityMarket:
         first_real_error: MarketError | None = None
         first_error: MarketError | None = None
         for i, (pid, port) in enumerate(chain):
+            budget = _source_budget(len(chain) - i)
+            if budget <= 0:
+                logger.warning(f"[SayuStock][行情API] {iface} 取数预算已耗尽，停止顺延")
+                break
             try:
-                result = await getattr(port, method)(*args, **kwargs)
+                result = await asyncio.wait_for(getattr(port, method)(*args, **kwargs), timeout=budget)
+            except asyncio.TimeoutError:
+                # 超时按 network 处理顺延：慢≠没有，后面的源还有机会
+                result = network_error(f"单源超时（>{budget:.1f}s）", provider=pid)
+                logger.warning(f"[SayuStock][行情API] {iface} 在 {PROVIDER_LABELS.get(pid, pid)} 超时，按失败顺延")
             except Exception as exc:  # noqa: BLE001 - 源内部异常转 network 错误顺延，链路尽可能交付
                 result = network_error(f"{type(exc).__name__}: {exc}", provider=pid)
                 logger.warning(
@@ -266,7 +323,16 @@ class ConfigurableEquityMarket:
                 f"（{result.code}: {result.message}），顺延 "
                 f"{PROVIDER_LABELS.get(nxt[0], nxt[0]) if nxt else '无下一源'}"
             )
-        return first_real_error or first_error
+        if first_real_error is not None:
+            return first_real_error
+        if first_error is not None:
+            return first_error
+        # 预算在动手之前就耗尽：必须回一个 MarketError，不能让 None 漏给调用方
+        return MarketError(
+            code="network",
+            message=f"{iface} 未取得数据（取数预算已耗尽）",
+            provider="registry",
+        )
 
     # -- MarketDataPort -------------------------------------------------
 

@@ -38,25 +38,38 @@ snap = await market.hotmap()
 
 1. 实现 `MarketDataPort`（可继承 `adapters._base.PartialMarketData` 只覆盖子集）。
 2. 在 `provider_registry._PROVIDER_FACTORIES` / `PROVIDER_LABELS` 注册供应商，并把 id 加进
-   `_SYSTEM_ORDER`（链尾兜底次序）；无需新增配置项——四域源链对每个接口自动生效。
+   `_SYSTEM_ORDER`（链尾兜底次序）；无需新增配置项——五域源链对每个接口自动生效。
    能力不全无需特殊处理——`unsupported` 会自动落到链上后续源。
+   若新源补齐了原先「只有一个源」的接口，记得把该源加进对应域配置的 `options`
+   （域与配置键的对应关系见 `_IFACE_GROUPS` / `_GROUP_CHAIN_CONFIG_KEYS`；
+   有测试保证每个域都有键，但 `options` 是手写的，见覆盖面矩阵 §13.9 的能力表）。
 3. **禁止**在 feature 模块解析供应商原始字段。
 
 ## 行情API 数据源优先级（后台设置「行情API」）
 
-- 网页控制台 → 插件配置 →「行情API」→ **五个源链列表**（`GsListStrConfig`）：
-  全局 `market_api_chain` + 四域 `market_api_chain_{quote,kline,board,market}`。
+- 网页控制台 → 插件配置 →「行情API」→ **六个源链列表**（`GsListStrConfig`）：
+  全局 `market_api_chain` + 五域 `market_api_chain_{quote,kline,board,market,exclusive}`。
   列表顺序即优先级；域链只作用于该域接口，留空回落全局链；全局链留空用内置默认链
   （东财→腾讯→新浪→同花顺）。
+- 每个域键的 **`options` 只列该域真正实现了接口的源**（依据是覆盖面矩阵 §13.9 的逐源实测），
+  所以「某组只有一个可选值」本身就等于「这组接口是它独占的」。`exclusive` 组
+  （云图/北向/估值/财报）就是这么一组：`options=["东方财富"]`、默认值预填 `["东方财富"]`，
+  填别的也不会生效（不支持的源会被跳过、链尾兜底仍是东财），它的作用是**说明**而非控制。
 - **链外源排链尾兜底**（不是禁用）：列表里没写的源自动按系统内禀次序
   （`_SYSTEM_ORDER`：东财→腾讯→新浪→同花顺）追加到链尾。因此任何配置下四个源都在链上，
   东财独占接口（云图/北向/估值/财报/五日分时/概念板块）永远保有兜底尝试。
 - 路由实现：`utils/market/provider_registry.py` 的 `ConfigurableEquityMarket`
-  （equity 槽位包装）。`_IFACE_GROUPS` 把 14 个接口映射到 4 个域；`resolve` 不在域内、
+  （equity 槽位包装）。`_IFACE_GROUPS` 把 14 个接口映射到 5 个域；`resolve` 不在域内、
   恒走全局链链头。配置每次调用时读取，网页控制台改完**立即热生效**。
 - 取数语义（尽可能交付）：按链逐一尝试，成功即返回；源不支持该接口（`unsupported`）
   跳过；网络/解析/空数据错误顺延下一个源；`not_found` 短路返回（解析层共用）。
   全部失败才报错，报链上第一个真实错误。
+  **空行/缺行不属于 `not_found`**：符号映射成功、只是这一行没数据时报 `empty`，照样顺延 ——
+  否则东财失败后，腾讯一行空占位就把后面的源全挡住。
+- 时间预算：每个源最多占 `SOURCE_TIMEOUT_S`（25s）。调用方可用
+  `utils.market.chain_deadline(seconds)` 声明整链总预算，链内按「剩余预算 / 剩余源数」
+  分片，保证慢源挂起时后面的源仍能轮到（模拟盘取价就是这么用的，见 `quote_service`）。
+  只在外层包一个 `asyncio.wait_for` 是不够的：那取消的是**整个** `quote()`。
 - 数据能否真正交付还取决于**唯一源的上游状态**：上游限流/停发（例如北向
   `kamt` 返回 `rc=102, data=null`）时任何配置都变不出数据——本配置系统保证的是
   「源被尝试且尽可能交付」，不是「绕过上游」。

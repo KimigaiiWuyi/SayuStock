@@ -106,10 +106,15 @@ build_default_market()  →  CompositeMarketData(
 ```
 
 **行情API 源链（`provider_registry.py`）**：equity 槽位是 `ConfigurableEquityMarket`
-包装，**五个源链列表**（`GsListStrConfig`）驱动：全局 `market_api_chain` + 四域
-`market_api_chain_{quote,kline,board,market}`（`_IFACE_GROUPS` 把 14 接口映射到域；
+包装，**六个源链列表**（`GsListStrConfig`）驱动：全局 `market_api_chain` + 五域
+`market_api_chain_{quote,kline,board,market,exclusive}`（`_IFACE_GROUPS` 把 14 接口映射到域；
 `resolve` 不在域内、恒走全局链链头）：
 
+- 分域判据是「**该接口还有没有第二个源**」，所以每组的 `options` 只列真正实现了该组接口的源：
+  ① quote（4 源）、② kline（4 源）、③ board=东财+新浪、④ market=东财+新浪、
+  ⑤ **exclusive（仅东财：云图/北向/估值/财报）**。某组只有一个可选值 = 该组是它独占的，
+  用户点开控制台就能看出来；`exclusive` 默认值预填 `["东方财富"]`，作用是**说明**而非控制
+  （填别的也不会生效：不支持的源被跳过、链尾兜底仍是东财）。
 - 列表顺序即优先级；域链留空回落全局链，全局链留空用内置默认链（东财→腾讯→新浪→同花顺）。
 - **链外源排链尾兜底**（不是禁用）：没写进列表的源自动按 `_SYSTEM_ORDER`
   （东财→腾讯→新浪→同花顺）追加到链尾——任何配置下四个源都在链上，东财独占接口
@@ -119,6 +124,11 @@ build_default_market()  →  CompositeMarketData(
   源内部**抛异常**（如东财瞬断时连接错误穿透）转 network 错误顺延，不炸链；
   `not_found` 短路返回（标的解析层共用，换源无意义）。全部失败才报错，
   报链上第一个真实错误。
+  **空行/缺行不属于 `not_found`**：符号映射成功、只是这行没数据时报 `empty` 照常顺延。
+- 时间预算：每源封顶 `SOURCE_TIMEOUT_S`（25s，> 各源自身 20s HTTP 超时，让源自己报错而不被
+  取消）。调用方可用 `utils.market.chain_deadline(seconds)` 声明整链总预算，链内按
+  「剩余预算 / 剩余源数」分片——**只在外层包 `asyncio.wait_for` 会取消整个 `quote()`**，
+  第一个源挂起就把预算吃光、后面的源一个都轮不到。模拟盘取价就这么用（`quote_service`）。
 - 解析层（`get_code_id` → 东财 searchapi）失败 ≠ 标的不存在：`get_code_id_strict`
   在网络/HTTP 失败时抛 `ResolveLayerError`（HTTP 200 无结果才是真不存在）；
   东财/腾讯/新浪适配器把它转 **network 错误顺延**，避免误报 not_found 短路
@@ -218,8 +228,10 @@ feature 模块不应再直接 `stock_request` 然后读 `f*`。
 2. 所有供应商 JSON 解析写在该 adapter 内，输出标准模型。  
 3. 在 `provider_registry.py` 的 `_PROVIDER_FACTORIES` / `_PROVIDER_ALIASES` / `PROVIDER_LABELS` /
    `_SYSTEM_ORDER` 注册（`_SYSTEM_ORDER` 决定它排在链外兜底的位置）；
-   无需新增配置项——四域源链对每个接口自动生效
-   （能力不全的接口无需特殊处理，链式取数会自动跳过 unsupported 并顺延）。  
+   无需新增配置项——五域源链对每个接口自动生效
+   （能力不全的接口无需特殊处理，链式取数会自动跳过 unsupported 并顺延）。
+   若它补齐了原先单源的接口（如板块能力给腾讯），要把该源加进对应域配置的 `options`
+   ——`options` 是手写的，能力表见 `doc/provider_coverage_matrix.md` §13.9。  
 4. 补 `test/market/` 解析与路由单测。  
 5. 不改 feature 模块字段假设。
 

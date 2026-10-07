@@ -13,18 +13,49 @@ from gsuid_core.ai_core.trigger_bridge import ai_return
 from ..utils.image import get_footer
 from ..utils.utils import number_to_chinese
 from ..utils.market import (
-    BREADTH_BANDS,
+    BREADTH_DIRECTION,
     BreadthBar,
     DisplayItem,
     from_quote,
     get_market,
     breadth_counts,
+    breadth_up_down,
     is_market_error,
     board_rows_to_items,
 )
+from ..utils.market.display import source_label
 from ..utils.stock.request_utils import get_image_from_em
 
 TEXT_PATH = Path(__file__).parent / "texture2d"
+
+# 概览图涨跌分布柱几何（div.png 内坐标系，画布 850×500）：
+# 首柱左缘 / 柱宽固定，末柱右缘恒定，柱间距按实际档位数自算。
+# 12 档时间距正好是原来的 66px（45 + 11×66 + 36 = 807），分档增删后
+# 也不会再把最后一根柱连同家数标签画出画布（13 档时原实现右缘到 873）。
+_BREADTH_BAR_LEFT = 45
+_BREADTH_BAR_WIDTH = 36
+_BREADTH_BAR_RIGHT = 807
+
+# 方向 → 柱色：涨红、跌绿、平灰。方向由 BREADTH_DIRECTION 单点给出，
+# 不再按「第几根柱」对半切（那是 12 档时代的写法，插入「平」之后会错色）。
+_BREADTH_DIRECTION_COLORS: Dict[int, Tuple[int, int, int]] = {
+    1: (187, 26, 26),
+    0: (150, 150, 150),
+    -1: (23, 199, 30),
+}
+_BREADTH_BAR_COLORS: Dict[str, Tuple[int, int, int]] = {
+    label: _BREADTH_DIRECTION_COLORS[direction] for label, direction in BREADTH_DIRECTION.items()
+}
+
+
+def breadth_bar_left(index: int, total: int) -> int:
+    """分布柱左缘 x：index 从 0 起（0 = 跌停侧），末柱右缘恒为 _BREADTH_BAR_RIGHT。"""
+    if total < 2:
+        return _BREADTH_BAR_LEFT
+    span = _BREADTH_BAR_RIGHT - _BREADTH_BAR_WIDTH - _BREADTH_BAR_LEFT
+    return round(_BREADTH_BAR_LEFT + index * span / (total - 1))
+
+
 DIFF_MAP = {
     3.3: "1",
     2.7: "2",
@@ -194,11 +225,9 @@ async def draw_info_img(is_save: bool = False) -> str | bytes:
 
     if not isinstance(bar_r, BreadthBar):
         return "涨跌分布数据异常"
-    counts = breadth_counts(bar_r)
-    # 档位顺序即 BREADTH_BANDS 的「涨停→跌停」，渲染端按 values() 顺序画分布条
-    diff_bar: Dict[str, int] = {label: counts.get(label, 0) for label in BREADTH_BANDS}
-    up_value = sum(counts.get(k, 0) for k in ("0~1", "1~2", "2~3", "3~5", "5~10", "涨停"))
-    down_value = sum(counts.get(k, 0) for k in ("0~-1", "-1~-2", "-2~-3", "-3~-5", "-5~-10", "跌停"))
+    # breadth_counts 已按 BREADTH_BANDS 补全并按该序输出，渲染端直接画
+    diff_bar: Dict[str, int] = dict(breadth_counts(bar_r))
+    up_value, down_value = breadth_up_down(diff_bar)
     _ai_return_market_overview(data_zs_items, data_hy_z, data_hy_f, up_value, down_value, diff_bar)
 
     h0 = 90
@@ -294,22 +323,18 @@ async def draw_info_img(is_save: bool = False) -> str | bytes:
         ss_font(24),
         "mm",
     )
-    for dindex, ij_num in enumerate(diff_bar.values().__reversed__()):
-        if dindex <= 5:
-            color = (23, 199, 30)
-        else:
-            color = (187, 26, 26)
-
+    bands = list(diff_bar.items())[::-1]
+    for dindex, (band, ij_num) in enumerate(bands):
         if ij_num == 0:
             continue
-        offset = dindex * 66
+        left = breadth_bar_left(dindex, len(bands))
         lenth = int(max_h * ij_num / max_num)
         div_draw.rectangle(
-            (45 + offset, 413 - lenth, 81 + offset, 413),
-            color,
+            (left, 413 - lenth, left + _BREADTH_BAR_WIDTH, 413),
+            _BREADTH_BAR_COLORS[band],
         )
         div_draw.text(
-            (66 + offset, 413 - lenth - 25),
+            (left + _BREADTH_BAR_WIDTH // 2, 413 - lenth - 25),
             f"{ij_num}",
             (255, 255, 255),
             ss_font(24),
@@ -401,6 +426,16 @@ async def draw_info_img(is_save: bool = False) -> str | bytes:
 
     footer = get_footer()
     img.paste(footer, (425, h - 50), footer)
+
+    # 成交额会在源之间顺延（休市日尤其容易换源），数字必须能标出实际来源：
+    # 左下角空位，与其它图表「数据来源：X | SayuStock」同一口径。
+    img_draw.text(
+        (20, h - 26),
+        f"数据来源：{source_label(turnover.provider)} | SayuStock",
+        (150, 150, 150),
+        ss_font(24),
+        "lm",
+    )
 
     res = await convert_img(img)
     return res

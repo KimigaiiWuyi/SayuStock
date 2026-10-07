@@ -214,6 +214,93 @@ def test_match_order_invalid_price():
     print("[OK] 非法价格被拒绝")
 
 
+def test_main_board_missing_name_is_rejected():
+    """主板拿不到名称 → 拒单。
+
+    名称是判 ST 的唯一依据，而主板 ST(±5%) 与普通主板(±10%) 差一倍。
+    容灾换源时名称会缺失（同花顺快照不带名称、本地表又没有这只票），
+    此时按普通主板放行＝把风控放宽一倍，正好在最需要的时候失守。
+    """
+    res = match_order(
+        "buy",
+        "600519",
+        100,
+        100.0,
+        cash_available=1_000_000,
+        position_qty=0,
+        last_close=100.0,
+        change_pct=0.0,
+        name=None,
+    )
+    assert res.ok is False
+    assert "未取得证券名称" in res.reason
+    # 同名同价但名称在场 → 正常成交（证明拒的是「缺名」而不是价格/风控）
+    ok = match_order(
+        "buy",
+        "600519",
+        100,
+        100.0,
+        cash_available=1_000_000,
+        position_qty=0,
+        last_close=100.0,
+        change_pct=0.0,
+        name="贵州茅台",
+    )
+    assert ok.ok is True
+    print("[OK] 主板缺名拒单，有名字正常放行")
+
+
+def test_main_board_missing_name_never_falls_back_to_ten_percent():
+    """缺名时不能按普通主板 ±10% 放行——那样 +9.5% 的 ST 会被放过去。"""
+    res = match_order(
+        "buy",
+        "600000",
+        100,
+        109.5,
+        cash_available=1_000_000,
+        position_qty=0,
+        last_close=100.0,
+        change_pct=9.5,
+        name=None,
+    )
+    assert res.ok is False
+    assert "未取得证券名称" in res.reason
+
+
+def test_star_and_bse_boards_tolerate_missing_name():
+    """科创/创业(±20%)、北交所(±30%) 阈值与 ST 无关，缺名不该拦。"""
+    star = match_order(
+        "buy",
+        "688111",
+        100,
+        110.0,
+        cash_available=1_000_000,
+        position_qty=0,
+        last_close=100.0,
+        change_pct=10.0,
+        name=None,
+    )
+    assert star.ok is True
+    bse = match_order(
+        "buy",
+        "830799",
+        100,
+        110.0,
+        cash_available=1_000_000,
+        position_qty=0,
+        last_close=100.0,
+        change_pct=10.0,
+        name=None,
+    )
+    assert bse.ok is True
+
+
+def test_missing_name_without_price_reference_is_not_blocked():
+    """没有昨收/涨跌幅时根本不走涨跌停判定，缺名也不拦（判定与名称无关）。"""
+    res = match_order("buy", "600519", 100, 100.0, cash_available=1_000_000, position_qty=0)
+    assert res.ok is True
+
+
 def test_calc_realized_pnl_profit():
     """实现盈亏：盈利"""
     pnl = calc_realized_pnl(avg_cost=100.0, sell_qty=100, sell_price=110.0, fee=10.0)
