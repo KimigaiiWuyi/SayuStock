@@ -71,9 +71,10 @@ description: >
 
 - **GsCore 插件，不是独立 Bot**：靠 Core 的 `Plugins` / `SV` 注册触发器；前缀默认 `a` / `股票`（见 `SayuStock/__init__.py`）。
 - **行情只走 `get_market()`**：业务侧读 `Quote` / `IntradaySeries` / `KlineSeries` / `BoardSnapshot`，**禁止**解析东财 `f*` 或依赖 `compat` 编码。
-- **行情API 每源优先级**：equity 槽位为 `ConfigurableEquityMarket`，后台「行情API」每源一个
-  0-100 优先级数字（0=禁用，平局按默认序 东财→腾讯→新浪→同花顺），按优先级逐一尝试、
-  失败/不支持自动顺延、尽可能交付；详见 [三](./references/03-market-data-port.md)。
+- **行情API 源链**：equity 槽位为 `ConfigurableEquityMarket`，后台「行情API」5 个
+  `GsListStrConfig` 源链（全局 `market_api_chain` + 四域 `_quote`/`_kline`/`_board`/`_market`；
+  列表顺序即优先级），失败/不支持自动顺延、尽可能交付。**源链不是禁用表达**：链外源自动排
+  链尾兜底，任何配置下 14 接口都有源可用；详见 [三](./references/03-market-data-port.md)。
 - **供应商字段只在 adapter 内解析**：`utils/market/adapters/eastmoney/parse_*.py` 等是唯一合法解析点。
 - **有图必有文字**：`ai_return(...)` 必须在**图片缓存判断之前**调用；部分模型看不到图，文字是唯一输入。
 - **指标单源**：图表与 AI 读数共用 `utils/indicators.py`（通达信/东财口径，勿改用 mplchart 西方 MACD/RSI）。

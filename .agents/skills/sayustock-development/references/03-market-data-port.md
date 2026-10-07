@@ -105,32 +105,34 @@ build_default_market()  →  CompositeMarketData(
 )
 ```
 
-**行情API 优先级链（`provider_registry.py`）**：equity 槽位是 `ConfigurableEquityMarket`
-包装，所有接口共用一套全局优先级：
+**行情API 源链（`provider_registry.py`）**：equity 槽位是 `ConfigurableEquityMarket`
+包装，**五个源链列表**（`GsListStrConfig`）驱动：全局 `market_api_chain` + 四域
+`market_api_chain_{quote,kline,board,market}`（`_IFACE_GROUPS` 把 14 接口映射到域；
+`resolve` 不在域内、恒走全局链链头）：
 
-- 每源一个整数配置 `market_api_priority_<id>`（0-100，数字越大越先尝试，0=禁用），
-  数字相同按各源系统内禀序号 `_PROVIDER_RANKS`（东财9/腾讯8/新浪7/同花顺6，大者先）裁决；
-  出厂默认 40/30/20/10。旧版 `market_api_priority` 链串在装配时一次性迁移
-  （`migrate_legacy_priority_config`，`parse_priority_chain` 仅迁移用）。
+- 列表顺序即优先级；域链留空回落全局链，全局链留空用内置默认链（东财→腾讯→新浪→同花顺）。
+- **链外源排链尾兜底**（不是禁用）：没写进列表的源自动按 `_SYSTEM_ORDER`
+  （东财→腾讯→新浪→同花顺）追加到链尾——任何配置下四个源都在链上，东财独占接口
+  （云图/北向/估值/财报/五日分时/概念板块）永远保有兜底尝试。
 - 取数语义（尽可能交付）：按链逐一尝试，**成功即返回**；源 `unsupported`
   （不支持该接口，如腾讯无板块）**跳过**；网络/解析/空数据错误**顺延下一个源**；
   源内部**抛异常**（如东财瞬断时连接错误穿透）转 network 错误顺延，不炸链；
   `not_found` 短路返回（标的解析层共用，换源无意义）。全部失败才报错，
-  报「优先级最高且真正出错」的源的错误。
+  报链上第一个真实错误。
 - 解析层（`get_code_id` → 东财 searchapi）失败 ≠ 标的不存在：`get_code_id_strict`
   在网络/HTTP 失败时抛 `ResolveLayerError`（HTTP 200 无结果才是真不存在）；
   东财/腾讯/新浪适配器把它转 **network 错误顺延**，避免误报 not_found 短路
   （用户会对真实存在的股票看到「不存在该股票」）。存量 `get_code_id` 契约
   不变（失败仍返回 None）；端口 `resolve()` 用 `resolve_em_symbol_safe` 不抛。
-- 链里没有东方财富时自动把东财补到链尾兜底（云图/北向/估值/财报等东财独占接口
-  不因换源失效）。
+- 边界：配置保证「源被尝试且尽可能交付」，不保证「唯一源上游限流/停发时仍有数据」
+  （例：北向 `kamt` 返回 `rc=102, data=null` 属上游停发；东财 push2 域
+  连接断开时 `stock_request` 返回自造码 `-400016`）。
 - 配置**每次调用时读取**（`STOCK_CONFIG.get_config`），网页控制台改完立即热生效；
   供应商实例按 id 缓存。
 - `resolve` 走链头（各源 resolve 语义一致：`provider_symbol` 恒为东财 secid，
   `150.*` 判场外基金依赖此约定）。
 - 新源接入：`_PROVIDER_FACTORIES` 加工厂 + `_PROVIDER_ALIASES`/`PROVIDER_LABELS`
-  加名称 + `_PROVIDER_RANKS` 定内禀序号 + `config_default.py` 加
-  `market_api_priority_<id>` 整数配置。
+  加名称 + `_SYSTEM_ORDER` 定兜底次序（无需新增配置项）。
 
 `CompositeMarketData._route(query)`：
 
@@ -215,7 +217,8 @@ feature 模块不应再直接 `stock_request` 然后读 `f*`。
 1. 新建 `adapters/<name>/provider.py`，实现 `MarketDataPort`（可继承 `PartialMarketData` 只覆盖子集）。  
 2. 所有供应商 JSON 解析写在该 adapter 内，输出标准模型。  
 3. 在 `provider_registry.py` 的 `_PROVIDER_FACTORIES` / `_PROVIDER_ALIASES` / `PROVIDER_LABELS` /
-   `_PROVIDER_RANKS` 注册，并在 `config_default.py` 加 `market_api_priority_<id>` 整数配置
+   `_SYSTEM_ORDER` 注册（`_SYSTEM_ORDER` 决定它排在链外兜底的位置）；
+   无需新增配置项——四域源链对每个接口自动生效
    （能力不全的接口无需特殊处理，链式取数会自动跳过 unsupported 并顺延）。  
 4. 补 `test/market/` 解析与路由单测。  
 5. 不改 feature 模块字段假设。

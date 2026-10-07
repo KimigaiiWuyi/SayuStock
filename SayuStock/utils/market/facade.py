@@ -17,7 +17,7 @@ from .models import (
     NorthboundFlow,
     FinancialSnapshot,
 )
-from .provider_registry import ConfigurableEquityMarket, migrate_legacy_priority_config
+from .provider_registry import ConfigurableEquityMarket
 from .adapters.composite import CompositeMarketData
 from .adapters.okx.provider import OkxMarketData
 from .adapters.vix.provider import VixMarketData
@@ -25,8 +25,6 @@ from .adapters.tiantian.provider import TiantianFundMarketData
 
 
 def build_default_market() -> MarketDataPort:
-    # 旧 market_api_priority 链串 → 每源优先级数字（一次性，幂等）
-    migrate_legacy_priority_config()
     return CompositeMarketData(
         equity=ConfigurableEquityMarket(),
         crypto=OkxMarketData(),

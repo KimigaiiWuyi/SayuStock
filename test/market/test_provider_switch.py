@@ -1,11 +1,11 @@
-"""行情API 每源优先级数字：链构建 / 平局 / 禁用 / 迁移 / 顺延语义（不打真网）。"""
+"""行情API 四域源链：链构建 / 域回落 / 链外兜底 / 顺延语义（不打真网）。"""
 
 from __future__ import annotations
 
 import asyncio
 from typing import Literal
 from datetime import date
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 
 import pytest
 
@@ -31,7 +31,6 @@ from SayuStock.utils.market.provider_registry import (
     build_priority_chain,
     parse_priority_chain,
     normalize_provider_id,
-    legacy_chain_to_numbers,
 )
 
 
@@ -186,26 +185,31 @@ def stub_registry(monkeypatch: pytest.MonkeyPatch):
     return {"eastmoney": em, "sina": sina, "tencent": tencent, "ths": ths}
 
 
-def _market(cfg: dict[str, str]) -> ConfigurableEquityMarket:
-    return ConfigurableEquityMarket(config_reader=lambda key, fallback: cfg.get(key, fallback))
+def _reader(cfg: dict[str, object]) -> Callable[[str, object], object]:
+    """配置字典 → config_reader 形状（缺键回退 fallback）。"""
+    return lambda key, fallback: cfg.get(key, fallback)
 
 
-# -- 旧链串解析（迁移依赖） --------------------------------------------------
+def _market(cfg: dict[str, object]) -> ConfigurableEquityMarket:
+    return ConfigurableEquityMarket(config_reader=_reader(cfg))
 
 
-def test_parse_priority_chain_separators_and_aliases() -> None:
-    # 旧下拉默认值（箭头）
-    assert parse_priority_chain("东方财富 → 腾讯财经 → 新浪财经") == ["eastmoney", "tencent", "sina"]
-    # 英文逗号 / 中文逗号 / 大于号 / 简称 / 裸 id 混用
-    assert parse_priority_chain("东财,腾讯,新浪") == ["eastmoney", "tencent", "sina"]
-    assert parse_priority_chain("tencent，sina>eastmoney") == ["tencent", "sina", "eastmoney"]
+# -- 源链解析（列表配置；别名 / 去重 / 未知项） ------------------------------
+
+
+def test_parse_priority_chain_list_and_aliases() -> None:
+    # 展示名 / 简称 / 裸 id 混用
+    assert parse_priority_chain(["东方财富", "腾讯财经", "新浪财经"]) == ["eastmoney", "tencent", "sina"]
+    assert parse_priority_chain(["东财", "腾讯", "新浪"]) == ["eastmoney", "tencent", "sina"]
+    assert parse_priority_chain(["tencent", "sina", "eastmoney"]) == ["tencent", "sina", "eastmoney"]
     # 去重保序
-    assert parse_priority_chain("新浪,新浪,东财,东财") == ["sina", "eastmoney"]
-    # 未知片段忽略
-    assert parse_priority_chain("东方财富,不认识,腾讯") == ["eastmoney", "tencent"]
-    # 空值
-    assert parse_priority_chain("") == []
+    assert parse_priority_chain(["新浪", "新浪", "东财", "东财"]) == ["sina", "eastmoney"]
+    # 未知项与空项忽略
+    assert parse_priority_chain(["东方财富", "不认识", "腾讯", ""]) == ["eastmoney", "tencent"]
+    # 空值 / 非列表一律忽略（配置类型由 Core 的 GsListStrConfig 保证）
+    assert parse_priority_chain([]) == []
     assert parse_priority_chain(None) == []
+    assert parse_priority_chain("东财→腾讯") == []
 
 
 def test_normalize_provider_id() -> None:
@@ -221,95 +225,45 @@ def test_normalize_provider_id() -> None:
     assert PROVIDER_LABELS["ths"] == "同花顺"
 
 
-# -- 每源优先级数字 → 调用链 ------------------------------------------------
+# -- 源链构建：域链 / 全局链 / 默认链 + 链外兜底 ------------------------------
 
 
 def test_build_priority_chain_defaults() -> None:
-    # 无配置 → 出厂链 = 系统默认顺序（东财→腾讯→新浪→同花顺）
+    # 无任何配置 → 出厂链 = 系统默认顺序（东财→腾讯→新浪→同花顺）
     assert build_priority_chain(lambda key, fallback: fallback) == ["eastmoney", "tencent", "sina", "ths"]
-    assert build_priority_chain(lambda key, fallback: "") == ["eastmoney", "tencent", "sina", "ths"]
+    assert build_priority_chain(_reader({})) == ["eastmoney", "tencent", "sina", "ths"]
 
 
-def test_build_priority_chain_custom_numbers() -> None:
-    # 腾讯拉到 50 → 链头腾讯
-    cfg = {"market_api_priority_tencent": "50"}
-    assert build_priority_chain(lambda key, fallback: cfg.get(key, fallback)) == [
-        "tencent",
-        "eastmoney",
-        "sina",
-        "ths",
-    ]
-    # 同花顺拉到 90、新浪 80 → 同花顺、新浪、东财、腾讯
-    cfg = {"market_api_priority_ths": "90", "market_api_priority_sina": "80"}
-    assert build_priority_chain(lambda key, fallback: cfg.get(key, fallback)) == [
-        "ths",
-        "sina",
-        "eastmoney",
-        "tencent",
-    ]
+def test_build_priority_chain_global_and_outsiders_tail() -> None:
+    # 全局链只写两个源：链内保序，链外（东财/同花顺）按内禀次序排链尾兜底
+    cfg: dict[str, object] = {"market_api_chain": ["腾讯财经", "新浪财经"]}
+    assert build_priority_chain(_reader(cfg)) == ["tencent", "sina", "eastmoney", "ths"]
+    # 别名与裸 id 同样生效
+    cfg = {"market_api_chain": ["sina", "tencent"]}
+    assert build_priority_chain(_reader(cfg)) == ["sina", "tencent", "eastmoney", "ths"]
 
 
-def test_build_priority_chain_tie_uses_default_order() -> None:
-    # 全部 25：数字相同 → 按系统默认顺序（东财→腾讯→新浪→同花顺）裁决
-    cfg = {
-        "market_api_priority_eastmoney": "25",
-        "market_api_priority_tencent": "25",
-        "market_api_priority_sina": "25",
-        "market_api_priority_ths": "25",
+def test_build_priority_chain_group_overrides_and_falls_back() -> None:
+    cfg: dict[str, object] = {
+        "market_api_chain": ["东方财富"],
+        "market_api_chain_quote": ["新浪财经"],
     }
-    assert build_priority_chain(lambda key, fallback: cfg.get(key, fallback)) == [
-        "eastmoney",
-        "tencent",
-        "sina",
-        "ths",
-    ]
+    # 域链有值 → 用域链
+    assert build_priority_chain(_reader(cfg), "quote") == ["sina", "eastmoney", "tencent", "ths"]
+    # 域链留空 → 回落全局链
+    assert build_priority_chain(_reader(cfg), "kline") == ["eastmoney", "tencent", "sina", "ths"]
+    # 显式空列表同样回落全局链
+    cfg = {"market_api_chain": ["腾讯财经"], "market_api_chain_quote": []}
+    assert build_priority_chain(_reader(cfg), "quote") == ["tencent", "eastmoney", "sina", "ths"]
 
 
-def test_build_priority_chain_zero_disables() -> None:
-    # 0 = 禁用：东财禁用后不再自动补链尾（独占接口随之无兜底）
-    cfg = {"market_api_priority_eastmoney": "0"}
-    assert build_priority_chain(lambda key, fallback: cfg.get(key, fallback)) == ["tencent", "sina", "ths"]
-    # 全部禁用 → 保底东财，避免行情整体瘫痪
-    cfg = {
-        "market_api_priority_eastmoney": "0",
-        "market_api_priority_tencent": "0",
-        "market_api_priority_sina": "0",
-        "market_api_priority_ths": "0",
-    }
-    assert build_priority_chain(lambda key, fallback: cfg.get(key, fallback)) == ["eastmoney"]
-
-
-def test_build_priority_chain_clamps_and_invalid() -> None:
-    # 越界夹到 0-100：150→100 仍最高；-5→0 禁用
-    cfg = {"market_api_priority_sina": "150", "market_api_priority_ths": "-5"}
-    chain = build_priority_chain(lambda key, fallback: cfg.get(key, fallback))
-    assert chain == ["sina", "eastmoney", "tencent"]
-    # 非法值 → 回该源出厂默认
-    cfg = {"market_api_priority_eastmoney": "乱写的"}
-    assert build_priority_chain(lambda key, fallback: cfg.get(key, fallback)) == [
-        "eastmoney",
-        "tencent",
-        "sina",
-        "ths",
-    ]
-
-
-# -- 旧链串 → 数字迁移 ------------------------------------------------------
-
-
-def test_legacy_chain_to_numbers() -> None:
-    # 默认链 → 出厂数字
-    assert legacy_chain_to_numbers(["eastmoney", "tencent", "sina"]) == {
-        "eastmoney": 40,
-        "tencent": 30,
-        "sina": 20,
-    }
-    # 链里没东财：先按旧语义补链尾，再按位置转数字
-    assert legacy_chain_to_numbers(["tencent", "sina"]) == {"tencent": 40, "sina": 30, "eastmoney": 20}
-    # 链外旧源 = 0（禁用，旧语义里链外源不参与）
-    assert legacy_chain_to_numbers(["sina", "eastmoney"]) == {"sina": 40, "eastmoney": 30, "tencent": 0}
-    assert legacy_chain_to_numbers(["eastmoney"]) == {"eastmoney": 40, "tencent": 0, "sina": 0}
-    # 同花顺不在旧体系，迁移结果不含 ths（保持出厂默认）
+def test_build_priority_chain_invalid_ignored_with_backstop() -> None:
+    # 全是无法识别的项：等价于没配 → 默认链；四个源一个不少
+    cfg: dict[str, object] = {"market_api_chain": ["乱写的", "不存在"]}
+    assert build_priority_chain(_reader(cfg)) == ["eastmoney", "tencent", "sina", "ths"]
+    # 单源链：其余三源自动兜底补入，任何配置下都不缺源
+    cfg = {"market_api_chain": ["同花顺"]}
+    assert build_priority_chain(_reader(cfg)) == ["ths", "eastmoney", "tencent", "sina"]
 
 
 # -- 路由语义 ---------------------------------------------------------------
@@ -331,7 +285,7 @@ def test_default_chain_routes_to_eastmoney_first(stub_registry) -> None:
 
 def test_custom_priority_order(stub_registry) -> None:
     async def _run() -> None:
-        m = _market({"market_api_priority_tencent": "50"})
+        m = _market({"market_api_chain": ["腾讯财经"]})
         q = await m.quote("600519")
         assert isinstance(q, Quote)
         assert q.symbol.name == "tencent:quote"
@@ -343,10 +297,24 @@ def test_custom_priority_order(stub_registry) -> None:
     asyncio.run(_run())
 
 
+def test_group_chain_isolated_from_global(stub_registry) -> None:
+    async def _run() -> None:
+        # 只配了盘口域链 → quote 走新浪；kline 域未配 → 仍走全局默认链（东财）
+        m = _market({"market_api_chain_quote": ["新浪财经"]})
+        q = await m.quote("600519")
+        assert isinstance(q, Quote)
+        assert q.symbol.name == "sina:quote"
+        kl = await m.kline("600519", KlinePeriod.D1)
+        assert kl == "eastmoney:kline"
+        assert "kline" in stub_registry["eastmoney"].calls
+
+    asyncio.run(_run())
+
+
 def test_unsupported_source_skipped(stub_registry) -> None:
     async def _run() -> None:
         # 腾讯排第一但不支持 board → 跳过（不算失败），东财承接
-        m = _market({"market_api_priority_tencent": "50"})
+        m = _market({"market_api_chain_board": ["腾讯财经"]})
         board = await m.board(BoardKind.A_SHARE)
         assert board == "eastmoney:board"
         assert "board" in stub_registry["tencent"].calls
@@ -426,26 +394,26 @@ def test_provider_exception_falls_through(stub_registry) -> None:
     asyncio.run(_run())
 
 
-def test_disabled_eastmoney_not_appended(stub_registry) -> None:
+def test_out_of_chain_eastmoney_still_backstops(stub_registry) -> None:
     async def _run() -> None:
-        # 东财=0（禁用）：独占接口不再自动补链尾兜底 → 链上源全部 unsupported 后报错
-        m = _market({"market_api_priority_eastmoney": "0"})
+        # 市场域链不含东财：北向（三源皆不支持）由链尾兜底的东财接住，
+        # 而不是报「northbound 无源可用」—— 这是「任何配置下全功能可用」的核心保证
+        m = _market({"market_api_chain_market": ["腾讯财经", "新浪财经", "同花顺"]})
         nb = await m.northbound()
-        assert is_market_error(nb)
-        assert nb.provider == "tencent"  # 链头腾讯的 unsupported
+        assert nb == "eastmoney:northbound"
         assert "northbound" in stub_registry["tencent"].calls
-        assert stub_registry["eastmoney"].calls == []
-        # 普通接口照常由腾讯承接
+        assert "northbound" in stub_registry["eastmoney"].calls
+        # 域隔离：其余域不受影响，未配域链的 quote 走全局默认链（东财）
         q = await m.quote("600519")
         assert isinstance(q, Quote)
-        assert q.symbol.name == "tencent:quote"
+        assert q.symbol.name == "eastmoney:quote"
 
     asyncio.run(_run())
 
 
 def test_quotes_follow_chain(stub_registry) -> None:
     async def _run() -> None:
-        m = _market({"market_api_priority_sina": "60"})
+        m = _market({"market_api_chain_quote": ["新浪财经"]})
         results = await m.quotes(["600519", "000001"])
         first = results[0]
         assert isinstance(first, Quote)
@@ -457,10 +425,16 @@ def test_quotes_follow_chain(stub_registry) -> None:
 
 def test_resolve_uses_chain_head(stub_registry) -> None:
     async def _run() -> None:
-        m = _market({"market_api_priority_tencent": "50"})
+        # resolve 走全局链链头（不配域链）
+        m = _market({"market_api_chain": ["腾讯财经"]})
         ref = await m.resolve("600519")
         assert ref is not None
         assert ref.exchange == "tencent"
+        # 只配域链不影响 resolve：仍走全局默认链头（东财）
+        m2 = _market({"market_api_chain_quote": ["新浪财经"]})
+        ref2 = await m2.resolve("600519")
+        assert ref2 is not None
+        assert ref2.exchange == "eastmoney"
 
     asyncio.run(_run())
 

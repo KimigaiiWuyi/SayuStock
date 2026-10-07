@@ -1,20 +1,21 @@
-"""权益行情供应商注册表：后台「行情API」每源优先级数字驱动。
+"""权益行情供应商注册表：后台「行情API」四域源链配置驱动。
 
-- 每源一个 `market_api_priority_<id>` 整数配置（0-100，数字越大越先尝试；
-  0=禁用该源）。数字相同时按各源系统内禀序号（`_PROVIDER_RANKS`，
-  东财9/腾讯8/新浪7/同花顺6，大者先）裁决。
+- 五个源链配置（`GsListStrConfig` 列表）：全局 `market_api_chain` + 四域
+  （`_GROUP_CHAIN_CONFIG_KEYS`：盘口/分时 quote、K线 kline、板块/排行/云图
+  board、市场/资金/财务 market）。域链只作用于该域接口，留空回落全局链；
+  全局链留空用内置默认链。
+- 源链只表达优先级，不是禁用表达：链内源按顺序先行，链外源按系统内禀
+  次序（`_SYSTEM_ORDER`：东财→腾讯→新浪→同花顺）自动排到链尾兜底。
+  因此任何配置下四个源都在链上 —— 东财独占接口（云图/北向/估值/财报/
+  五日分时/概念板块）永远不会被配置饿死。
 - 取数语义（尽可能交付）：按链逐一尝试，成功即返回；源返回 `unsupported`
   （不支持该接口）直接跳过；其余错误（网络/解析/空数据）顺延到下一个源；
   `not_found` 短路返回（标的解析层共用，换源无意义）。全部失败才报错，
   报「优先级最高且真正出错」的那个源的错误。
-- 旧版 `market_api_priority` 链串配置在装配时一次性迁移为每源数字
-  （`migrate_legacy_priority_config`）；东财被显式禁用后不再自动补链尾
-  （云图/北向/估值/财报等东财独占接口随之为无兜底，属用户明示行为）。
 """
 
 from __future__ import annotations
 
-import re
 import asyncio
 from typing import Literal, Callable, cast
 from datetime import date
@@ -52,7 +53,7 @@ PROVIDER_LABELS: dict[str, str] = {
     "ths": "同花顺",
 }
 
-# 选单值/手写值 → 供应商 id（含常用简称）；旧链串迁移仍走这套别名
+# 选单值/手写值 → 供应商 id（含常用简称）
 _PROVIDER_ALIASES: dict[str, str] = {
     "东方财富": "eastmoney",
     "东财": "eastmoney",
@@ -67,33 +68,37 @@ _PROVIDER_ALIASES: dict[str, str] = {
     "ths": "ths",
 }
 
-FALLBACK_PROVIDER_ID = "eastmoney"
-PRIORITY_CONFIG_PREFIX = "market_api_priority_"
-LEGACY_PRIORITY_CONFIG_KEY = "market_api_priority"
-DEFAULT_PRIORITY = "东方财富 → 腾讯财经 → 新浪财经"
+CHAIN_CONFIG_KEY = "market_api_chain"
+# 全局链留空时的内置默认链（同花顺由链尾兜底自动补入，不在此列）
+DEFAULT_PRIORITY: tuple[str, ...] = ("eastmoney", "tencent", "sina")
 
-# 各源系统内禀序号（平局裁决用）：数字大的先执行，调整平局顺序 = 直接改数值。
-# 序号须 < 10，用户数字 × 10 才能严格主导
-_PROVIDER_RANKS: dict[str, int] = {
-    "eastmoney": 9,
-    "tencent": 8,
-    "sina": 7,
-    "ths": 6,
+# 域 → 链串配置键（域链留空回落全局链）
+_GROUP_CHAIN_CONFIG_KEYS: dict[str, str] = {
+    "quote": "market_api_chain_quote",
+    "kline": "market_api_chain_kline",
+    "board": "market_api_chain_board",
+    "market": "market_api_chain_market",
 }
 
-# 每源出厂优先级数字（东财→腾讯→新浪→同花顺：40/30/20/10）
-_DEFAULT_PRIORITY_NUMBERS: dict[str, int] = {
-    "eastmoney": 40,
-    "tencent": 30,
-    "sina": 20,
-    "ths": 10,
+# 接口 → 功能域；未列出的接口（resolve 等）走全局链
+_IFACE_GROUPS: dict[str, str] = {
+    "quote": "quote",
+    "quotes": "quote",
+    "intraday": "quote",
+    "kline": "kline",
+    "board": "board",
+    "rank_list": "board",
+    "hotmap": "board",
+    "sector_menu": "board",
+    "breadth": "market",
+    "market_turnover": "market",
+    "northbound": "market",
+    "valuation_series": "market",
+    "financial_snapshot": "market",
 }
 
-# 旧链串位置 → 迁移数字（旧体系只有东财/腾讯/新浪三源）
-_LEGACY_POSITION_NUMBERS = (40, 30, 20)
-
-# 链字符串分隔符：→ > ， , 及空白
-_CHAIN_SPLIT = re.compile(r"[→>，,]")
+# 系统内禀次序：链外源兜底追加用
+_SYSTEM_ORDER: tuple[str, ...] = ("eastmoney", "tencent", "sina", "ths")
 
 
 def normalize_provider_id(value: object) -> str | None:
@@ -105,12 +110,19 @@ def normalize_provider_id(value: object) -> str | None:
 
 
 def parse_priority_chain(raw: object) -> list[str]:
-    """优先级链配置 → 供应商 id 列表（保序去重，未知片段忽略）。"""
-    text = str(raw or "")
+    """源链配置（字符串列表）→ 供应商 id 列表（保序去重，未知项忽略并告警）。"""
+    if not isinstance(raw, (list, tuple)):
+        return []
     ids: list[str] = []
-    for part in _CHAIN_SPLIT.split(text):
-        pid = normalize_provider_id(part)
-        if pid is not None and pid not in ids:
+    for part in raw:
+        text = str(part or "").strip()
+        if not text:
+            continue
+        pid = normalize_provider_id(text)
+        if pid is None:
+            logger.warning(f"[SayuStock][行情API] 源链中的「{text}」不是可用数据源，已忽略")
+            continue
+        if pid not in ids:
             ids.append(pid)
     return ids
 
@@ -147,108 +159,37 @@ _PROVIDER_FACTORIES: dict[str, Callable[[], MarketDataPort]] = {
 }
 
 
-def default_config_reader(key: str, fallback: str) -> str:
-    """读后台「行情API」配置；缺 gsuid_core 环境（单测）时回退默认值。"""
+def default_config_reader(key: str, fallback: object) -> object:
+    """读后台「行情API」源链配置（字符串列表）；缺环境/空值回退 fallback。"""
     try:
         from ...stock_config.stock_config import STOCK_CONFIG
 
         cfg = STOCK_CONFIG.get_config(key)
         data = getattr(cfg, "data", None)
-        # 每源优先级是 int 配置、其余是 str，统一转 str 供链构建解析
-        if isinstance(data, (str, int)) and str(data).strip():
-            return str(data)
+        if isinstance(data, list) and data:
+            return data
         return fallback
     except Exception:  # noqa: BLE001 - 配置层不可用时保持默认装配
         return fallback
 
 
-def _read_priority_number(reader: Callable[[str, str], str], pid: str) -> int:
-    """读单源优先级数字：非法回默认，越界夹到 0-100。"""
-    raw = reader(f"{PRIORITY_CONFIG_PREFIX}{pid}", str(_DEFAULT_PRIORITY_NUMBERS[pid]))
-    try:
-        num = int(str(raw).strip())
-    except (TypeError, ValueError):
-        return _DEFAULT_PRIORITY_NUMBERS[pid]
-    return max(0, min(100, num))
+def build_priority_chain(reader: Callable[[str, object], object], group: str | None = None) -> list[str]:
+    """配置 → 实际调用链：域链 → 全局链 → 内置默认链，链外源排链尾兜底。
 
-
-def build_priority_chain(reader: Callable[[str, str], str]) -> list[str]:
-    """配置 → 实际调用链：每源优先级数字（0-100，大者先），0=禁用。
-
-    最终顺序 = 用户数字 × 10 + 各源系统内禀序号（东财9/腾讯8/新浪7/同花顺6）：
-    用户数字严格主导，数字相同时内禀序号大的先执行。
-    全部禁用时保底东财，避免行情整体瘫痪。
+    链只表达优先级：链内源按顺序先行；链外源按系统内禀次序
+    （东财→腾讯→新浪→同花顺）自动追加到链尾。因此任何配置（空列表/单源/
+    非法值）下四个源都在链上，东财独占接口永不失兜底。
     """
-    scored: list[tuple[int, str]] = []
-    for pid, rank in _PROVIDER_RANKS.items():
-        num = _read_priority_number(reader, pid)
-        if num <= 0:
-            continue
-        scored.append((num * 10 + rank, pid))
-    if not scored:
-        return [FALLBACK_PROVIDER_ID]
-    scored.sort(key=lambda t: t[0], reverse=True)
-    return [pid for _, pid in scored]
-
-
-def legacy_chain_to_numbers(chain: Sequence[str]) -> dict[str, int]:
-    """旧优先级链 → 每源数字（迁移基准）。
-
-    链内按位置取 40/30/20；旧三源不在链内 = 0（禁用，旧语义里链外源不参与）；
-    东财不在链内先按旧语义补到链尾。同花顺不在返回值里（旧体系不存在，保持出厂默认）。
-    """
-    effective = list(chain)
-    if FALLBACK_PROVIDER_ID not in effective:
-        effective.append(FALLBACK_PROVIDER_ID)
-    out: dict[str, int] = {}
-    for pos, pid in enumerate(effective):
-        if pos < len(_LEGACY_POSITION_NUMBERS):
-            out[pid] = _LEGACY_POSITION_NUMBERS[pos]
-        else:
-            out[pid] = _DEFAULT_PRIORITY_NUMBERS.get(pid, 10)
-    for pid in ("eastmoney", "tencent", "sina"):
-        if pid not in effective:
-            out[pid] = 0
-    return out
-
-
-def migrate_legacy_priority_config() -> bool:
-    """旧 `market_api_priority` 链串 → 每源优先级数字；一次性、幂等，装配时调用。
-
-    仅当新数字键全部仍是出厂默认时迁移（用户已改过新键则尊重现状）。
-    """
-    try:
-        from ...stock_config.stock_config import STOCK_CONFIG
-    except Exception:  # noqa: BLE001 - 无 gsuid_core 环境（最小依赖 CI）跳过
-        return False
-    try:
-        legacy = STOCK_CONFIG.get_config(LEGACY_PRIORITY_CONFIG_KEY)
-        legacy_data = getattr(legacy, "data", None)
-        # 旧键已不在 CONFIG_DEFAULT：仅存量 config.json 残留时有值
-        if not isinstance(legacy_data, str) or not legacy_data.strip():
-            return False
-        chain = parse_priority_chain(legacy_data)
-        if not chain:
-            return False
-        numbers = legacy_chain_to_numbers(chain)
-        changed: dict[str, int] = {}
-        for pid, num in numbers.items():
-            key = f"{PRIORITY_CONFIG_PREFIX}{pid}"
-            current = getattr(STOCK_CONFIG.get_config(key), "data", None)
-            if not isinstance(current, int):
-                continue
-            if current != _DEFAULT_PRIORITY_NUMBERS[pid]:
-                return False  # 用户已使用新键，放弃迁移
-            if current != num:
-                changed[key] = num
-        for key, num in changed.items():
-            STOCK_CONFIG.set_config(key, num)
-        if changed:
-            logger.info(f"[SayuStock][行情API] 旧优先级链「{legacy_data}」已迁移为每源数字 {changed}")
-        return bool(changed)
-    except Exception as exc:  # noqa: BLE001 - 迁移失败不影响默认装配
-        logger.warning(f"[SayuStock][行情API] 旧优先级配置迁移失败: {exc}")
-        return False
+    raw: object = reader(_GROUP_CHAIN_CONFIG_KEYS[group], None) if group is not None else None
+    chain = parse_priority_chain(raw)
+    if not chain:
+        chain = parse_priority_chain(reader(CHAIN_CONFIG_KEY, None))
+    if not chain:
+        chain = list(DEFAULT_PRIORITY)
+    for pid in _SYSTEM_ORDER:
+        if pid not in chain:
+            chain.append(pid)
+    return chain
 
 
 def _stamp_provider(result: object, pid: str) -> object:
@@ -259,12 +200,12 @@ def _stamp_provider(result: object, pid: str) -> object:
 
 
 class ConfigurableEquityMarket:
-    """equity 槽位包装：按全局优先级链逐一尝试，尽可能交付。
+    """equity 槽位包装：按域链/全局链逐一尝试，尽可能交付。
 
     供应商实例按 id 缓存；配置每次调用时读取，网页控制台改完即热生效。
     """
 
-    def __init__(self, config_reader: Callable[[str, str], str] | None = None) -> None:
+    def __init__(self, config_reader: Callable[[str, object], object] | None = None) -> None:
         self._reader = config_reader or default_config_reader
         self._instances: dict[str, MarketDataPort] = {}
 
@@ -278,16 +219,16 @@ class ConfigurableEquityMarket:
             self._instances[provider_id] = factory()
         return self._instances[provider_id]
 
-    def _chain(self) -> list[tuple[str, MarketDataPort]]:
+    def _chain(self, group: str | None = None) -> list[tuple[str, MarketDataPort]]:
         chain: list[tuple[str, MarketDataPort]] = []
-        for pid in build_priority_chain(self._reader):
+        for pid in build_priority_chain(self._reader, group):
             instance = self._instance(pid)
             if instance is not None:
                 chain.append((pid, instance))
         return chain
 
     async def _dispatch(self, iface: str, method: str, *args: object, **kwargs: object) -> object:
-        chain = self._chain()
+        chain = self._chain(_IFACE_GROUPS.get(iface))
         if not chain:
             return MarketError(
                 code="unsupported",

@@ -71,7 +71,7 @@
 | 14 | `financial_snapshot` | ✅ | ❌ | ❌ | ❌ | **东财独占** |
 | | **覆盖数** | **14/14** | **5/14** | **10/14** | **4/14** | 新浪本轮 +2 |
 
-> ⚠️ 注意最后一行：**14 个接口里仍有 4 个（`hotmap`/`northbound`/`valuation_series`/`financial_snapshot`）是东财独占、零兜底**。东财挂掉或被设为 0，这 4 个直接报错，不会「换个源接着出图」。
+> ⚠️ 注意最后一行：**14 个接口里仍有 4 个（`hotmap`/`northbound`/`valuation_series`/`financial_snapshot`）是东财独占、没有替代源**。东财侧不可用时这 4 个直接报错，不会「换个源接着出图」——注意这不是配置能改变的：源链无法禁用东财（见 §10.4），链尾兜底始终会把它排在链上。
 
 ---
 
@@ -258,6 +258,12 @@ for pid in 链:
 
 ## 7. 结论：目前**只能全量切换**，无法按接口单独换源
 
+> **⚠️ 本节是改造前（2026-10-08 早）的现状记录，已被 §10 的方案 3 取代并就绪落地。**
+> 保留作为问题推导过程：「管道已铺 90%」的结论仍然成立（`_dispatch` 第一个参数就是接口名）。
+> 但本节末尾提到的 `_LEGACY_PRIORITY_CONFIG_KEY` 迁移遗留、`market_api_overrides` 单串
+> 提案**都不在最终实现里** —— 旧 int 配置从未上线、无迁移需求；最终形态是 §10 的
+> 四域 `GsListStrConfig` 列表链 + 链外源排链尾兜底。
+
 配置里只有 4 个 `market_api_priority_<id>` 整数键（东财 40 / 腾讯 30 / 新浪 20 / 同花顺 10），**一套全局链，14 个接口全部共用**，没有任何 interface 维度的配置项。
 
 ### 因此以下诉求当前都无法实现
@@ -290,7 +296,7 @@ market_api_overrides = "kline:新浪→东财;intraday:东财→腾讯;northboun
 
 空值 = 全走全局，行为与现在完全一致（向后兼容）。
 
-`parse_priority_chain` 已在 `provider_registry.py` 里（当前被 `_LEGACY_PRIORITY_CONFIG_KEY` 迁移路径引用，而该路径的旧键 `market_api_priority` 从未进过 `config_default.py`、实际不可达）—— 正好可以把这套解析器从「永不执行的迁移遗留」复用成「单接口覆盖的解析入口」。
+`parse_priority_chain` 已在 `provider_registry.py` 里（当前被 `_LEGACY_PRIORITY_CONFIG_KEY` 迁移路径引用，而该路径的旧键 `market_api_priority` 从未进过 `config_default.py`、实际不可达）—— 正好可以把这套解析器从「永不执行的迁移遗留」复用成「单接口覆盖的解析入口」。（**最终实现**：迁移路径整体删除，`parse_priority_chain` 改为解析字符串列表。）
 
 另一个更符合用户心智的方案是按**能力组**给 2–3 个覆盖点（行情类 / 板块类 / 财务类），配置项更少，也更容易想明白「我要锁的是哪一块」。
 
@@ -442,9 +448,13 @@ vip.stock.finance.sina.com.cn/quotes_service/api/json_v2.php/MoneyFlow.ssl_bkzj_
 
 ---
 
-## 10. 按接口区分优先级的配置项设计
+## 10. 按能力域区分优先级的配置系统（方案 3，已落地）
 
-### 10.1 核心判断：不要按 14 个接口逐个配
+> 本节是 §7 诊断的**解法与最终形态**。最终语义与最初草案不同：**源链只表达优先级，
+> 不是禁用表达** —— 链外源自动排链尾兜底，以兑现「任何配置组合下 14 个接口都有源可用」
+> 这条硬约束（东财独占接口不能被配置饿死）。实网矩阵见 §10.6。
+
+### 10.1 核心判断：不按 14 个接口逐个配，按 4 个能力域配
 
 14 接口 × 4 源 = **56 个输入框**，网页控制台没法用，且用户根本记不住「哪个是 `market_turnover`」。
 
@@ -452,69 +462,62 @@ vip.stock.finance.sina.com.cn/quotes_service/api/json_v2.php/MoneyFlow.ssl_bkzj_
 
 | 域 | 覆盖接口 | 分开的理由 |
 |---|---|---|
-| **A. 盘口/分时** | `quote` `quotes` `intraday` | 高频低延迟，腾讯/新浪最快；但新浪 `ndays>1` 被拒，五日分时仍须东财 |
+| **A. 盘口/分时** | `quote` `quotes` `intraday` | 高频低延迟，腾讯/新浪最快；但 `ndays>1`（五日分时）只有东财实现，其他三源都只支持当日 |
 | **B. K 线** | `kline` | **复权口径敏感** —— 新浪不复权，排到前面会静默毁掉历史指标 |
 | **C. 板块/排行/云图** | `board` `rank_list` `hotmap` `sector_menu` | 新浪有概念/行业能力但排行只有 3 个维度；腾讯同花顺全无 |
-| **D. 市场/资金/财务** | `breadth` `market_turnover` `northbound` `valuation_series` `financial_snapshot` | 真·东财域；补源后 breadth/turnover 可开，其余锁死 |
+| **D. 市场/资金/财务** | `breadth` `market_turnover` `northbound` `valuation_series` `financial_snapshot` | 真·东财域；补源后 breadth/turnover 可开，其余仍是东财独有能力 |
 
-`resolve` 不需要配 —— 解析层四源共用，恒走链头。
+`resolve` 不配 —— 解析层各源共用，恒走全局链链头（`_IFACE_GROUPS` 里没有它）。
 
-### 10.2 配置形态：链串，不是数字
+### 10.2 配置形态：`GsListStrConfig`，5 个键覆盖 14 接口
 
 ```python
-"market_api_chain": GsStrConfig(
-    "默认行情源链",
-    "所有未单独指定的接口按此顺序尝试，顺序即优先级。留空的源视为禁用；支持 东财/东方财富/新浪/腾讯/同花顺 及英文 id。",
-    "东财→腾讯→新浪→同花顺",
+"market_api_chain": GsListStrConfig(
+    "全局行情源链（默认）",
+    "所有行情接口的默认优先级；留空 = 东方财富→腾讯财经→新浪财经→同花顺。"
+    "每项填一个数据源：东方财富 / 腾讯财经 / 新浪财经 / 同花顺",
+    [],
+    options=["东方财富", "腾讯财经", "新浪财经", "同花顺"],
 ),
-"market_api_chain_quote": GsStrConfig(
-    "A. 盘口/分时链", "只作用于盘口与分时。留空 = 用默认链。建议：新浪→东财→腾讯（同花顺无分时）。", ""
-),
-"market_api_chain_kline": GsStrConfig(
-    "B. K线链", "只作用于 K 线。留空 = 用默认链。建议只放前复权源（腾讯/同花顺），新浪为不复权。", ""
-),
-"market_api_chain_board": GsStrConfig(
-    "C. 板块/排行/云图链", "只作用于板块、排行、云图、板块菜单。留空 = 用默认链。", ""
-),
-"market_api_chain_market": GsStrConfig(
-    "D. 市场/资金/财务链", "只作用于涨跌家数、成交额、北向、估值、财报。留空 = 用默认链。建议锁东财。", ""
-),
+"market_api_chain_quote":  GsListStrConfig("盘口/分时源链", "...留空 = 跟随全局链...", [], options=[...]),
+"market_api_chain_kline":  GsListStrConfig("K线源链", "...留空 = 跟随全局链...", [], options=[...]),
+"market_api_chain_board":  GsListStrConfig("板块/排行/云图源链", "...", [], options=[...]),
+"market_api_chain_market": GsListStrConfig("市场统计/资金/财务源链", "...", [], options=[...]),
 ```
 
-**5 个配置项**覆盖全部 14 个接口。
+**为什么是列表不是字符串？** 链本质就是有序列表：`GsListStrConfig` 在网页控制台给出
+「从选单挑源 + 排序」的原生控件，用户拖顺序即可。字符串形态要把 `→` `>` `，` `,` 及空白
+当解析规则，等于把序列化细节推给用户（首版字符串草案在评审中被否）。
 
-### 10.3 为什么用链串而不是继续用 int
+### 10.3 为什么不继续用旧 int
 
-| | 现在的 int（40/30/20/10） | 建议的链串 |
+| | 旧 int（40/30/20/10） | 落地形态（有序列表） |
 |---|---|---|
-| 用户心智 | 要理解「数字×10 + 内禀序号」的平局裁决 | 「东财→腾讯」，顺序即优先级 |
-| 0 的语义 | 特殊值 0 = 禁用 | **不写这个源** = 禁用，天然 |
+| 用户心智 | 要理解「数字×10 + 内禀序号」的平局裁决 | 列表顺序即优先级 |
 | 加减源 | 要改数字，还要猜会不会触发平局 | 增删一个名字 |
-| 解析代码 | `build_priority_chain` + `_PROVIDER_RANKS` | **复用 `_CHAIN_SPLIT` + `parse_priority_chain`（已存在）** |
 | 平局歧义 | 内禀序号是实现细节泄漏到配置 | 不存在 |
+| 控制台 UI | 4 个数字输入框 | 原生列表控件（带 options 选单） |
 
-### 10.4 语义规则（必须写死在配置描述里）
+> 旧 4 个 int 键**从未上线**（没有进过任何发布版 `config_default.py`），因此**不做迁移**：
+> 删除旧定义、换新键即可。运行时 `config.json` 里可能残留旧键（Core 对孤儿键保留），
+> 新代码不读它们、无影响。
 
-1. **空值 = 用默认链** → 默认链填 `东财→腾讯→新浪→同花顺`，与当前 `40/30/20/10` 完全等价，**零行为变化，向后兼容**
-2. 链串里**没有的源 = 禁用**（不是排最后）
-3. **全局链也为空** → 保底东财（保留现有「全部禁用防整体瘫痪」行为）
-4. 别名复用 `_PROVIDER_ALIASES`：`东财`/`东方财富`/`eastmoney` 等价
-5. 分隔符沿用 `_CHAIN_SPLIT`：`→` `>` `，` `,` 及空白
+### 10.4 语义规则：源链只表达优先级，不是禁用表达
 
-### 10.5 迁移
+1. **三级回落**：域链（`market_api_chain_{quote,kline,board,market}`）→ 全局链
+   （`market_api_chain`）→ 内置默认链（东财→腾讯→新浪→同花顺）。域链留空用全局链；
+   全局链也留空用内置默认链。
+2. **链外源自动排链尾兜底**：链走完后，`_SYSTEM_ORDER`（东财→腾讯→新浪→同花顺）里没出现
+   在链上的源**自动追加到链尾**。因此任何配置（空列表 / 单源 / 乱写）下四个源都在链上 ——
+   把全局链配成「只留腾讯」，东财只是排到最后，而不是消失。
+3. 配置里写不认识的源名 → `logger.warning` 后忽略该项，其余项照常生效。
+4. 别名：`东财`/`东方财富`/`eastmoney` 等价（`_PROVIDER_ALIASES`），列表项写中文名或裸 id 均可。
+5. **没有「禁用」开关**：要少用某源就把别的源排前面；实际上无法让某源完全不被调用 ——
+   这正是为了兑现「任意配置下 14 个接口都可用」这条硬约束。
 
-现有 4 个 int 按 `_DEFAULT_PRIORITY_NUMBERS`（40/30/20/10）**反解成链串**：
+### 10.5 实现
 
-```python
-# 幂等：仅当四个新链串键全为空时才写
-# 数字 → 顺序：按数字降序排，0 视为禁用不入链
-```
-
-这正好**复用并激活 `migrate_legacy_priority_config` 的骨架** —— 目前那个旧键 `market_api_priority` 从未进过 `config_default.py`、永远不可达（见 §7），改成迁移到新链串键后，那段代码和 `legacy_chain_to_numbers` / `parse_priority_chain` 就都活过来了。
-
-### 10.6 实现改动量
-
-管道已经铺好 90%（§7）：`_dispatch(iface, ...)` 的第一个参数就是接口名，12 个调用点全传了，只是 `_chain()` 没用它。
+`_dispatch(iface, ...)` 的第一个参数本来就是接口名（§7「管道已铺 90%」），改造只动三处：
 
 ```python
 # provider_registry.py
@@ -526,16 +529,55 @@ _IFACE_GROUPS: dict[str, str] = {          # 14 个接口 → 4 个域
     "valuation_series": "market", "financial_snapshot": "market",
 }
 
-def _chain(self, iface: str) -> list[tuple[str, MarketDataPort]]:
-    group = _IFACE_GROUPS.get(iface)
-    raw = self._reader(f"market_api_chain_{group}", "") if group else ""
-    pids = parse_priority_chain(raw) or parse_priority_chain(
-        self._reader("market_api_chain", DEFAULT_CHAIN)
-    ) or [FALLBACK_PROVIDER_ID]
-    ...
+def build_priority_chain(reader, group=None) -> list[str]:
+    """域链 → 全局链 → 内置默认链；链外源按 _SYSTEM_ORDER 排链尾。"""
+
+def _chain(self, group: str | None = None) -> list[tuple[str, MarketDataPort]]: ...
+
+# _dispatch：chain = self._chain(_IFACE_GROUPS.get(iface))
 ```
 
-业务层和 adapter **一行都不用改**，只有 `config_default.py` 换掉 4 个 int 为 5 个 str。
+业务层与 adapter **一行未改**；`config_default.py` 的 4 个 int 换成 5 个 `GsListStrConfig`；
+`facade.py` 里旧的迁移调用一并删除。回归测试重写为 `test/market/test_provider_switch.py`。
+
+### 10.6 实网配置矩阵验证（2026-10-08，8 档 × 16 调用 / 14 接口）
+
+对每一种配置注入真读函数（`real` 档真读用户 `config.json`），连真实网络逐一调用 16 个入口
+（覆盖 14 个接口，含 `quotes` 批量与 `ndays=5` 分时）：
+
+| 调用 | real | empty | tx | sina | ths | bad | weak4 | mix |
+|---|---|---|---|---|---|---|---|---|
+| `resolve` | ok | ok | ok | ok | ok | ok | ok | ok |
+| `quote` | tencent | eastmoney | tencent | sina | ths | eastmoney | sina | ths |
+| `quotes` | tencent | eastmoney | tencent | sina | ths | eastmoney | sina | sina |
+| `intraday(1d)` | tencent | tencent | tencent | sina | tencent | tencent | sina | sina |
+| `intraday(5d)` | ⛔ 单源 | ⛔ 单源 | ⛔ 单源 | ⛔ 单源 | ⛔ 单源 | ⛔ 单源 | ⛔ 单源 | ⛔ 单源 |
+| `kline(D1)` | eastmoney | eastmoney | tencent | sina | ths | eastmoney | ths | tencent |
+| `kline(Y1)` | eastmoney | eastmoney | eastmoney | eastmoney | eastmoney | eastmoney | eastmoney | eastmoney |
+| `board` | sina | sina | sina | sina | sina | sina | sina | sina |
+| `rank_list` | sina | sina | sina | sina | sina | sina | sina | sina |
+| `hotmap` | eastmoney | eastmoney | eastmoney | eastmoney | eastmoney | eastmoney | eastmoney | eastmoney |
+| `sector_menu` | ok | ok | ok | ok | ok | ok | ok | ok |
+| `breadth` | ok* | ok | ok | ok | ok | ok* | ok* | ok |
+| `market_turnover` | ok* | ok | ok | ok | ok | ok* | ok | ok |
+| `northbound` | ⛔ 单源 | ⛔ 单源 | ⛔ 单源 | ⛔ 单源 | ⛔ 单源 | ⛔ 单源 | ⛔ 单源 | ⛔ 单源 |
+| `valuation_series` | ok* | eastmoney | eastmoney | eastmoney | eastmoney | ok* | eastmoney | eastmoney |
+| `financial_snapshot` | ok | ok | ok | ok | ok | ok | ok | ok |
+
+读表要点：
+
+- **配置确实生效**：`tx` 档 `kline(D1)=tencent`、`sina` 档 `=sina`、`ths` 档 `=ths` —— 链头就是配的那个源。
+- **链尾兜底确实生效**：`hotmap` / `kline(Y1)` / `financial_snapshot` 在**每一档**都由 eastmoney 服务 ——
+  这些单源接口在 `tx`/`sina`/`ths` 档都没被配置饿死，而是顺延到链尾的东财。
+- **`bad` 档（配置写成「乱写的源」）等价于默认链**：非法项告警忽略后回落内置默认链，
+  所有接口照常可用（与 `empty` 档结果一致）。
+- **`board` / `rank_list` 全档 = sina**：当时东财 clist 正在限流（下同），链顺延到新浪命中；
+  这恰好演示了「东财抽风时板块/排行仍有数据」。
+- `ok*` = 当日首跑该格曾出现瞬时错误（东财限流高峰），45s 间隔复跑后全部 ok；
+  属环境瞬态、与配置无关，判读依据见 §12。
+- `⛔ 单源 = intraday(5d) / northbound`：只有东财实现，其余三源明确 `unsupported`（§12 有逐源实测），
+  因此**任何配置**下都只能落到东财；当时东财侧不可用（trends2 被限流 / 北向上游停发），
+  不是配置缺陷。八档失败集合完全一致，这本身就是「链已经把能试的源都试过了」的证据。
 
 ---
 
@@ -642,6 +684,9 @@ if row.market_cap is None or row.change_pct is None or not row.name:
 
 ### 11.6 质量门状态
 
+> **本节数字是 `1b1cb86` 时点的记录；分支最新状态见 §12.1**（真 pytest 已可全量开跑，
+> `606 passed / 4 skipped`）。
+
 | 门 | 结果 |
 |---|---|
 | `ruff check SayuStock test` | ✅ All checks passed |
@@ -650,11 +695,9 @@ if row.market_cap is None or row.change_pct is None or not row.name:
 | 单测（runner 脱离 pytest） | ✅ **42 passed / 0 failed** |
 | 实网回归（重构后重跑） | ✅ 全部接口仍通 |
 
-> ⚠️ **本地 `pytest test` 跑不起来**：本机 `F:\gsuid_core\.venv` 缺 `pandas`，41 个模块 collection error。
-> 已用 `git stash` 验证**改动前同样 41 个 error**，属环境问题而非本次回归。
-> 替代验证：新增的纯函数断言用包壳 + 内存版 `async_file_cache` 脱离 pytest 直接执行，全部通过。
-> `test/test_papertrade_quote_resilience.py` 同样只是因为 `quote_service → utils.market → convert` 需要 pandas
-> 而无法在本机跑（这条 import 链在改造前就存在：旧代码同样 import 了 `utils.market.errors`）。CI 装了 pandas，正常收敛。
+> ⚠️ 当时**本地 `pytest test` 跑不起来**：本机 `F:\gsuid_core\.venv` 缺 `pandas`，41 个模块 collection error
+> （`git stash` 验证改动前同样 41 个 error，属环境问题而非本次回归）。
+> 后续给本机 venv 补齐了插件声明依赖，该限制已解除 —— 见 §12.1。
 
 ### 11.7 命令级覆盖：5 条常用命令各源能不能单独撑起来
 
@@ -711,3 +754,60 @@ if row.market_cap is None or row.change_pct is None or not row.name:
 
 修复后用 5571 行实网数据离线重放：**涨停 56 / 跌停 12 / 平 170** —— 与东财、同花顺、腾讯
 三家官方口径完全一致（配套更新 3 条回归测试：封板判定 / 停牌剔除 / 东财平盘档）。
+
+---
+
+## 12. 收尾记录（2026-10-08）：质量门与「哪些失败与配置无关」
+
+### 12.1 质量门
+
+| 门 | 结果 |
+|---|---|
+| `ruff check SayuStock test` | ✅ All checks passed |
+| `ruff format --check SayuStock test` | ✅ 全仓已格式化 |
+| `basedpyright`（本次改动文件） | ✅ 0 errors |
+| `pytest test -q`（真 venv，非桩） | ✅ **606 passed / 4 skipped**（185s） |
+
+> 本机 `.venv` 补齐了插件声明的依赖（pandas / plotly / mplchart / holidays / matplotlib / pyarrow）
+> 之后，真 pytest 可全量开跑 —— §11.6 里「本机 pytest 跑不起来（缺 pandas）」的环境限制已解除，
+> 该节数字（42 passed）由本节取代。
+
+### 12.2 单源接口逐源实测（证明「失败与配置无关」）
+
+直接调四个 adapter（绕过源链），2026-10-08：
+
+| 接口 | eastmoney | tencent | sina | ths |
+|---|---|---|---|---|
+| `intraday(ndays=5)` | ERR（trends2 限流中） | `unsupported` 仅支持当日 | `unsupported` 仅支持当日 | `unsupported` 未实现 |
+| `northbound` | ERR（上游 `data:null`） | `unsupported` | `unsupported` | `unsupported` |
+| `hotmap` | OK | `unsupported` | `unsupported` | `unsupported` |
+| `valuation_series` | OK | `unsupported` | `unsupported` | `unsupported` |
+| `financial_snapshot` | OK | `unsupported` | `unsupported` | `unsupported` |
+| `sector_menu(concept)` | OK（504 个） | `unsupported` | **OK（175 个）** | `unsupported` |
+| `rank_list(MAIN_INFLOW)` | ERR（clist 限流） | `unsupported` | **OK** | `unsupported` |
+
+→ `intraday(ndays=5)` 与 `northbound` 是**当前源码下的单源接口**：其他三源明确 `unsupported`，
+链再长也只能落到东财。所以它们失败无法通过配置规避（也无需规避——即使配置里删掉东财，
+链尾兜底也会把它补回来）。
+
+### 12.3 东财限流的判定证据（避免后人误判）
+
+同一份配置同一天两次跑结果不同，逐项排查后确认为**本机对东财 push2 / push2his 的请求按量限流**：
+
+- 失败形态是**连接被直接断开**（`ServerDisconnectedError`），不是 HTTP 错误码；插件在
+  `push2` 与 `push2delay` 双域都断连后返回自造码 `-400016`（`utils/eastmoney.py:210-222`）。
+  **`-400016` 不是东财服务端错误码**——日志/报错里看到它，直接按「东财侧连不上」理解。
+- 与 Cookie 无关：交错 A/B（仅 UA / 内置 `DC_COOKIES` / 配置 Cookie+DC 三条件各 4 轮，3s 间隔）
+  显示失败**按时序聚集**（同一窗口内头 1–2 次成功、其后全断），三条件无差异。
+- 与客户端无关：aiohttp（插件同款）与 httpx 裸探同样受影响。
+- 与配置无关：8 档配置的失败集合完全一致（§10.6），且 45s 间隔复跑后首跑的瞬时错误全部消失。
+
+### 12.4 已知边界（不做假承诺）
+
+- `intraday(ndays=5)`（五日分时）与 `northbound`（北向）在**东财侧不可用时无任何兜底**：
+  前者是本机限流（会自愈），后者是上游停发（交易所已取消实时披露，见 §8.4，短期无解）。
+- 板块代码空间各源私有：东财限流期间「行业/概念选股」仍会整体失败（§11.4 末），
+  这不是配置能解决的问题。
+- `fetch_a_share_universe` 保留东财直连（端口能力缺口，见 §11.5）。
+- 个别瞬态：`resolve` 走东财代码表（网络），偶发网络抖动会让依赖 resolve 的接口返回
+  `not_found` 并短路整链（既有设计：解析层各源共用、换源无意义；非本次改动引入）。
