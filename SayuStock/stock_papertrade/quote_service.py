@@ -1,4 +1,4 @@
-"""持仓报价服务（60s TTL 内存缓存 + 东财 push2 轻量报价）。
+"""持仓报价服务（TTL 内存缓存 + 行情端口轻量报价）。
 
 2026-07-01 新增。背景：
 
@@ -7,19 +7,23 @@
   "自动刷报价" 后端：
 
     - ``quote_service.get_quote(secid) -> Optional[float]``
-        单只股票当前价；60s 内存复用。
+        单只股票当前价；TTL 内存复用（成功 60s / 失败 5s）。
     - ``quote_service.get_quotes_batch(secids) -> dict[str, Optional[float]]``
-        批量；先查缓存，缺失项并发去打 /api/qt/stock/get。
+        批量；先查缓存，缺失项并发取价。
 
 API：
 
-  - 端点：``https://push2.eastmoney.com/api/qt/stock/get``
-  - 字段：仅取 ``f43,f44,f45,f46,f60,f57`` 6 个（不复用 SINGLE_STOCK_FIELDS 那
-    40 个，单价查询 < 1KB 体量）。``f43``=当前价，``f57``=名称。
-  - 复用现有的 ``EASTMONEY_REQUESTER.stock_request`` 拿 push2/push2delay failover。
+  - 取价走行情端口：``get_market().quote(secid)`` —— 按源链（默认
+    东财→腾讯→新浪→同花顺，后台可配）逐一尝试，**东财限流时自动顺延**，
+    不再整条链路失守。
+  - 现价 / 昨收 / 涨跌幅 / 名称语义由端口 ``Quote`` 模型保证
+    （等价于原先直接用 push2 的 f43/f60/f45/f57）。
+  - 代价：端口 quote 复用 ``get_single_stock``（SINGLE_STOCK_FIELDS ~50 字段
+    并合并当日分时），单次响应体积比原先手写的 6 字段请求大；换来的是
+    多源容错与字段口径统一。
 
 降级：
-  - API 失败 → 返回 ``None``；调用方按 ``last_quote_price → avg_cost → None`` 顺序兜底。
+  - 全部源都失败 → 返回 ``None``；调用方按 ``last_quote_price → avg_cost → None`` 顺序兜底。
   - 老库 ``last_quote_price`` 列尚未迁移完（重启前）→ 该方法仍能跑，但写回 DB
     的 ``bulk_set_quote`` 会因列不存在抛 OperationalError；调用方需要 try/except 兜。
 
@@ -84,7 +88,7 @@ class QuoteCacheEntry:
 # 主服务
 # ============================================================
 class QuoteService:
-    """60s TTL in-memory quote cache + EastMoney push2 fetcher。
+    """TTL in-memory quote cache + 行情端口取价（get_market().quote）。
 
     单例 — 由 ``quote_service`` 模块级实例调用，无需自己 ``QuoteService()``。
     """
