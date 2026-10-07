@@ -10,7 +10,7 @@ from aiohttp import ClientSession, ClientTimeout, ClientConnectionError
 from gsuid_core.logger import logger
 
 from .utils import get_file
-from ..constant import PREFIX_DATA, code_id_dict, code_query_overrides
+from ..constant import PREFIX_DATA, code_id_dict, chinese_stocks, code_query_overrides
 from ...stock_config.stock_config import STOCK_CONFIG
 
 SEARCHAPI_HEADERS = {
@@ -141,6 +141,22 @@ async def get_code_id_strict(code: str, priority: Optional[str] = None) -> Optio
     return last
 
 
+# 本地 A 股名称表（chinese_stocks）的代码前缀 → 东财 secid 市场前缀。
+# 表里只有这些前缀（实测 5909 条：00/30/60/68/81/83/92）；
+# 未列出的前缀一律不补名，宁缺勿错。
+_LOCAL_NAME_MARKET: Dict[str, str] = {
+    "60": "1",
+    "68": "1",
+    "00": "0",
+    "30": "0",
+    "43": "0",
+    "81": "0",
+    "83": "0",
+    "87": "0",
+    "92": "0",
+}
+
+
 async def _get_code_id_one(code: str, priority: Optional[str] = None) -> Optional[Tuple[str, str, str]]:
     """单次解析行情 ID（不做复合 query 拆分）。"""
     override = code_query_overrides.get(code.strip().lower())
@@ -188,7 +204,13 @@ async def _get_code_id_one(code: str, priority: Optional[str] = None) -> Optiona
             elif code_prefix == "1":
                 _sec_type = "沪A"
 
-        return code, "", _sec_type
+        # secid 形态本地短路（不发网络）。名称尽力从随仓库分发的 A 股表补：
+        # 缺名会让 Quote.symbol.name 退化成代码，同花顺（快照无名称，沿用解析层）
+        # 供价时 matcher._is_st 判不出 ST，模拟盘涨跌停拦截会从 ±5% 退回 ±10%。
+        # 守卫：表按 6 位代码索引，指数与个股会撞码（1.000001 上证指数 vs
+        # 000001 平安银行），只有 secid 前缀与该代码的真实市场一致才补名。
+        info = chinese_stocks.get(main_code) if _LOCAL_NAME_MARKET.get(main_code[:2]) == code_prefix else None
+        return code, (info["name"] if info else ""), _sec_type
 
     if code in code_id_dict.keys():
         return code_id_dict[code], code, ""

@@ -69,6 +69,23 @@ def test_strict_prefers_hit_over_layer_error(monkeypatch) -> None:
         asyncio.run(get_code_id_strict("QQQ 纳指ETF"))
 
 
+def test_secid_form_carries_local_name_without_network() -> None:
+    # secid 形态本地短路，名称从随仓库分发的 A 股表补 ——
+    # 缺名会让同花顺（快照无名称）把 Quote.symbol.name 退化成代码，
+    # 模拟盘 matcher._is_st 随之判不出 ST
+    from SayuStock.utils.constant import chinese_stocks
+
+    hit = asyncio.run(get_code_id_strict("1.600519"))
+    assert hit is not None
+    assert hit[1] == chinese_stocks["600519"]["name"] != ""
+
+
+def test_secid_form_skips_name_on_market_mismatch() -> None:
+    # 1.000001 是上证指数，不是 000001 平安银行：撞码时不许把股票名贴到指数上
+    hit = asyncio.run(get_code_id_strict("1.000001"))
+    assert hit == ("1.000001", "", "沪A")
+
+
 def test_em_quote_layer_error_returns_network(monkeypatch) -> None:
     async def fake_strict(code, priority=None):
         raise ResolveLayerError("searchapi down")
