@@ -15,12 +15,15 @@ from ...models import (
     RankRow,
     BoardRow,
     SymbolRef,
+    BreadthBar,
     BoardExtras,
     KlineSeries,
     RankSnapshot,
     BoardSnapshot,
+    BreadthBucket,
     IntradayPoint,
     IntradaySeries,
+    MarketTurnover,
 )
 
 try:  # 美股分钟时间戳为美东时间，转北京时间对齐东财口径；缺 tzdata 时退化为原样
@@ -757,3 +760,140 @@ def node_for_industry(menu: Mapping[str, str], sector: str) -> str | None:
         if name == text or node == text:
             return node
     return None
+
+
+# 资金流排行 sort 参数：新浪按净流入/净流出绝对值排序，asc 决定方向
+MONEY_FLOW_RANK_BY = (RankBy.MAIN_INFLOW, RankBy.MAIN_OUTFLOW)
+_MONEY_FLOW_LABEL: dict[RankBy, str] = {
+    RankBy.MAIN_INFLOW: "主力净流入",
+    RankBy.MAIN_OUTFLOW: "主力净流出",
+}
+
+
+def parse_money_flow_rank(
+    rows: object,
+    *,
+    rank_by: RankBy,
+    high_first: bool,
+    limit: int,
+) -> RankSnapshot | MarketError:
+    """MoneyFlow.ssl_bkzj_ssggzj 行 → RankSnapshot。
+
+    该接口的 `changeratio` 是**小数比例**（如 -0.0000852594 表示 -0.0085%），
+    与行情中心 `changepercent` 的百分数口径不同，此处统一 ×100 对齐内部模型。
+    """
+    if rank_by not in MONEY_FLOW_RANK_BY:
+        return parse_error(f"新浪不支持资金流排行 {rank_by.value}", provider=PROVIDER)
+    if not isinstance(rows, list) or not rows:
+        return empty_error("新浪资金流排行为空", provider=PROVIDER)
+    out: list[RankRow] = []
+    for row in rows:
+        if not isinstance(row, Mapping):
+            continue
+        symbol = row.get("symbol")
+        if not isinstance(symbol, str) or not symbol.strip():
+            continue
+        raw_name = row.get("name")
+        name = raw_name.strip() if isinstance(raw_name, str) and raw_name.strip() else symbol.strip()
+        ratio = _row_float(row, "changeratio")
+        out.append(
+            RankRow(
+                rank=len(out) + 1,
+                code=symbol.strip(),
+                name=name,
+                price=_row_float(row, "trade"),
+                change_pct=round(ratio * 100, 3) if ratio is not None else None,
+                metric=_row_float(row, "netamount"),
+                metric_label=_MONEY_FLOW_LABEL[rank_by],
+                turnover_pct=None,
+                amount=_row_float(row, "amount"),
+                volume=_row_float(row, "turnover"),
+                sector=None,
+            )
+        )
+        if len(out) >= limit:
+            break
+    if not out:
+        return empty_error("新浪资金流排行解析后为空", provider=PROVIDER)
+    return RankSnapshot(
+        rank_by=rank_by.value,
+        rank_by_label=_MONEY_FLOW_LABEL[rank_by],
+        unit_hint="元",
+        high_first=high_first,
+        caveat=RANKING_CAVEAT,
+        rows=tuple(out),
+    )
+
+
+# 名义涨跌停阈值（%）：科创/创业 20、北交所 30、主板 10；ST 收窄到 5
+def _limit_threshold_pct(code: str, name: str) -> float:
+    """按板块判定名义涨跌停幅度；ST/*ST 按名称前缀收窄到 5。"""
+    if name.upper().replace(" ", "").replace("　", "").startswith(("ST", "*ST", "SST", "S*ST", "PT")):
+        return 5.0
+    if code.startswith(("688", "689")) or code[:3] in ("300", "301"):
+        return 20.0
+    if code.startswith(("83", "87", "920")):
+        return 30.0
+    return 10.0
+
+
+def parse_breadth_rows(rows: object) -> BreadthBar | MarketError:
+    """全 A 行（行情中心 hs_a）→ 涨跌分布。
+
+    涨跌停按名义阈值 ×95% 判定（留出四舍五入余量），与模拟盘拦截口径一致；
+    涨跌停股同时计入「涨/跌」，保证五项之和等于总数。
+    """
+    if not isinstance(rows, list) or not rows:
+        return empty_error("新浪全A列表为空", provider=PROVIDER)
+    limit_up = rise = flat = fall = limit_down = 0
+    for row in rows:
+        if not isinstance(row, Mapping):
+            continue
+        pct = _row_float(row, "changepercent")
+        if pct is None:
+            continue
+        code = row.get("code")
+        name = row.get("name")
+        code_text = code.strip() if isinstance(code, str) else ""
+        name_text = name.strip() if isinstance(name, str) else ""
+        threshold = _limit_threshold_pct(code_text, name_text) * 0.95
+        if pct >= threshold:
+            limit_up += 1
+            rise += 1
+        elif pct <= -threshold:
+            limit_down += 1
+            fall += 1
+        elif pct > 0:
+            rise += 1
+        elif pct < 0:
+            fall += 1
+        else:
+            flat += 1
+    if limit_up + rise + fall + limit_down + flat == 0:
+        return empty_error("新浪全A涨跌分布解析后全零", provider=PROVIDER)
+    return BreadthBar(
+        buckets=(
+            BreadthBucket(label="涨停", count=limit_up),
+            BreadthBucket(label="涨", count=rise - limit_up),
+            BreadthBucket(label="平", count=flat),
+            BreadthBucket(label="跌", count=fall - limit_down),
+            BreadthBucket(label="跌停", count=limit_down),
+        )
+    )
+
+
+def parse_turnover_quotes(quotes: Sequence[Quote]) -> MarketTurnover | MarketError:
+    """沪 + 深指数盘口 → 两市成交额。
+
+    单市场源拿不到昨成交额，`prev_amount` 返回 None 而非 0 填充（渲染层需判空）。
+    """
+    total = 0.0
+    last: datetime | None = None
+    for q in quotes:
+        if q.amount is not None:
+            total += q.amount
+        if q.as_of is not None and (last is None or q.as_of > last):
+            last = q.as_of
+    if total <= 0:
+        return empty_error("新浪两市成交额解析为 0", provider=PROVIDER)
+    return MarketTurnover(prev_amount=None, amount=total, last_trade_date=last)

@@ -10,6 +10,7 @@ from collections.abc import Sequence
 
 from .parse import (
     SINA_RANK_SORT,
+    MONEY_FLOW_RANK_BY,
     industry_menu,
     parse_hq_line,
     parse_rank_rows,
@@ -17,9 +18,12 @@ from .parse import (
     parse_kline_rows,
     parse_node_board,
     node_for_industry,
+    parse_breadth_rows,
     parse_minline_rows,
     parse_us_mink_rows,
     parse_us_daily_rows,
+    parse_money_flow_rank,
+    parse_turnover_quotes,
     parse_industry_summary,
     parse_us_mink_intraday,
     sina_symbol_from_secid,
@@ -34,17 +38,23 @@ from .client import (
     fetch_hq_lines,
     fetch_us_daily,
     fetch_node_rows,
+    fetch_breadth_rows,
+    fetch_fljk_summary,
+    fetch_turnover_lines,
+    fetch_money_flow_rank,
     fetch_industry_summary,
 )
-from ...enums import RankBy, BoardKind, KlinePeriod, resolve_rank_by
-from ...errors import MarketError, not_found, unsupported, network_error
+from ...enums import RankBy, BoardKind, AssetClass, KlinePeriod, resolve_rank_by
+from ...errors import MarketError, not_found, parse_error, unsupported, network_error
 from ...models import (
     Quote,
     SymbolRef,
+    BreadthBar,
     KlineSeries,
     RankSnapshot,
     BoardSnapshot,
     IntradaySeries,
+    MarketTurnover,
 )
 from ....constant import ErroText
 
@@ -245,12 +255,18 @@ class SinaMarketData(PartialMarketData):
         sort_asc: bool = False,
     ) -> BoardSnapshot | MarketError:
         key = sector or (kind.value if isinstance(kind, BoardKind) else str(kind))
-        # 行业板块汇总表自带全行业
+        # 行业板块汇总表自带全行业（新浪行业口径，云图/选股沿用）
         if key in ("行业板块", "行业", "industry"):
             payload = await fetch_industry_summary()
             if isinstance(payload, str):
                 return network_error(payload, provider=PROVIDER)
             return parse_industry_summary(payload, kind=BoardKind.INDUSTRY, title="行业板块")
+        # 概念板块：newFLJK param=class，一次拿到全概念板块汇总
+        if key in ("概念板块", "概念", "concept"):
+            payload = await fetch_fljk_summary("class")
+            if isinstance(payload, str):
+                return network_error(payload, provider=PROVIDER)
+            return parse_industry_summary(payload, kind=BoardKind.CONCEPT, title="概念板块")
         node: str | None = None
         title = key
         board_kind = BoardKind.OTHER
@@ -262,18 +278,17 @@ class SinaMarketData(PartialMarketData):
             node = "hs_s"
             title = "主要指数"
             board_kind = BoardKind.INDEX
+        elif key.startswith("gn_") or key.startswith("hangye_"):
+            # 板块成分：sector 直接给了 newFLJK 节点码（gn_xxx / hangye_xxx）
+            node = key
+            board_kind = BoardKind.CONCEPT if key.startswith("gn_") else BoardKind.INDUSTRY
+            title = key
         elif sector:
-            # 行业成分：sector 为行业名或新浪节点（new_xxxx）
-            menu_payload = await fetch_industry_summary()
-            if isinstance(menu_payload, str):
-                return network_error(menu_payload, provider=PROVIDER)
-            menu = industry_menu(menu_payload)
-            if isinstance(menu, MarketError):
-                return menu
-            node = node_for_industry(menu, sector)
+            # 板块成分：sector 为板块名，先查概念菜单再查行业菜单
+            node = await self._sector_node(sector)
             if node is None:
                 return unsupported(f"新浪不支持板块 {sector}", provider=PROVIDER)
-            board_kind = BoardKind.INDUSTRY
+            board_kind = BoardKind.CONCEPT if node.startswith("gn_") else BoardKind.INDUSTRY
             title = sector
         else:
             return unsupported(f"新浪不支持列表 {key}", provider=PROVIDER)
@@ -281,6 +296,19 @@ class SinaMarketData(PartialMarketData):
         if isinstance(rows, MarketError):
             return rows
         return parse_node_board(rows, kind=board_kind, title=title, limit=limit)
+
+    async def _sector_node(self, sector: str) -> str | None:
+        """板块名 → 行情中心 node；概念(newFLJK) 优先，行业(newSinaHy) 次之。"""
+        for fetcher in (fetch_fljk_summary("class"), await fetch_industry_summary()):
+            if isinstance(fetcher, str):
+                continue
+            menu = industry_menu(fetcher)
+            if isinstance(menu, MarketError):
+                continue
+            node = node_for_industry(menu, sector)
+            if node is not None:
+                return node
+        return None
 
     async def rank_list(
         self,
@@ -290,19 +318,61 @@ class SinaMarketData(PartialMarketData):
         high_first: bool | None = None,
     ) -> RankSnapshot | MarketError:
         key = resolve_rank_by(rank_by)
-        if key is None or key not in SINA_RANK_SORT:
+        if key is None:
             return unsupported(f"新浪不支持排行 {rank_by!r}", provider=PROVIDER)
-        use_high_first = True if high_first is None else bool(high_first)
         lim = max(1, min(int(limit), 100))
-        rows = await fetch_node_rows("hs_a", sort=SINA_RANK_SORT[key], asc=not use_high_first, limit=lim)
-        if isinstance(rows, MarketError):
-            return rows
-        return parse_rank_rows(rows, rank_by=key, high_first=use_high_first, limit=lim)
+        if key in SINA_RANK_SORT:
+            # high_first 与 asc 的反义关系沿用行情中心排序
+            high = True if high_first is None else bool(high_first)
+            rows = await fetch_node_rows("hs_a", sort=SINA_RANK_SORT[key], asc=not high, limit=lim)
+            if isinstance(rows, MarketError):
+                return rows
+            return parse_rank_rows(rows, rank_by=key, high_first=high, limit=lim)
+        if key not in MONEY_FLOW_RANK_BY:
+            return unsupported(f"新浪不支持排行 {rank_by!r}", provider=PROVIDER)
+        # 主力净流入榜默认降序；净流出榜需要升序才能把负值最大的排在前面
+        high = key == RankBy.MAIN_INFLOW if high_first is None else bool(high_first)
+        raw = await fetch_money_flow_rank(0 if high else 1, lim)
+        if isinstance(raw, str):
+            return network_error(raw, provider=PROVIDER)
+        return parse_money_flow_rank(raw, rank_by=key, high_first=high, limit=lim)
 
     async def sector_menu(self, kind: Literal["industry", "concept"]) -> dict[str, str] | MarketError:
-        if kind != "industry":
-            return unsupported("新浪仅支持行业板块菜单", provider=PROVIDER)
-        payload = await fetch_industry_summary()
+        payload = await fetch_fljk_summary("class") if kind == "concept" else await fetch_industry_summary()
         if isinstance(payload, str):
             return network_error(payload, provider=PROVIDER)
         return industry_menu(payload)
+
+    async def breadth(self) -> BreadthBar | MarketError:
+        """全 A 涨跌分布；需翻全市场约 70 页，作为东财不可用时的降级路径。"""
+        rows = await fetch_breadth_rows()
+        if isinstance(rows, MarketError):
+            return rows
+        return parse_breadth_rows(rows)
+
+    async def market_turnover(self) -> MarketTurnover | MarketError:
+        """两市成交额 = 上证 + 深证指数盘口成交额（一次请求）。"""
+        lines = await fetch_turnover_lines()
+        if isinstance(lines, MarketError):
+            return lines
+        quotes: list[Quote] = []
+        for sym, line in lines.items():
+            parsed = parse_hq_line(line, symbol=self._index_ref(sym))
+            if not isinstance(parsed, MarketError):
+                quotes.append(parsed)
+        if not quotes:
+            return parse_error("新浪两市成交额解析为空", provider=PROVIDER)
+        return parse_turnover_quotes(quotes)
+
+    @staticmethod
+    def _index_ref(sina_symbol: str) -> SymbolRef:
+        """指数盘口符号 → 占位 SymbolRef（成交额只要量额，标的信息不参与渲染）。"""
+        code = sina_symbol[2:] if len(sina_symbol) > 2 else sina_symbol
+        return SymbolRef(
+            code=code,
+            name=sina_symbol,
+            asset_class=AssetClass.INDEX,
+            exchange="CN",
+            provider_symbol=f"1.{code}" if sina_symbol.startswith("sh") else f"0.{code}",
+            sec_type="指数",
+        )

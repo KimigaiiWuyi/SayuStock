@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+import asyncio
 from typing import Mapping
 
 from aiohttp import ClientError, ClientSession, ClientTimeout
@@ -29,6 +30,12 @@ NODE_COUNT_URL = (
     "https://vip.stock.finance.sina.com.cn/quotes_service/api/json_v2.php/Market_Center.getHQNodeStockCount"
 )
 INDUSTRY_URL = "https://vip.stock.finance.sina.com.cn/q/view/newSinaHy.php"
+# 板块分类汇总：class=概念 / industry=申万行业 / area=地域
+FLJK_URL = "http://money.finance.sina.com.cn/q/view/newFLJK.php"
+# 资金流排行：个股级。fenlei 0=申万 1=概念 2=证监会行业
+MONEY_FLOW_RANK_URL = "https://vip.stock.finance.sina.com.cn/quotes_service/api/json_v2.php/MoneyFlow.ssl_bkzj_ssggzj"
+# 两市成交额取指数行情即可（上证+深证），省掉全市场扫描
+TURNOVER_INDEXES = ("sh000001", "sz399001")
 # 行情中心单页上限；新浪对大 num 不稳定，超出走翻页
 _NODE_PAGE_SIZE = 80
 # 翻页保护上限（沪深A 全量约 5500+）
@@ -181,6 +188,72 @@ async def fetch_industry_summary() -> dict[str, str] | str:
     if not out:
         return "新浪行业板块响应无数据"
     return out
+
+
+@async_file_cache(market="sina-fljk", sector="{kind}", suffix="json", minutes=3)
+async def fetch_fljk_summary(kind: str) -> dict[str, str] | str:
+    """板块分类汇总（GBK 变量赋值文本）；kind=class 概念 / industry 申万行业 / area 地域。
+
+    与 `fetch_industry_summary`（newSinaHy）行列序完全一致，都是 13 段 CSV：
+    节点,名称,家数,均价,涨跌额,涨跌幅,成交量(手),成交额(元),
+    领涨代码,领涨涨跌幅,领涨价,领涨涨跌额,领涨名。
+    """
+    text = await _get_text(FLJK_URL, {"param": kind})
+    if isinstance(text, MarketError):
+        return text.message
+    out: dict[str, str] = {}
+    for m in re.finditer(r'"(?P<node>[^"]+)":"(?P<row>[^"]*)"', text):
+        out[m.group("node")] = m.group("row")
+    if not out:
+        return f"新浪板块分类 {kind} 响应无数据"
+    return out
+
+
+@async_file_cache(market="sina-mfrank", sector="stock", suffix="json", sp="{asc}", minutes=3)
+async def fetch_money_flow_rank(asc: int, num: int) -> list[object] | str:
+    """个股资金流排行；asc=1 净流出在前，0 净流入在前。fenlei=0 申万全市场。"""
+    payload = await _get_json(
+        MONEY_FLOW_RANK_URL,
+        {"page": "1", "num": str(num), "sort": "netamount", "asc": str(asc), "fenlei": "0"},
+    )
+    if isinstance(payload, MarketError):
+        return payload.message
+    if not isinstance(payload, list):
+        return "新浪资金流排行响应非列表"
+    return payload
+
+
+async def fetch_turnover_lines() -> dict[str, str] | MarketError:
+    """两市成交额：上证 + 深证指数盘口原始行（一次请求拿两个）。"""
+    return await fetch_hq_lines(list(TURNOVER_INDEXES))
+
+
+# breadth 需要全市场而非前 N 只：按总数翻页并发拉取。并发上限防新浪限流。
+_BREADTH_CONCURRENCY = 6
+
+
+async def fetch_breadth_rows() -> list[object] | MarketError:
+    """沪深 A 全量行情（并发翻页）；breadth 统计用，失败即整条链顺延。"""
+    count = await fetch_node_count("hs_a")
+    if isinstance(count, str):
+        return network_error(count, provider=PROVIDER)
+    pages = max(1, -(-count // _NODE_PAGE_SIZE))
+    pages = min(pages, _NODE_MAX_PAGES)
+    gate = asyncio.Semaphore(_BREADTH_CONCURRENCY)
+
+    async def one(page: int) -> list[object] | str:
+        async with gate:
+            return await fetch_node_page("hs_a", page, "changepercent", 0)
+
+    chunks = await asyncio.gather(*(one(p) for p in range(1, pages + 1)))
+    rows: list[object] = []
+    for chunk in chunks:
+        if isinstance(chunk, str):
+            return network_error(chunk, provider=PROVIDER)
+        rows.extend(chunk)
+    if not rows:
+        return parse_error("新浪全A列表为空", provider=PROVIDER)
+    return rows
 
 
 async def fetch_node_rows(

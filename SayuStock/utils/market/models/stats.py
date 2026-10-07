@@ -23,7 +23,8 @@ class BreadthBar:
 
 @dataclass(frozen=True, slots=True)
 class MarketTurnover:
-    prev_amount: float
+    # 单市场源（如新浪指数盘口）只能给当日成交额，昨成交额为 None 而非 0 填充
+    prev_amount: float | None
     amount: float
     last_trade_date: datetime | None
 
