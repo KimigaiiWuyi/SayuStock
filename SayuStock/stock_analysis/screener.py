@@ -181,16 +181,16 @@ async def run_screener(text: str, *, top_n: int = 20) -> ScreenerResult:
         resolved = await resolve_industry_fs(industry)
         if isinstance(resolved, str):
             return _empty_error(text, resolved)
-        scope, fs = resolved
-        scope = f"行业·{scope}"
-        df = await fetch_board_members(fs)
+        name, code = resolved
+        scope = f"行业·{name}"
+        df = await fetch_board_members(code)
     elif concept:
         resolved = await resolve_concept_fs(concept)
         if isinstance(resolved, str):
             return _empty_error(text, resolved)
-        scope, fs = resolved
-        scope = f"概念·{scope}"
-        df = await fetch_board_members(fs)
+        name, code = resolved
+        scope = f"概念·{name}"
+        df = await fetch_board_members(code)
     else:
         df = await fetch_a_share_universe(max_pages=20)
         scope = "沪深A(按市值前约2000)"
