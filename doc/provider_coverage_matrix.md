@@ -925,14 +925,18 @@ if row.market_cap is None or row.change_pct is None or not row.name:
 8 秒内来得及试腾讯，东财**挂起**时预算被吃光、后面的源一个都不会开始 —— 而容灾恰恰只在
 那种时候才需要生效。叠加 `stock_request` 的 `ClientTimeout(total=300)`（等于没有超时）。
 
-- `eastmoney.stock_request` 300s → **20s**，与其它源一致。
+- `eastmoney.stock_request` 300s → **10s × 最多两个域名**（push2 / push2delay），
+  单次 `stock_request` 的最坏总时长仍是 20s，与其它源一致。
 - `_dispatch` 加**每源封顶** `SOURCE_TIMEOUT_S = 25.0`（> 各源自身 20s，让源自己报错而
   不是被取消；> 实测最慢健康调用 7.29s）。
 - 新增 `chain_deadline(seconds)`：调用方声明整链总预算后，链内按「剩余预算 / 剩余源数」
   分片，保证每个源都轮得到。模拟盘取价用它包住 `QUOTE_TIMEOUT_S = 8.0 → 12.0`
-  （4 源 × 3s，远大于实测最慢取价 0.85s）。
+  （远大于实测最慢取价 0.85s）。
 - 预算耗尽时**就地停链并回 `MarketError`**（不能让 `None` 漏给调用方）。
 - 测试：`test/market/test_provider_switch.py` 新增 3 条（慢源顺延 / 分片轮转 / 预算耗尽）。
+
+**上面两处第二轮被证伪，已改（见 §14.1 / §14.2）**：平摊到 4 源只有 3s，低于东财
+冷启动实测 3.98s；而 20s 的单域名超时会吃掉链上 25s 的每源封顶，备用域名一次都轮不到。
 
 ### 13.8 K 线日期窗滤空时返回未过滤的原序列（中）
 
@@ -996,3 +1000,102 @@ if row.market_cap is None or row.change_pct is None or not row.name:
   换不了源；`resolve` 因此不参与源链配置（`_IFACE_GROUPS` 里没有它）。
 - 附带一条评审提到的取舍：**「排在前面的源口径错了，后面的源不会再试」** —— 这也是刻意的
   （成功即返回）。口径差异已写在各组配置描述里（如 K 线的新浪不复权）。
+
+## 14. 第二轮评审整改（2026-10-08）
+
+第二轮结论是「只差两处小改动，改完就可以合」。下面四条已落地并实网复现/验证；
+第 1 条未收到（见 §14.5）。
+
+### 14.1 链头只分到 3s，一次正常请求被切在成功之前（必改）
+
+`_source_budget` 原先是 `min(SOURCE_TIMEOUT_S, 剩余预算 / 剩余源数)`。模拟盘取价
+`QUOTE_TIMEOUT_S = 12.0` 摊到 4 源，链头只拿到 **3s**；而东财首拨要建连 + 握手，
+**冷启动实测 3.98s** —— 分片方向没错，错在把「一次正常但偏慢的请求」和「挂起」一视同仁。
+
+修法是给时间片加下限，同时保留「不越出剩余总预算」的夹取：
+
+```python
+share = max(remaining / sources_left, MIN_SOURCE_SLICE_S)  # MIN_SOURCE_SLICE_S = 8.0
+return min(SOURCE_TIMEOUT_S, remaining, share)
+```
+
+8s ≈ 冷启动的两倍余量。三个夹取各自的职责写在 `_source_budget` 的 docstring 里：
+不超每源封顶、不越剩余总预算、也不为了平摊给后面的源把当前这个切掉。
+
+- 回归 `test_first_source_slice_covers_cold_start`：4 源 12s 下链头 ≥ 8s 且 > 3.98s、
+  不越出剩余总预算、预算耗尽回 0。（断言带 1e-6 容差：`deadline - monotonic()` 是
+  两个大浮点数相减，实测有 1e-10 量级舍入。）
+- 既有的 `test_chain_deadline_reserves_time_for_the_rest_of_the_chain` 把下限
+  monkeypatch 成 0.05s —— 否则为了等链头那 8s 的时间片，单测要空跑 8 秒。
+
+### 14.2 东财超时直接抛异常，备用域名一次都轮不到（必改）
+
+`stock_request` 里 push2 失败会在 `urls = [push2, push2delay]` 上再试一次，但
+`except ServerDisconnectedError` / `except ClientConnectionError` 只覆盖连接类错误。
+aiohttp 的 `ClientTimeout(total=)` 超时抛的是**裸 `asyncio.TimeoutError`**
+（不是 `ServerTimeoutError`，因而不属于 `ClientConnectionError`），于是超时直接冲出
+`stock_request`，备用域名一次都轮不到。
+
+不是推测：把 `update_stocks.py` 全量重跑一次就当场复现 —— 一级板块拉到 29/31 时崩在
+`aiohttp/helpers.py:759 raise asyncio.TimeoutError from exc_val`，整个刷新任务失败。
+
+两处改动：
+
+- 捕 `(ClientConnectionError, asyncio.TimeoutError)`，超时也走 `_update_preferred_domain`。
+- 单域名超时 20s → **10s**：push2 / push2delay 各一次，单次 `stock_request` 最坏总时长
+  仍是 20s。若仍是 20s，链上 `SOURCE_TIMEOUT_S = 25s` 的每源封顶会把备用域名那次重试
+  掐掉（20 + 20 = 40 > 25）—— 而 push2 被限流时，push2delay 往往正是通的那个。
+
+回归：新增 `test/market/test_eastmoney_domain_fallback.py` 3 条（超时后确实再打
+push2delay / 两个域名都超时回 `-400016` 而不是抛异常 / 非 push2 地址没有备用域名）。
+
+### 14.3 ST 拦截只修了一半：名称为空被替换成了代码（必改）
+
+上一轮加的「主板缺名拒单」判的是 `if name`，但解析层拿不到名称时会把**代码回填进
+name**：
+
+- `adapters/eastmoney/parse_quote.py:94`：`name_raw = opt_str(data, f58) or code`
+- `adapters/eastmoney/provider.py:211,267`、`adapters/_base.py:51`：`name=code_info[1] or secid…`
+
+所以生产链路里 name 永远不是 `None`（单测只造了 `None`，那条路真机走不到）。代码不是
+空串，「缺名就拒单」被整个绕过：本地表里的票（`*ST帅电` 等）能拦住，表外的
+`609999` / `001381` 涨 6% 照样按主板 ±10% 成交。
+
+修法：`matcher._name_is_placeholder()` 把「空 / 等于代码 / 带市场前缀的 secid 形态
+（`1.609999`）」一并判为缺名，`_missing_name_reason` 改用它。
+
+回归两端都钉住：
+
+- `test/market/test_parse_quote.py::test_missing_name_becomes_code_placeholder_and_matcher_rejects_it`
+  先用真 `parse_quote_payload` 证明解析层确实产出代码占位，再把该 name 喂给真 matcher 断言被拒
+  —— 单测不再自造生产上不存在的输入。
+- `test/test_papertrade_matcher.py` 覆盖 6 种占位形态（`609999` / `001381` / `1.609999` /
+  `0.001381` / 空串 / 纯空白），外加反向对照：真名 +6% 放行、`*ST` +6% 仍被涨停拦截。
+
+### 14.4 `chinese_stocks.json` 刷新（发版前必做）
+
+原表 5909 条、生成于 2026-09-04。用仓库自带 `SayuStock/utils/update_stocks.py`
+（东财 `clist` 全 A + 行业板块三级成分）重跑，耗时 77.6s：
+
+| 项 | 结果 |
+|----|------|
+| 条数 | 5909 → **5921** |
+| 新增 / 删除 | +12 / **-0** |
+| 改名/跨行 | 58（含 `300527 ST应急→中船应急` 等 4 只摘帽、`600363→ST联光` 等 2 只戴帽） |
+| ST 条数 | 327 → 325 |
+| 行业覆盖 | 5579/5921 |
+
+两点核对：
+
+- **评审点名的 `001381` 这次进了表**（皇冠新材），`609999` 不是真代码（表中无此项），
+  所以「表外主板代码」这条容灾路径仍然存在，§14.3 的占位判据才是兜底。
+- `XD*` / `C*`（除息日、新股）这类**临时前缀名**新旧两版都有（旧 6 个、新 5 个），
+  不是本次刷新引入的；它们不影响 `_is_st`（前缀不是 ST），暂按上游原样保留。
+
+⚠️ 这次重跑顺带就是 §14.2 的端到端验证：修之前同一脚本必崩，修之后一次跑通。
+
+### 14.5 未收到评审第 1 条
+
+第二轮报告正文从「2.」开始，附件（完整报告 + 分布图）没有随消息到达，所以
+「还没解决的有两件」里的**第 1 条无法核对**。已向作者索要；拿到后本条再定稿，
+不排除还要再改一处。

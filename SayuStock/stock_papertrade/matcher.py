@@ -104,6 +104,23 @@ def _limit_threshold_for(code: str, name: Optional[str] = None) -> float:
 _NAME_REQUIRED_PREFIXES = ("60", "00")
 
 
+def _name_is_placeholder(name: Optional[str], code: str) -> bool:
+    """名称是不是「代码回填」的占位，而不是真名。
+
+    解析层拿不到名称时会把代码当成名称填进去（``name or code``），带市场前缀的
+    secid 形态（``1.600519``）也会被回填进来。占位名不是空串，所以只判 falsy 的
+    「缺名就拒单」会被整个绕过——本地表里的票能拦住，表外的 ``609999`` / ``001381``
+    这类主板代码照样按 ±10% 放行，正是 ST 拦截失效的那一半。
+    """
+    nm = (name or "").strip()
+    if not nm:
+        return True
+    if nm == code:
+        return True
+    head, sep, tail = nm.partition(".")
+    return bool(sep) and head.isdigit() and tail.strip() == code
+
+
 def _missing_name_reason(code: str, name: Optional[str]) -> str:
     """主板拿不到证券名称时的拒单原因；无需名称或已有名称时返回空串。
 
@@ -111,8 +128,10 @@ def _missing_name_reason(code: str, name: Optional[str]) -> str:
     名称会退化/缺失。此时不能当成普通主板放行——那等于把 ST 的涨跌停从 ±5%
     悄悄放宽到 ±10%，正好在最需要风控的时候失守。科创/创业(±20%)、北交所(±30%)
     的阈值与 ST 无关，缺名不影响判定，不拦。
+
+    注意「缺失」包含「被回填成代码」这一形态，判据见 :func:`_name_is_placeholder`。
     """
-    if name or len(code) < 6 or not code.startswith(_NAME_REQUIRED_PREFIXES):
+    if not _name_is_placeholder(name, code) or len(code) < 6 or not code.startswith(_NAME_REQUIRED_PREFIXES):
         return ""
     return (
         f"涨跌停风控不可用：主板 {code} 未取得证券名称，无法判定 ST/风险警示"

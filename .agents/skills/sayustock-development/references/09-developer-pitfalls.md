@@ -95,6 +95,11 @@ async def bar(...):
 - 建账确认文案不写死可变数字（artifact 永久化）  
 - **成交只走 `trade_insert`**：同一 session 写流水+现金+持仓；`position_upsert` 只刷新报价  
 - sell 现金是 `amount - fee`，**不要**再加 `realized_pnl`（否则盈亏记两遍）  
+- **「缺名就拒单」要连代码占位一起判**：解析层拿不到名称时会把代码回填进 `name`
+  （`parse_quote.py` 的 `name_raw = opt_str(data, f58) or code`），所以生产链路上 `name`
+  永远不是 `None` —— 只判 falsy 的缺名检查会被整个绕过，本地表外的主板代码照样按 ±10%
+  撮合。判据在 `matcher._name_is_placeholder`，含带市场前缀的 `1.609999` 形态；
+  单测要用真解析器产出的 name，别自己造 `None`（那条路真机走不到）。  
 
 ## 9.9 缓存污染与测试（S-8）
 
@@ -110,23 +115,6 @@ async def bar(...):
 - 新版 mplchart（无 `bgcolor`）：默认浅色；数据 pane 透明，底色在 `label=root`。`Chart(bgcolor=)` 由 `mplchart_compat` 转成暗色 `style`，出图前再刷 root。  
 - 新版忽略 `color_scheme`：BOLL 颜色必须 `Bands(..., color=)`，不能再靠 scheme 键。  
 - matplotlib 不要把 `MiSans VF` 放 `font.sans-serif` 第一位：VF 只注册 Regular，`fontweight` 不会换档。优先系统静态 `MiSans`（Thin–Heavy）。  
-
-Now write a test and run a quick smoke if possible. pandas might be missing from venv still.
-
-I'll write a test that:
-1. Imports Chart from compat
-2. Creates a tiny prices df
-3. Checks root facecolor is dark
-
-If mplchart/pandas missing, skip.
-
-Also verify kline import order after adding _paint_chart_background - ruff isort.
-
-And verify chart_kline has _paint_chart_background imported - I added it.
-
-Check if kline Chart() now gets style from bgcolor via compat - yes automatically.
-
-Write test/test_mplchart_background.py
 
 ## 9.11 板块 vs 个股（S-10）
 
@@ -163,6 +151,11 @@ if not isinstance(raw_data, KlineSeries):
 - **禁止**：在命令里 `stock_request` 后直接读 `diff[i]["f3"]`  
 
 新列表需求优先 `port.board` / 扩展 Port。
+
+`stock_request` 的 push2 → push2delay 重试**捕不到超时**：`ClientTimeout(total=)` 抛的是
+**裸 `asyncio.TimeoutError`**（不是 `ServerTimeoutError`，因而不属于 `ClientConnectionError`），
+要连它一起捕，否则超时直接冲出、备用域名一次都轮不到（`update_stocks.py` 全量重跑就死在这）。
+单域名超时 10s、两个域名合计 20s，必须小于链上 `SOURCE_TIMEOUT_S`（25s）的重试才有意义。
 
 ## 9.14 前缀与空命令（S-13）
 

@@ -75,6 +75,11 @@ EASTMONEY_KLINE_DEFAULT_DAYS: Dict[str, int] = {
     "111": 365,
 }
 
+# 单个域名的一次请求超时（秒）。push2 / push2delay 两个域名各给一次机会，
+# 所以一次 stock_request 的最坏总时长仍是 20s（与其它行情源一致），
+# 但要小于链上 per-source 封顶，备用域名的重试才有意义。
+_EM_ATTEMPT_TIMEOUT_S = 10
+
 
 class EastMoneyStockItem(TypedDict):
     secid: str
@@ -184,10 +189,14 @@ class EastMoneyRequester:
                         params=params,
                         json=_json,
                         data=data,
-                        # 与其它行情源一致的单请求超时。原先 300s 等于没有超时：
-                        # 一个卡住的连接会把优先级链的取数预算整个吃光，
-                        # 后面的源根本没机会被轮到。
-                        timeout=ClientTimeout(total=20),
+                        # 单个域名的单次请求超时。原先 300s 等于没有超时：一个卡住的
+                        # 连接会把优先级链的取数预算整个吃光，后面的源根本没机会被轮到。
+                        # 但不能只压到 20s 了事——push2 卡满 20s 时，链上
+                        # SOURCE_TIMEOUT_S=25s 的每源封顶会把「切备用域名」的那次重试
+                        # 直接掐掉，而 push2 被限流时 push2delay 往往是通的
+                        # （全 A 翻页实测就死在这里）。每域名 10s × 最多两个域名，
+                        # 总时长仍是 20s，重试也真的来得及。
+                        timeout=ClientTimeout(total=_EM_ATTEMPT_TIMEOUT_S),
                     ) as resp:
                         try:
                             raw_data = await resp.json(content_type=None)
@@ -214,8 +223,13 @@ class EastMoneyRequester:
                 except ServerDisconnectedError:
                     logger.warning(f"[SayuStock][EM] 请求 {req_url} 连接断开。")
                     self._update_preferred_domain(req_url)
-                except ClientConnectionError as error:
-                    logger.error(f"[SayuStock][EM] 请求 {req_url} 连接失败: {error}")
+                except (ClientConnectionError, asyncio.TimeoutError) as error:
+                    # 超时必须也走「切备用域名」这条路。aiohttp 的
+                    # ClientTimeout(total=) 抛的是**裸 asyncio.TimeoutError**
+                    # （不是 ServerTimeoutError，因而不属于 ClientConnectionError），
+                    # 漏掉它就等于超时直接冲出 stock_request：备用域名一次都轮不到，
+                    # 全 A 翻页里一页超时就让整个任务失败。
+                    logger.error(f"[SayuStock][EM] 请求 {req_url} 失败: {type(error).__name__}: {error}")
                     self._update_preferred_domain(req_url)
                 finally:
                     self.now_queue -= 1

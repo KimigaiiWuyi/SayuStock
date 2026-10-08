@@ -127,8 +127,11 @@ build_default_market()  →  CompositeMarketData(
   **空行/缺行不属于 `not_found`**：符号映射成功、只是这行没数据时报 `empty` 照常顺延。
 - 时间预算：每源封顶 `SOURCE_TIMEOUT_S`（25s，> 各源自身 20s HTTP 超时，让源自己报错而不被
   取消）。调用方可用 `utils.market.chain_deadline(seconds)` 声明整链总预算，链内按
-  「剩余预算 / 剩余源数」分片——**只在外层包 `asyncio.wait_for` 会取消整个 `quote()`**，
-  第一个源挂起就把预算吃光、后面的源一个都轮不到。模拟盘取价就这么用（`quote_service`）。
+  「剩余预算 / 剩余源数」分片、**且不低于 `MIN_SOURCE_SLICE_S`（8s）**—— 只平摊的话 4 源各
+  约 3s，低于东财首拨冷启动实测 3.98s，一次正常取价会被切在成功之前；**只在外层包
+  `asyncio.wait_for` 会取消整个 `quote()`**，第一个源挂起就把预算吃光、后面的源一个都轮不到。
+  模拟盘取价就这么用（`quote_service`）。
+- `resolve()` 不参与源链：代码↔secid 只有东财 searchapi 一家。
 - 解析层（`get_code_id` → 东财 searchapi）失败 ≠ 标的不存在：`get_code_id_strict`
   在网络/HTTP 失败时抛 `ResolveLayerError`（HTTP 200 无结果才是真不存在）；
   东财/腾讯/新浪适配器把它转 **network 错误顺延**，避免误报 not_found 短路

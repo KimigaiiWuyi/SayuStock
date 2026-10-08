@@ -301,6 +301,68 @@ def test_missing_name_without_price_reference_is_not_blocked():
     assert res.ok is True
 
 
+def test_code_placeholder_name_is_rejected_like_missing():
+    """名称被回填成代码时也要拒单——占位名不是空串，只判 falsy 会被绕过。
+
+    评审现场：本地表外的 `609999` / `001381`，quote 回来的 name 就是代码本身，
+    于是「缺名拒单」形同虚设，+6% 的单子照样按主板 ±10% 成交。
+    解析层确实会产出这个形态，见 test/market/test_parse_quote.py 的
+    ``test_missing_name_becomes_code_placeholder_and_matcher_rejects_it``。
+    """
+    for code, name in (
+        ("609999", "609999"),
+        ("001381", "001381"),
+        ("609999", "1.609999"),  # 解析层 secid 形态的回填
+        ("001381", "0.001381"),
+        ("609999", ""),
+        ("609999", "   "),
+    ):
+        res = match_order(
+            "buy",
+            code,
+            100,
+            106.0,
+            cash_available=1_000_000,
+            position_qty=0,
+            last_close=100.0,
+            change_pct=6.0,
+            name=name,
+        )
+        assert res.ok is False, f"{code}/{name!r} 应被拒"
+        assert "未取得证券名称" in res.reason, res.reason
+    print("[OK] 代码占位名按缺名拒单")
+
+
+def test_real_name_still_trades_and_st_is_caught():
+    """反向对照：真名放行、*ST 收窄到 ±5%（证明拒的是占位而不是名字本身）。"""
+    ok = match_order(
+        "buy",
+        "609999",
+        100,
+        106.0,
+        cash_available=1_000_000,
+        position_qty=0,
+        last_close=100.0,
+        change_pct=6.0,
+        name="某某股份",
+    )
+    assert ok.ok is True
+    st = match_order(
+        "buy",
+        "609999",
+        100,
+        106.0,
+        cash_available=1_000_000,
+        position_qty=0,
+        last_close=100.0,
+        change_pct=6.0,
+        name="*ST帅电",
+    )
+    assert st.ok is False
+    assert "涨停板买入拦截" in st.reason
+    print("[OK] 真名放行，*ST +6% 被涨停拦截")
+
+
 def test_calc_realized_pnl_profit():
     """实现盈亏：盈利"""
     pnl = calc_realized_pnl(avg_cost=100.0, sell_qty=100, sell_price=110.0, fee=10.0)

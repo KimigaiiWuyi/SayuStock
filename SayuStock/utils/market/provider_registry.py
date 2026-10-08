@@ -14,8 +14,9 @@
   `not_found` 短路返回（标的解析层共用，换源无意义）。全部失败才报错，
   报「优先级最高且真正出错」的那个源的错误。
 - 时间预算：每个源最多占 `SOURCE_TIMEOUT_S`；调用方可用 `chain_deadline()`
-  再声明整链总预算，链内按「剩余预算 / 剩余源数」分片。没有分片时，
-  一个挂起的源会把预算吃光，后面的源一个都轮不到。
+  再声明整链总预算，链内按「剩余预算 / 剩余源数」分片，且不低于
+  `MIN_SOURCE_SLICE_S`。没有分片时，一个挂起的源会把预算吃光，后面的源
+  一个都轮不到。
 """
 
 from __future__ import annotations
@@ -119,8 +120,15 @@ _SYSTEM_ORDER: tuple[str, ...] = ("eastmoney", "tencent", "sina", "ths")
 # （quote 0.85s / kline 0.48s / board 0.99s / hotmap 0.47s / breadth 7.29s）。
 SOURCE_TIMEOUT_S: float = 25.0
 
+# 每源时间片的**下限**（只在还有剩余总预算时生效）。
+# 「剩余预算 / 剩余源数」在 4 源 12s 预算下只给到 3s，而东财首拨要建连 + 握手，
+# 实测冷启动 3.98s —— 一次**正常**的取价会被切在成功之前，然后整条链白跑。
+# 取 8s ≈ 实测冷启动的两倍余量；挂了仍然照常顺延，只是先给足正常的请求。
+MIN_SOURCE_SLICE_S: float = 8.0
+
 # 取数总预算。调用方（如模拟盘取价）用 chain_deadline() 声明后，链上每个源按
-# 「剩余预算 / 剩余源数」分到时间片，保证慢源挂起时后面的源仍能轮到；
+# 「剩余预算 / 剩余源数」分到时间片（不低于 MIN_SOURCE_SLICE_S，也不超过剩余
+# 总预算本身），保证慢源挂起时后面的源仍能轮到；
 # 不声明预算的调用方（大盘概览、云图等）走 SOURCE_TIMEOUT_S 每源顶格。
 _deadline: ContextVar[float | None] = ContextVar("sayustock_market_chain_deadline", default=None)
 
@@ -140,14 +148,20 @@ def chain_deadline(seconds: float) -> Iterator[None]:
 
 
 def _source_budget(sources_left: int) -> float:
-    """当前源可用的秒数；0 表示预算已耗尽，链应就地停止。"""
+    """当前源可用的秒数；0 表示预算已耗尽，链应就地停止。
+
+    时间片 = min(每源封顶, 剩余总预算, max(剩余预算 / 剩余源数, 每源下限))。
+    三个夹取各有职责：不越出剩余总预算、不超每源封顶、也不为了「平摊给后面的源」
+    把一个正常但偏慢的源切在成功之前（东财冷启动 3.98s 就是这么被切掉的）。
+    """
     deadline = _deadline.get()
     if deadline is None:
         return SOURCE_TIMEOUT_S
     remaining = deadline - time.monotonic()
     if remaining <= 0:
         return 0.0
-    return min(SOURCE_TIMEOUT_S, remaining / sources_left)
+    share = max(remaining / sources_left, MIN_SOURCE_SLICE_S)
+    return min(SOURCE_TIMEOUT_S, remaining, share)
 
 
 def normalize_provider_id(value: object) -> str | None:

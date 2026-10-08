@@ -502,14 +502,18 @@ def test_source_timeout_falls_through(stub_registry, monkeypatch: pytest.MonkeyP
     asyncio.run(_run())
 
 
-def test_chain_deadline_reserves_time_for_the_rest_of_the_chain(stub_registry) -> None:
+def test_chain_deadline_reserves_time_for_the_rest_of_the_chain(stub_registry, monkeypatch: pytest.MonkeyPatch) -> None:
     """声明总预算后按「剩余预算/剩余源数」分片：链头挂起也轮得到后面的源。
 
     这正是模拟盘取价的场景——外层只有 wait_for(timeout) 时，链头一挂
     就把预算吃光，后面的源一个都不会开始。
+
+    这里把每源下限压到 0.05s，免得为了等链头那 8s 的时间片把单测拖慢；
+    下限本身的行为由 test_first_source_slice_covers_cold_start 单独钉。
     """
 
     async def _run() -> None:
+        monkeypatch.setattr(pr, "MIN_SOURCE_SLICE_S", 0.05)
         stub_registry["eastmoney"].sleep_ifaces = {"quote": 30.0}
         m = _market({})
         started = time.monotonic()
@@ -518,6 +522,31 @@ def test_chain_deadline_reserves_time_for_the_rest_of_the_chain(stub_registry) -
         assert time.monotonic() - started < 2.0
         assert isinstance(q, Quote)
         assert q.symbol.name == "tencent:quote"
+
+    asyncio.run(_run())
+
+
+def test_first_source_slice_covers_cold_start() -> None:
+    """4 源 12s 预算下链头必须拿到 > 实测冷启动 3.98s 的时间片。
+
+    只按「剩余预算/剩余源数」平摊是 3s，会把一次**正常**的取价切在成功之前，
+    于是整条链白跑（东财冷启动实测 3.98s）。下限同时不得让时间片越出剩余总预算。
+    """
+
+    async def _run() -> None:
+        tol = 1e-6  # deadline 与 monotonic 都是大数浮点，减法有 1e-10 量级舍入
+        assert pr._source_budget(4) == pr.SOURCE_TIMEOUT_S  # 无 deadline → 每源顶格
+        with pr.chain_deadline(12.0):
+            first = pr._source_budget(4)
+            assert first >= pr.MIN_SOURCE_SLICE_S > 3.98, first
+            assert first <= 12.0 + tol
+            assert pr._source_budget(3) >= pr.MIN_SOURCE_SLICE_S  # 后续源同样吃下限
+        # 预算比下限还小：只能拿到剩下的全部，不能凭空超支
+        with pr.chain_deadline(0.8):
+            assert pr._source_budget(4) <= 0.8 + tol
+        # 预算耗尽 → 0，链应就地停止
+        with pr.chain_deadline(-1.0):
+            assert pr._source_budget(4) == 0.0
 
     asyncio.run(_run())
 
