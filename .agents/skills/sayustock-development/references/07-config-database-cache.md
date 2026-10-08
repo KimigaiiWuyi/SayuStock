@@ -22,6 +22,11 @@ STOCK_CONFIG = StringConfig("SayuStock", CONFIG_PATH, CONFIG_DEFAULT)
 
 默认项见 `config_default.py`：
 
+> 改这里的默认值只影响**新装 / 新增键**：Core 加载配置时对已存在的键**保留用户 `data`**、
+> 只刷新 title/desc/options（`utils/plugins_config/gs_config.py` 的 `reconcile_config`，
+> 注释原文「同类型: 刷新代码侧元数据, 保留用户 data」）。所以改默认值不需要迁移逻辑，
+> 但也别指望老实例自动跟上。
+
 | 键 | 含义 | 默认 |
 |----|------|------|
 | ~~`papertrade_multi_group`~~ | **已废弃**（多盘制后无意义），运行时不再读 | False |
