@@ -252,11 +252,29 @@ def test_quote_unreachable_message_tells_llm_what_to_do():
     print("[OK] 拒绝文案含限流说明与重试指引")
 
 
+def test_quote_budget_lets_chain_head_reach_the_floor():
+    """取价总预算必须够链头吃到 MIN_SOURCE_SLICE_S。
+
+    链上时间片 = min(每源封顶, 剩余总预算, max(剩余/剩余源数, 下限))，所以总预算
+    一旦低于下限，链头又会退化成「一个人吃掉整个预算」——正是第二轮评审报的
+    「东财冷启动实测 3.98s 被 3s 时间片切掉」。这里把出货值和下限绑死：谁把
+    QUOTE_TIMEOUT_S 调小到下限以下，这条直接红。
+    """
+    from SayuStock.utils.market import provider_registry as pr
+
+    budget = quote_service_mod.QUOTE_TIMEOUT_S
+    assert budget >= pr.MIN_SOURCE_SLICE_S, budget
+    with pr.chain_deadline(budget):
+        assert pr._source_budget(4) >= pr.MIN_SOURCE_SLICE_S
+    print(f"[OK] 取价总预算 {budget}s 够链头吃到每源下限 {pr.MIN_SOURCE_SLICE_S}s")
+
+
 if __name__ == "__main__":
     test_failed_entry_uses_short_ttl()
     test_fail_ttl_is_short_enough_to_not_block_recovery()
     test_is_fresh_expires_failed_entry_quickly()
     test_quote_service_respects_short_fail_ttl()
+    test_quote_budget_lets_chain_head_reach_the_floor()
     test_record_trade_rejects_when_quote_unreachable()
     test_record_trade_rejects_on_stale_price_when_quote_ok()
     test_record_trade_allows_fresh_price()

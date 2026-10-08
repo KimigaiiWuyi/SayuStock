@@ -527,10 +527,12 @@ def test_chain_deadline_reserves_time_for_the_rest_of_the_chain(stub_registry, m
 
 
 def test_first_source_slice_covers_cold_start() -> None:
-    """4 源 12s 预算下链头必须拿到 > 实测冷启动 3.98s 的时间片。
+    """4 源预算下链头必须拿到 > 实测冷启动 3.98s 的时间片。
 
     只按「剩余预算/剩余源数」平摊是 3s，会把一次**正常**的取价切在成功之前，
     于是整条链白跑（东财冷启动实测 3.98s）。下限同时不得让时间片越出剩余总预算。
+    「出货的 `QUOTE_TIMEOUT_S` 够不够链头吃到下限」在
+    `test/test_papertrade_quote_resilience.py` 里断言——那边已经加载了 quote_service。
     """
 
     async def _run() -> None:
