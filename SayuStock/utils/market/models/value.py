@@ -20,3 +20,5 @@ class ValueSeries:
     symbol: SymbolRef
     kind: ValueKind
     points: tuple[ValuePoint, ...]
+    # 命中数据源 id（eastmoney/tencent/sina/okx/tiantian/vix），渲染层展示真实来源
+    provider: str | None = None

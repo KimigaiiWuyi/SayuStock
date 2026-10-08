@@ -55,6 +55,7 @@ from .render_data import (
 )
 from ..utils.constant import ErroText
 from ..utils.market.models import IntradaySeries
+from ..utils.market.display import source_label
 
 
 def _clean_stock_display_name(name: str) -> str:
@@ -273,7 +274,7 @@ def draw_single_stock_chart(series: IntradaySeries) -> DrawResult:
     fig.text(
         0.016,
         0.005,
-        "数据来源：东方财富 | SayuStock",
+        f"数据来源：{source_label(series.provider)} | SayuStock",
         color=FG_COLOR,
         fontsize=9,
         alpha=0.65,
@@ -534,7 +535,7 @@ def draw_multi_stock_chart(series_list: list[IntradaySeries]) -> DrawResult:
     fig.text(
         0.016,
         0.005,
-        "数据来源：东方财富 | SayuStock",
+        f"数据来源：{source_label(*(s.provider for s in series_list))} | SayuStock",
         color=FG_COLOR,
         fontsize=9,
         alpha=0.65,

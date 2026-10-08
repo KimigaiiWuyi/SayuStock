@@ -22,6 +22,11 @@ STOCK_CONFIG = StringConfig("SayuStock", CONFIG_PATH, CONFIG_DEFAULT)
 
 默认项见 `config_default.py`：
 
+> 改这里的默认值只影响**新装 / 新增键**：Core 加载配置时对已存在的键**保留用户 `data`**、
+> 只刷新 title/desc/options（`utils/plugins_config/gs_config.py` 的 `reconcile_config`，
+> 注释原文「同类型: 刷新代码侧元数据, 保留用户 data」）。所以改默认值不需要迁移逻辑，
+> 但也别指望老实例自动跟上。
+
 | 键 | 含义 | 默认 |
 |----|------|------|
 | ~~`papertrade_multi_group`~~ | **已废弃**（多盘制后无意义），运行时不再读 | False |
@@ -31,6 +36,9 @@ STOCK_CONFIG = StringConfig("SayuStock", CONFIG_PATH, CONFIG_DEFAULT)
 | `mapcloud_refresh_minutes` | 图/数据缓存 TTL | 3 |
 | `stock_cache_retention_days` | 每日清理保留天数 | 7 |
 | `eastmoney_cookie` | 东财 Cookie | 内置字符串 |
+| `market_api_chain` | 全局行情源链（`GsListStrConfig` 字符串列表，列表顺序即优先级）；**默认值已预填推荐链** `["东方财富","腾讯财经","新浪财经"]`（清空 = 内置链 东财→腾讯→新浪→同花顺）。**链外源自动排链尾兜底**（不是禁用），因此任何配置下 14 接口都有源可用；失败/不支持自动顺延；网页控制台改完热生效 | `["东方财富", "腾讯财经", "新浪财经"]` |
+| `market_api_chain_quote` / `_kline` / `_board` / `_market` / `_exclusive` | 五域源链覆盖（盘口/分时、K线、板块/排行/菜单、大盘统计/资金、东财独占）；**默认值同样预填推荐链**（①②＝东财→腾讯→新浪；③④＝东财→新浪；⑤＝东财），清空 = 跟随全局链；`_IFACE_GROUPS` 把 14 接口映射到域，`resolve` 不配。每键 `options` 只列**真正实现了该组接口的源**（④⑤ 组的依据见覆盖面矩阵 §13.9），某组只有一个可选值 = 该组是它独占的 | ①②＝`["东方财富", "腾讯财经", "新浪财经"]`；③④＝`["东方财富", "新浪财经"]`；⑤＝`["东方财富"]` |
+| `ths_api_key` | 同花顺金融数据 API（扶摇 fuyao.aicubes.cn）的 X-api-key | 内置公共 Key |
 | `holdings_analysis_unlimited_users` | 持仓分析免每日限额的 `user_id` 列表；网页控制台改完热生效 | `[]` |
 | `news_push_hourly_groups` | 雪球新闻「小时汇总」群列表（类别2，每小时整点合并推送） | `[]` |
 | `news_push_trading_session_groups` | 雪球新闻「交易时段汇总」群列表（类别3，每日 08/12/16/22 点合并推送：隔夜/午间/收盘/晚间） | `[]` |

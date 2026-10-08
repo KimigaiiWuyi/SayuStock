@@ -87,3 +87,39 @@ def test_intraday_from_payload_trends() -> None:
     assert len(series.points) == 2
     assert series.points[-1].price == 1680.0
     assert series.points[0].ts.year == 2026
+
+
+def test_missing_name_becomes_code_placeholder_and_matcher_rejects_it() -> None:
+    """名称缺失时解析层回填代码 —— 这条形态必须被模拟盘当成「缺名」拒掉。
+
+    解析层拿不到 f58 会把代码填进 name（``name_raw = ... or code``），所以
+    生产链路里 name 永远不是 None：只判 falsy 的缺名校验在真机上根本走不到，
+    表外主板代码（609999 / 001381）照样按 ±10% 放行。这里两端都钉住：
+    解析层确实产出代码占位，撮合层确实把它判成缺名。
+    """
+    payload = {"data": {"f57": "609999", "f43": 106.0, "f60": 100.0, "f170": 6.0}}
+    q = parse_quote_payload(payload, provider_symbol="1.609999")
+    assert not is_market_error(q)
+    assert q.symbol.name == "609999"  # 不是 None，是代码占位
+
+    import importlib.util
+
+    matcher_path = Path(__file__).resolve().parent.parent.parent / "SayuStock" / "stock_papertrade" / "matcher.py"
+    spec = importlib.util.spec_from_file_location("_matcher_for_placeholder_test", matcher_path)
+    assert spec is not None and spec.loader is not None
+    matcher = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(matcher)
+
+    res = matcher.match_order(
+        "buy",
+        q.symbol.code,
+        100,
+        106.0,
+        cash_available=1_000_000,
+        position_qty=0,
+        last_close=q.prev_close,
+        change_pct=q.change_pct,
+        name=q.symbol.name,
+    )
+    assert res.ok is False
+    assert "未取得证券名称" in res.reason

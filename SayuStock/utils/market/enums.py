@@ -64,3 +64,16 @@ class RankBy(str, Enum):
     AMOUNT = "amount"
     VOLUME = "volume"
     PROFIT_YOY = "profit_yoy"
+
+
+def resolve_rank_by(rank_by: RankBy | str) -> RankBy | None:
+    """排行键归一化：枚举直通，字符串按 value（忽略大小写）匹配。"""
+    if isinstance(rank_by, RankBy):
+        return rank_by
+    raw = (rank_by or "").strip()
+    if not raw:
+        return None
+    for m in RankBy:
+        if raw == m.value or raw.lower() == m.value:
+            return m
+    return None

@@ -39,6 +39,7 @@ from .chart_base import (
 from .render_data import build_compare_render_data
 from ..utils.constant import ErroText
 from ..utils.market.models import KlineSeries
+from ..utils.market.display import source_label
 
 
 async def to_compare_fig(series_list: list[KlineSeries]) -> DrawResult:
@@ -310,7 +311,7 @@ def draw_compare_chart(series_list: list[KlineSeries]) -> DrawResult:
     fig.text(
         0.016,
         0.005,
-        "数据来源：东方财富 | SayuStock",
+        f"数据来源：{source_label(*(s.provider for s in series_list))} | SayuStock",
         color=FG_COLOR,
         fontsize=9,
         alpha=0.65,

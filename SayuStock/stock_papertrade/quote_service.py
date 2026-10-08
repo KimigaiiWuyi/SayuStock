@@ -1,4 +1,4 @@
-"""持仓报价服务（60s TTL 内存缓存 + 东财 push2 轻量报价）。
+"""持仓报价服务（TTL 内存缓存 + 行情端口轻量报价）。
 
 2026-07-01 新增。背景：
 
@@ -7,19 +7,23 @@
   "自动刷报价" 后端：
 
     - ``quote_service.get_quote(secid) -> Optional[float]``
-        单只股票当前价；60s 内存复用。
+        单只股票当前价；TTL 内存复用（成功 60s / 失败 5s）。
     - ``quote_service.get_quotes_batch(secids) -> dict[str, Optional[float]]``
-        批量；先查缓存，缺失项并发去打 /api/qt/stock/get。
+        批量；先查缓存，缺失项并发取价。
 
 API：
 
-  - 端点：``https://push2.eastmoney.com/api/qt/stock/get``
-  - 字段：仅取 ``f43,f44,f45,f46,f60,f57`` 6 个（不复用 SINGLE_STOCK_FIELDS 那
-    40 个，单价查询 < 1KB 体量）。``f43``=当前价，``f57``=名称。
-  - 复用现有的 ``EASTMONEY_REQUESTER.stock_request`` 拿 push2/push2delay failover。
+  - 取价走行情端口：``get_market().quote(secid)`` —— 按源链（默认
+    东财→腾讯→新浪→同花顺，后台可配）逐一尝试，**东财限流时自动顺延**，
+    不再整条链路失守。
+  - 现价 / 昨收 / 涨跌幅 / 名称语义由端口 ``Quote`` 模型保证
+    （等价于原先直接用 push2 的 f43/f60/f45/f57）。
+  - 代价：端口 quote 复用 ``get_single_stock``（SINGLE_STOCK_FIELDS ~50 字段
+    并合并当日分时），单次响应体积比原先手写的 6 字段请求大；换来的是
+    多源容错与字段口径统一。
 
 降级：
-  - API 失败 → 返回 ``None``；调用方按 ``last_quote_price → avg_cost → None`` 顺序兜底。
+  - 全部源都失败 → 返回 ``None``；调用方按 ``last_quote_price → avg_cost → None`` 顺序兜底。
   - 老库 ``last_quote_price`` 列尚未迁移完（重启前）→ 该方法仍能跑，但写回 DB
     的 ``bulk_set_quote`` 会因列不存在抛 OperationalError；调用方需要 try/except 兜。
 
@@ -49,7 +53,14 @@ from gsuid_core.logger import logger
 # 常量
 # ============================================================
 QUOTE_CACHE_TTL: float = 60.0  # 成功取价的内存缓存秒数；超过即穿透去拉
-QUOTE_TIMEOUT_S: float = 8.0  # 单只 HTTP 超时
+# 单只股票的**取价总预算**（秒）。它同时是链上每个源的时间片来源：
+# chain_deadline 让链上各源按「剩余预算 / 剩余源数」分摊，且不低于
+# MIN_SOURCE_SLICE_S（8s）—— 只平摊的话 4 源各约 3s，而东财首拨冷启动实测
+# 要 3.98s，一次正常取价会被切在成功之前。只包一层 wait_for 的话，第一个源
+# 挂起就把预算吃光、后面的源一个都不会开始，而容灾恰恰是在那时才需要生效。
+# 取 20s：链头挂满 8s 之后，腾讯（再 8s）与新浪（剩 4s）都还轮得到；
+# 健康单源实测最慢 0.85s，正常取价根本走不到这个上限。
+QUOTE_TIMEOUT_S: float = 20.0
 # 失败缓存 TTL 必须**远小于**成功 TTL。失败也要缓存（否则限流期间每秒重试
 # 会把东财继续逼进 -400016），但锁 60s 太长：一次限流会让该票整整一分钟
 # 拿不到价，即便东财早已恢复也照样拒单。5s 足够挡住抖动，又不至于拖死整轮决策。
@@ -84,7 +95,7 @@ class QuoteCacheEntry:
 # 主服务
 # ============================================================
 class QuoteService:
-    """60s TTL in-memory quote cache + EastMoney push2 fetcher。
+    """TTL in-memory quote cache + 行情端口取价（get_market().quote）。
 
     单例 — 由 ``quote_service`` 模块级实例调用，无需自己 ``QuoteService()``。
     """
@@ -232,17 +243,20 @@ class QuoteService:
     async def _fetch_one(self, secid: str) -> tuple[Optional[float], Optional[float], Optional[float], Optional[str]]:
         """拉一次；返回 ``(price, last_close, change_pct, name)``。
 
-        经东财 adapter 解析：现价/昨收/涨跌幅(f170)/名称(f58)，不再误用 f45/f57。
+        走 ``get_market().quote()``：现价/昨收/涨跌幅/名称语义由端口保证，
+        东财限流时按优先级链顺延到腾讯/新浪，不再整条链路失守。
+
+        **失败必须返回全 None**（不可放行任何价格）：调用方以 None 表示
+        「拿不到实时价」，据此拒绝入库，勿改成兜底默认值。
         """
-        from ..utils.eastmoney import EASTMONEY_REQUESTER
+        from ..utils.market import get_market, chain_deadline
         from ..utils.market.errors import is_market_error
-        from ..utils.market.adapters.eastmoney.parse_quote import parse_quote_payload
 
         try:
-            resp = await asyncio.wait_for(
-                EASTMONEY_REQUESTER.get_single_stock(secid, ""),
-                timeout=QUOTE_TIMEOUT_S,
-            )
+            # chain_deadline 把总预算摊到每个源（同步上下文管理器，只写 ContextVar）；
+            # 外层 wait_for 只是硬保险，防的是链外还有别的耗时
+            with chain_deadline(QUOTE_TIMEOUT_S):
+                quote = await asyncio.wait_for(get_market().quote(secid), timeout=QUOTE_TIMEOUT_S)
         except asyncio.TimeoutError:
             logger.debug(f"[PaperTrade][Quote] secid={secid} 超时 (>={QUOTE_TIMEOUT_S}s)")
             return (None, None, None, None)
@@ -250,12 +264,9 @@ class QuoteService:
             logger.debug(f"[PaperTrade][Quote] secid={secid} HTTP 失败: {e}")
             return (None, None, None, None)
 
-        if isinstance(resp, str):
+        if is_market_error(quote) or quote.price <= 0:
             return (None, None, None, None)
-        parsed = parse_quote_payload(resp, provider_symbol=secid, sec_type="")
-        if is_market_error(parsed) or parsed.price <= 0:
-            return (None, None, None, None)
-        return (parsed.price, parsed.prev_close, parsed.change_pct, parsed.symbol.name)
+        return (quote.price, quote.prev_close, quote.change_pct, quote.symbol.name)
 
     # ----------------------------------------------------------------
     # 调试 / 维护

@@ -10,7 +10,7 @@ from aiohttp import ClientSession, ClientTimeout, ClientConnectionError
 from gsuid_core.logger import logger
 
 from .utils import get_file
-from ..constant import PREFIX_DATA, code_id_dict, code_query_overrides
+from ..constant import PREFIX_DATA, code_id_dict, chinese_stocks, code_query_overrides
 from ...stock_config.stock_config import STOCK_CONFIG
 
 SEARCHAPI_HEADERS = {
@@ -71,13 +71,23 @@ async def get_fund_pos_list(fcode: Union[str, int]) -> Optional[Dict[str, object
     return None
 
 
+# 显式市场后缀（与 _get_code_id_one 里的剥离顺序一致：.hk 要在 .h 前判定）
+_MARKET_SUFFIXES: tuple[str, ...] = (".hk", ".us", ".kr", ".h", ".a")
+
+
 def _code_query_candidates(raw: str) -> List[str]:
-    """拆分「600519 贵州茅台」等复合查询，优先纯代码再名称。"""
+    """拆分「600519 贵州茅台」等复合查询，优先纯代码再名称。
+
+    带显式市场后缀（.us/.h/.kr/.a）时**只回整串**：否则「600519.us」会先被抽出
+    裸代码「600519」，以 priority=None 命中 A 股，用户指定的市场被前面的候选架空。
+    """
     import re
 
     text = (raw or "").strip()
     if not text:
         return []
+    if text.lower().endswith(_MARKET_SUFFIXES):
+        return [text]
     out: List[str] = []
     seen: set[str] = set()
 
@@ -100,22 +110,71 @@ def _code_query_candidates(raw: str) -> List[str]:
     return out
 
 
+class ResolveLayerError(Exception):
+    """行情ID解析层（东财 searchapi）不可用：网络/HTTP 失败。
+
+    与「标的不存在」（HTTP 200 且无结果 → None）区分开，供行情优先级链
+    在解析层瞬断时返回 network 错误顺延，而不是误报 not_found 短路。
+    """
+
+
 async def get_code_id(code: str, priority: Optional[str] = None) -> Optional[Tuple[str, str, str]]:
     """
     生成东方财富股票专用的行情ID
     code:可以是代码或简称或英文
     """
+    try:
+        return await get_code_id_strict(code, priority)
+    except ResolveLayerError:
+        return None
+
+
+async def get_code_id_strict(code: str, priority: Optional[str] = None) -> Optional[Tuple[str, str, str]]:
+    """同 get_code_id，但解析层失败时抛 ResolveLayerError；None 仅表示标的不存在。"""
     candidates = _code_query_candidates(code)
     if not candidates:
         return None
-    # 复合 query 依次尝试；首个成功即返回
+    # 复合 query 依次尝试；首个成功即返回；存在解析层失败时优先抛出（宁报网络错不误报不存在）
     last: Optional[Tuple[str, str, str]] = None
+    layer_error: Optional[ResolveLayerError] = None
     for cand in candidates:
-        hit = await _get_code_id_one(cand, priority)
+        try:
+            hit = await _get_code_id_one(cand, priority)
+        except ResolveLayerError as error:
+            layer_error = error
+            continue
         if hit is not None:
             return hit
         last = hit
+    if layer_error is not None:
+        raise layer_error
     return last
+
+
+# 本地 A 股名称表（chinese_stocks）的代码前缀 → 东财 secid 市场前缀。
+# 表里只有这些前缀（实测 5909 条：00/30/60/68/81/83/92）；
+# 未列出的前缀一律不补名，宁缺勿错。
+_LOCAL_NAME_MARKET: Dict[str, str] = {
+    "60": "1",
+    "68": "1",
+    "00": "0",
+    "30": "0",
+    "43": "0",
+    "81": "0",
+    "83": "0",
+    "87": "0",
+    "92": "0",
+}
+
+
+# 市场后缀（.h/.us/.kr/.a）→ 该市场在东财 searchapi 里对应的 SecurityTypeName。
+# 搜索有结果但一个都不属于目标市场时按「没有这只票」处理，绝不跨市场兜底。
+_MARKET_SEC_TYPES: Dict[str, frozenset] = {
+    "h": frozenset({"港股"}),
+    "us": frozenset({"美股", "粉单"}),
+    "kr": frozenset({"韩股"}),
+    "a": frozenset({"沪深A", "沪A", "深A", "创业板", "科创板", "京A"}),
+}
 
 
 async def _get_code_id_one(code: str, priority: Optional[str] = None) -> Optional[Tuple[str, str, str]]:
@@ -165,7 +224,13 @@ async def _get_code_id_one(code: str, priority: Optional[str] = None) -> Optiona
             elif code_prefix == "1":
                 _sec_type = "沪A"
 
-        return code, "", _sec_type
+        # secid 形态本地短路（不发网络）。名称尽力从随仓库分发的 A 股表补：
+        # 缺名会让 Quote.symbol.name 退化成代码，同花顺（快照无名称，沿用解析层）
+        # 供价时 matcher._is_st 判不出 ST，模拟盘涨跌停拦截会从 ±5% 退回 ±10%。
+        # 守卫：表按 6 位代码索引，指数与个股会撞码（1.000001 上证指数 vs
+        # 000001 平安银行），只有 secid 前缀与该代码的真实市场一致才补名。
+        info = chinese_stocks.get(main_code) if _LOCAL_NAME_MARKET.get(main_code[:2]) == code_prefix else None
+        return code, (info["name"] if info else ""), _sec_type
 
     if code in code_id_dict.keys():
         return code_id_dict[code], code, ""
@@ -180,72 +245,47 @@ async def _get_code_id_one(code: str, priority: Optional[str] = None) -> Optiona
     async with ClientSession(headers=_get_searchapi_headers(), timeout=ClientTimeout(total=15)) as sess:
         try:
             async with sess.get(url, params=params) as res:
-                if res.status == 200:
-                    logger.debug(f"[SayuStock]开始获取{code}的ID")
-                    text = await res.text()
-                    logger.debug(text)
-                    data = json.loads(text)
-                    code_dict: List[Dict] = data["QuotationCodeTable"]["Data"]
-                    if code_dict:
-                        # 排序：SecurityTypeName为"债券"的排到最后
-                        if not is_bond:
-                            code_dict.sort(key=lambda x: x.get("SecurityTypeName") == "债券")
-                        for i in code_dict:
-                            if priority is None:
-                                return (
-                                    i["QuoteID"],
-                                    i["Name"],
-                                    i["SecurityTypeName"],
-                                )
-                            elif priority == "h":
-                                if i["SecurityTypeName"] in ["港股"]:
-                                    return (
-                                        i["QuoteID"],
-                                        i["Name"],
-                                        i["SecurityTypeName"],
-                                    )
-                            elif priority == "us":
-                                if i["SecurityTypeName"] in ["美股", "粉单"]:
-                                    return (
-                                        i["QuoteID"],
-                                        i["Name"],
-                                        i["SecurityTypeName"],
-                                    )
-                            elif priority == "kr":
-                                if i["SecurityTypeName"] in ["韩股"]:
-                                    return (
-                                        i["QuoteID"],
-                                        i["Name"],
-                                        i["SecurityTypeName"],
-                                    )
-                            elif priority == "a":
-                                if i["SecurityTypeName"] in [
-                                    "沪深A",
-                                    "沪A",
-                                    "深A",
-                                    "创业板",
-                                    "科创板",
-                                    "京A",
-                                ]:
-                                    return (
-                                        i["QuoteID"],
-                                        i["Name"],
-                                        i["SecurityTypeName"],
-                                    )
-                        else:
+                if res.status != 200:
+                    raise ResolveLayerError(f"searchapi HTTP {res.status}")
+                logger.debug(f"[SayuStock]开始获取{code}的ID")
+                text = await res.text()
+                logger.debug(text)
+                data = json.loads(text)
+                code_dict: List[Dict] = data["QuotationCodeTable"]["Data"]
+                if code_dict:
+                    # 排序：SecurityTypeName为"债券"的排到最后
+                    if not is_bond:
+                        code_dict.sort(key=lambda x: x.get("SecurityTypeName") == "债券")
+                    if priority is None:
+                        # 未指定市场：取搜索首项（债券已排到最后）
+                        first = code_dict[0]
+                        return (
+                            first["QuoteID"],
+                            first["Name"],
+                            first["SecurityTypeName"],
+                        )
+                    accepted = _MARKET_SEC_TYPES[priority]
+                    for i in code_dict:
+                        if i["SecurityTypeName"] in accepted:
                             return (
-                                code_dict[0]["QuoteID"],
-                                code_dict[0]["Name"],
+                                i["QuoteID"],
+                                i["Name"],
                                 i["SecurityTypeName"],
                             )
-                    else:
-                        return None
+                    # 有搜索结果但没有该市场的标的（例：600519.us 只搜到沪A 贵州茅台）。
+                    # 此时必须返回 None：曾经的 for/else 兜底回的是
+                    # 「第一项的 QuoteID/名称 + 最后一项的证券类型」，
+                    # A 股会被当成美股解析出去，下游按错误的 secid 取价。
+                    return None
+                else:
+                    # HTTP 200 且无结果：标的确切不存在
+                    return None
         except ClientConnectionError as error:
             logger.error(f"[SayuStock] 获取{code}的ID失败: {error}")
-            return None
+            raise ResolveLayerError(str(error)) from error
         except Exception as error:
             logger.error(f"[SayuStock] 获取{code}的ID异常: {error}")
-            return None
+            raise ResolveLayerError(str(error)) from error
     return None
 
 

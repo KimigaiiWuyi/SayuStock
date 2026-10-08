@@ -22,6 +22,7 @@ from ..models import (
     NorthboundFlow,
     FinancialSnapshot,
 )
+from ..display import stamp_provider
 from ..fund_route import maybe_otc_fund_query
 from .okx.provider import is_crypto_query
 from .vix.provider import is_vix_query
@@ -48,6 +49,16 @@ class CompositeMarketData:
             return self._crypto
         return self._equity
 
+    def _slot_provider(self, port: MarketDataPort) -> str | None:
+        """非 equity 槽位的数据源 id；equity 由优先级链自行盖章。"""
+        if port is self._crypto:
+            return "okx"
+        if port is self._vix:
+            return "vix"
+        if port is self._fund:
+            return "tiantian"
+        return None
+
     async def _kline_port(self, query: str) -> MarketDataPort:
         if is_vix_query(query):
             return self._vix
@@ -63,13 +74,22 @@ class CompositeMarketData:
 
     async def quote(self, query: str) -> Quote | MarketError:
         port = await self._kline_port(query)
-        return await port.quote(query)
+        result = await port.quote(query)
+        pid = self._slot_provider(port)
+        if pid is not None and not is_market_error(result):
+            result = stamp_provider(result, pid)
+        return result
 
     async def quotes(self, queries: Sequence[str]) -> list[Quote | MarketError]:
         return [await self.quote(q) for q in queries]
 
     async def intraday(self, query: str, *, ndays: int = 1) -> IntradaySeries | MarketError:
-        return await self._route(query).intraday(query, ndays=ndays)
+        port = self._route(query)
+        result = await port.intraday(query, ndays=ndays)
+        pid = self._slot_provider(port)
+        if pid is not None and not is_market_error(result):
+            result = stamp_provider(result, pid)
+        return result
 
     async def kline(
         self,
@@ -89,7 +109,10 @@ class CompositeMarketData:
         ):
             fund_series = await self._fund.kline(query, period, start=start, end=end)
             if not is_market_error(fund_series):
-                return fund_series
+                return stamp_provider(fund_series, "tiantian")
+        pid = self._slot_provider(port)
+        if pid is not None and not is_market_error(series):
+            series = stamp_provider(series, pid)
         return series
 
     async def board(

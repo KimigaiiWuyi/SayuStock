@@ -36,11 +36,11 @@ from .parse_board import parse_board_payload
 from .parse_kline import parse_kline_payload
 from .parse_quote import parse_quote_payload
 from .parse_value import parse_value_series_payload
-from ....eastmoney import EASTMONEY_REQUESTER
+from ....eastmoney import EASTMONEY_REQUESTER, EastMoneyStockItem
 from ....load_data import get_full_security_code
+from .parse_breadth import parse_breadth_payload
 from .parse_intraday import extract_trends_from_payload, parse_intraday_from_trends_list
 from ....eastmoney_finance import get_financial_snapshot as _fetch_fin_snapshot
-from ....stock.request_utils import get_code_id
 
 _PERIOD_DAYS: dict[KlinePeriod, int] = {
     KlinePeriod.M5: 30,
@@ -77,6 +77,9 @@ def _sec_type_to_asset(sec_type: str, *, secid: str = "") -> AssetClass:
 def _exchange_of(secid: str, sec_type: str) -> str:
     if secid.startswith("1."):
         return "SSE"
+    if "京" in sec_type:
+        # 北交所 secid 前缀与深市同为 0.，须先按 sec_type 判定
+        return "BSE"
     if secid.startswith("0."):
         return "SZSE"
     if "港" in sec_type or secid.startswith("116."):
@@ -128,6 +131,41 @@ def _market_key(kind: BoardKind | str, sector: str | None) -> str:
     return str(kind.value if isinstance(kind, BoardKind) else kind)
 
 
+async def _resolve_code(query: str) -> tuple[str, str, str] | MarketError:
+    """query → (QuoteID, Name, SecurityTypeName)。
+
+    解析层（东财 searchapi）瞬断时返回 network 错误让注册表顺延其他源，
+    而不是误报 not_found 短路整条链。
+    """
+    from ....stock.request_utils import ResolveLayerError, get_code_id_strict
+
+    try:
+        code_info = await get_code_id_strict(query)
+    except ResolveLayerError as error:
+        return network_error(f"行情ID解析层不可用: {error}", provider=PROVIDER)
+    if code_info is None:
+        return not_found(ErroText["notStock"], provider=PROVIDER)
+    return code_info
+
+
+async def _resolve_stock_item(query: str) -> EastMoneyStockItem | MarketError:
+    """query → EastMoneyStockItem（估值序列等按 ``resolve_stock`` 形状的调用方复用）。
+
+    与 :func:`_resolve_code` 同语义：解析层瞬断返回 network 顺延其他源，
+    只有标的不存在才返回 not_found。
+    """
+    code_info = await _resolve_code(query)
+    if isinstance(code_info, MarketError):
+        return code_info
+    secid = get_full_security_code(code_info[0])
+    return {
+        "secid": secid,
+        "code": secid.split(".")[-1],
+        "name": code_info[1] or secid,
+        "sec_type": code_info[2],
+    }
+
+
 class EastMoneyMarketData:
     """东财适配器；HTTP/缓存仍走 EASTMONEY_REQUESTER。"""
 
@@ -145,9 +183,9 @@ class EastMoneyMarketData:
         )
 
     async def quote(self, query: str) -> Quote | MarketError:
-        code_info = await get_code_id(query)
-        if code_info is None:
-            return not_found(ErroText["notStock"], provider=PROVIDER)
+        code_info = await _resolve_code(query)
+        if isinstance(code_info, MarketError):
+            return code_info
         secid = get_full_security_code(code_info[0])
         sec_type = code_info[2]
         raw = await EASTMONEY_REQUESTER.get_single_stock(secid, sec_type)
@@ -163,9 +201,9 @@ class EastMoneyMarketData:
         return list(await asyncio.gather(*[self.quote(q) for q in queries]))
 
     async def intraday(self, query: str, *, ndays: int = 1) -> IntradaySeries | MarketError:
-        code_info = await get_code_id(query)
-        if code_info is None:
-            return not_found(ErroText["notStock"], provider=PROVIDER)
+        code_info = await _resolve_code(query)
+        if isinstance(code_info, MarketError):
+            return code_info
         secid = get_full_security_code(code_info[0])
         sec_type = code_info[2]
         symbol = SymbolRef(
@@ -219,9 +257,9 @@ class EastMoneyMarketData:
         start: date | None = None,
         end: date | None = None,
     ) -> KlineSeries | MarketError:
-        code_info = await get_code_id(query)
-        if code_info is None:
-            return not_found(ErroText["notStock"], provider=PROVIDER)
+        code_info = await _resolve_code(query)
+        if isinstance(code_info, MarketError):
+            return code_info
         secid = get_full_security_code(code_info[0])
         sec_type = code_info[2]
         symbol = SymbolRef(
@@ -325,14 +363,21 @@ class EastMoneyMarketData:
         raw = await get_bar()
         if isinstance(raw, str):
             return network_error(raw, provider=PROVIDER)
-        # 旧 draw 依赖原始结构；语义 buckets 暂空
-        return BreadthBar(buckets=(), raw=raw)
+        return parse_breadth_payload(raw)
 
     async def market_turnover(self) -> MarketTurnover | MarketError:
         from ....stock.request import get_hours_from_em
 
-        prev_amount, amount, ltd = await get_hours_from_em()
-        return MarketTurnover(prev_amount=prev_amount, amount=amount, last_trade_date=ltd)
+        # get_hours_from_em 的返回是 (今日成交额, 今日-昨日, 日期)，不是 (昨, 今, 日期)：
+        # calculate_difference 回的是 (all_today_data, today - yesterday, actual_date)。
+        # 名字像「昨日」的 ya 其实是**今日成交额**，昨日要用 今日-差值 反解。
+        today_amount, diff, ltd = await get_hours_from_em()
+        # trends2 失败时它只 warning 再 continue，两个市场都挂就回 (0, 0, None)。
+        # 不能把这种「拉取失败」当成「成交额 0 亿」上报：那样请求链不会顺延，
+        # 大盘概览会在东财限流期间静默显示 0 亿（实测 -400016 时就是这个表现）。
+        if today_amount <= 0:
+            return network_error("两市成交额拉取失败（trends2 无有效数据）", provider=PROVIDER)
+        return MarketTurnover(prev_amount=today_amount - diff, amount=today_amount, last_trade_date=ltd)
 
     async def northbound(self) -> NorthboundFlow | MarketError:
         url = "https://push2.eastmoney.com/api/qt/kamt/get"
@@ -353,9 +398,9 @@ class EastMoneyMarketData:
         return NorthboundFlow(sh_net_yi=sh / 10000.0, sz_net_yi=sz / 10000.0)
 
     async def valuation_series(self, query: str, kind: ValueKind) -> ValueSeries | MarketError:
-        stock = await EASTMONEY_REQUESTER.resolve_stock(query)
-        if stock is None:
-            return not_found(ErroText["notStock"], provider=PROVIDER)
+        stock = await _resolve_stock_item(query)
+        if isinstance(stock, MarketError):
+            return stock
         if kind == ValueKind.PE:
             raw = await EASTMONEY_REQUESTER.get_pe_series(stock)
         elif kind == ValueKind.PB:

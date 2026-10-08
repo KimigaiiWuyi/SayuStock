@@ -132,6 +132,74 @@ def test_kr_suffix_sets_priority_and_matches() -> None:
     assert result[2] == "韩股"
 
 
+def _search_client(payload: dict[str, Any]):
+    """构造假 ClientSession；返回 (patch 目标, 会话类)。"""
+
+    class _Resp:
+        status = 200
+
+        async def text(self) -> str:
+            import json
+
+            return json.dumps(payload)
+
+        async def __aenter__(self) -> "_Resp":
+            return self
+
+        async def __aexit__(self, *args: object) -> None:
+            return None
+
+    class _Sess:
+        def __init__(self, *args: object, **kwargs: object) -> None:
+            pass
+
+        async def __aenter__(self) -> "_Sess":
+            return self
+
+        async def __aexit__(self, *args: object) -> None:
+            return None
+
+        def get(self, *args: object, **kwargs: object) -> _Resp:
+            return _Resp()
+
+    return _Sess
+
+
+def test_suffix_matches_only_its_own_market() -> None:
+    """搜索有结果、但没有该市场的标的 → None，不许跨市场兜底。
+
+    回归：`for ... else` 兜底回的是「第一项的 QuoteID/名称 + 循环变量（最后一项）
+    的证券类型」，`600519.us` 会被解析成 A 股，下游按错误 secid 取价。
+    """
+    payload: dict[str, Any] = {
+        "QuotationCodeTable": {
+            "Data": [
+                {"QuoteID": "1.600519", "Name": "贵州茅台", "SecurityTypeName": "沪A"},
+                {"QuoteID": "116.00700", "Name": "腾讯控股", "SecurityTypeName": "港股"},
+            ]
+        }
+    }
+    with patch("SayuStock.utils.stock.request_utils.ClientSession", _search_client(payload)):
+        # .us：两个候选都不是美股 → 没有这只票
+        assert asyncio.run(get_code_id("600519.us")) is None
+        # .h：命中港股那条，且三项同源（id / 名称 / 类型都来自同一项）
+        assert asyncio.run(get_code_id("600519.h")) == ("116.00700", "腾讯控股", "港股")
+
+
+def test_suffix_without_priority_still_takes_first_hit() -> None:
+    """不带市场后缀时主路径不变：取搜索首项（债券已排到最后）。"""
+    payload: dict[str, Any] = {
+        "QuotationCodeTable": {
+            "Data": [
+                {"QuoteID": "116.00700", "Name": "腾讯控股", "SecurityTypeName": "港股"},
+                {"QuoteID": "1.600519", "Name": "贵州茅台", "SecurityTypeName": "沪A"},
+            ]
+        }
+    }
+    with patch("SayuStock.utils.stock.request_utils.ClientSession", _search_client(payload)):
+        assert asyncio.run(get_code_id("ZZZZ")) == ("116.00700", "腾讯控股", "港股")
+
+
 def test_parse_em_code_korean_stock() -> None:
     assert _parse_em_code("177.005930") == Market.KR_STOCK
 

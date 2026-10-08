@@ -168,7 +168,7 @@
     "industry_l3": "工控设备"
   },
   "920879": {
-    "name": "XD基康技",
+    "name": "基康技术",
     "industry_l1": "机械设备",
     "industry_l2": "通用设备",
     "industry_l3": "仪器仪表"
@@ -1038,7 +1038,7 @@
     "industry_l3": "能源及重型设备"
   },
   "920289": {
-    "name": "N华汇",
+    "name": "华汇智能",
     "industry_l1": "电力设备",
     "industry_l2": "电池",
     "industry_l3": "锂电专用设备"
@@ -1199,6 +1199,12 @@
     "industry_l2": "化学制药",
     "industry_l3": "原料药"
   },
+  "920229": {
+    "name": "世纪数码",
+    "industry_l1": "机械设备",
+    "industry_l2": "专用设备",
+    "industry_l3": "其他专用设备"
+  },
   "920227": {
     "name": "美登科技",
     "industry_l1": "计算机",
@@ -1277,11 +1283,17 @@
     "industry_l2": "包装印刷",
     "industry_l3": "塑料包装"
   },
+  "920202": {
+    "name": "安达股份",
+    "industry_l1": "汽车",
+    "industry_l2": "汽车零部件",
+    "industry_l3": "底盘与发动机系统"
+  },
   "920201": {
     "name": "百瑞吉",
-    "industry_l1": "未知",
-    "industry_l2": "未知",
-    "industry_l3": "未知"
+    "industry_l1": "医药生物",
+    "industry_l2": "医疗器械",
+    "industry_l3": "医疗耗材"
   },
   "920200": {
     "name": "振宏股份",
@@ -1300,6 +1312,12 @@
     "industry_l1": "计算机",
     "industry_l2": "计算机设备",
     "industry_l3": "安防设备"
+  },
+  "920196": {
+    "name": "南方乳业",
+    "industry_l1": "食品饮料",
+    "industry_l2": "饮料乳品",
+    "industry_l3": "乳品"
   },
   "920195": {
     "name": "三祥科技",
@@ -1457,6 +1475,12 @@
     "industry_l2": "包装印刷",
     "industry_l3": "综合包装"
   },
+  "920162": {
+    "name": "莫森泰克",
+    "industry_l1": "汽车",
+    "industry_l2": "汽车零部件",
+    "industry_l3": "车身附件及饰件"
+  },
   "920161": {
     "name": "龙辰科技",
     "industry_l1": "基础化工",
@@ -1480,6 +1504,12 @@
     "industry_l1": "机械设备",
     "industry_l2": "专用设备",
     "industry_l3": "能源及重型设备"
+  },
+  "920157": {
+    "name": "宇特光电",
+    "industry_l1": "通信",
+    "industry_l2": "通信设备",
+    "industry_l3": "通信网络设备及器件"
   },
   "920156": {
     "name": "海昌智能",
@@ -1949,6 +1979,12 @@
     "industry_l2": "专用设备",
     "industry_l3": "其他专用设备"
   },
+  "920025": {
+    "name": "凯达重工",
+    "industry_l1": "机械设备",
+    "industry_l2": "专用设备",
+    "industry_l3": "其他专用设备"
+  },
   "920023": {
     "name": "*ST田野",
     "industry_l1": "农林牧渔",
@@ -2238,7 +2274,7 @@
     "industry_l3": "数字芯片设计"
   },
   "688801": {
-    "name": "燧原科技",
+    "name": "燧原科技-U",
     "industry_l1": "电子",
     "industry_l2": "半导体",
     "industry_l3": "集成电路制造"
@@ -2509,7 +2545,7 @@
   },
   "688712": {
     "name": "北芯生命",
-    "industry_l1": "医药生物",
+    "industry_l1": "医疗器械",
     "industry_l2": "医疗器械",
     "industry_l3": "医疗设备"
   },
@@ -2607,7 +2643,7 @@
     "name": "灿芯股份",
     "industry_l1": "电子",
     "industry_l2": "半导体",
-    "industry_l3": "集成电路制造"
+    "industry_l3": "数字芯片设计"
   },
   "688690": {
     "name": "纳微科技",
@@ -2682,7 +2718,7 @@
     "industry_l3": "医疗设备"
   },
   "688676": {
-    "name": "金盘科技",
+    "name": "XD金盘科",
     "industry_l1": "电力设备",
     "industry_l2": "电网设备",
     "industry_l3": "输变电设备"
@@ -2970,7 +3006,7 @@
     "industry_l3": "数字芯片设计"
   },
   "688607": {
-    "name": "康众医疗",
+    "name": "康众科技",
     "industry_l1": "医药生物",
     "industry_l2": "医疗器械",
     "industry_l3": "医疗设备"
@@ -4117,9 +4153,9 @@
   },
   "688328": {
     "name": "深科达",
-    "industry_l1": "机械设备",
-    "industry_l2": "专用设备",
-    "industry_l3": "其他专用设备"
+    "industry_l1": "电子",
+    "industry_l2": "半导体",
+    "industry_l3": "半导体设备"
   },
   "688327": {
     "name": "云从科技-UW",
@@ -4507,7 +4543,7 @@
   },
   "688256": {
     "name": "寒武纪",
-    "industry_l1": "电子",
+    "industry_l1": "半导体",
     "industry_l2": "半导体",
     "industry_l3": "数字芯片设计"
   },
@@ -6006,7 +6042,7 @@
     "industry_l3": "预加工食品"
   },
   "605337": {
-    "name": "李子园",
+    "name": "XD李子园",
     "industry_l1": "食品饮料",
     "industry_l2": "饮料乳品",
     "industry_l3": "软饮料"
@@ -7437,7 +7473,7 @@
     "name": "塞力医疗",
     "industry_l1": "医药生物",
     "industry_l2": "医药商业",
-    "industry_l3": "医药商业"
+    "industry_l3": "医药流通"
   },
   "603713": {
     "name": "密尔克卫",
@@ -8025,7 +8061,7 @@
     "name": "奥普科技",
     "industry_l1": "家用电器",
     "industry_l2": "厨卫电器",
-    "industry_l3": "厨卫电器"
+    "industry_l3": "卫浴电器"
   },
   "603538": {
     "name": "美诺华",
@@ -8457,7 +8493,7 @@
     "name": "柳药集团",
     "industry_l1": "医药生物",
     "industry_l2": "医药商业",
-    "industry_l3": "医药商业"
+    "industry_l3": "医药流通"
   },
   "603367": {
     "name": "辰欣药业",
@@ -8469,7 +8505,7 @@
     "name": "日出东方",
     "industry_l1": "家用电器",
     "industry_l2": "厨卫电器",
-    "industry_l3": "厨卫电器"
+    "industry_l3": "卫浴电器"
   },
   "603365": {
     "name": "水星家纺",
@@ -8982,7 +9018,7 @@
     "industry_l3": "有机硅"
   },
   "603259": {
-    "name": "XD药明康",
+    "name": "药明康德",
     "industry_l1": "医药生物",
     "industry_l2": "医疗服务",
     "industry_l3": "医疗研发外包"
@@ -9336,7 +9372,7 @@
     "industry_l3": "检测服务"
   },
   "603182": {
-    "name": "XD嘉华股",
+    "name": "嘉华股份",
     "industry_l1": "农林牧渔",
     "industry_l2": "农产品加工",
     "industry_l3": "粮油加工"
@@ -9937,7 +9973,7 @@
   },
   "603061": {
     "name": "金海通",
-    "industry_l1": "电子",
+    "industry_l1": "半导体",
     "industry_l2": "半导体",
     "industry_l3": "半导体设备"
   },
@@ -10851,7 +10887,7 @@
     "name": "上海医药",
     "industry_l1": "医药生物",
     "industry_l2": "医药商业",
-    "industry_l3": "医药商业"
+    "industry_l3": "医药流通"
   },
   "601606": {
     "name": "长城军工",
@@ -10992,7 +11028,7 @@
     "industry_l3": "国有大型银行Ⅲ"
   },
   "601390": {
-    "name": "中国中铁",
+    "name": "XD中国中",
     "industry_l1": "建筑装饰",
     "industry_l2": "基础建设",
     "industry_l3": "基建市政工程"
@@ -11358,7 +11394,7 @@
     "industry_l3": "电网自动化设备"
   },
   "601123": {
-    "name": "C马矿",
+    "name": "马矿股份",
     "industry_l1": "钢铁",
     "industry_l2": "冶钢原料",
     "industry_l3": "铁矿石"
@@ -11456,8 +11492,8 @@
   "601091": {
     "name": "沈鼓集团",
     "industry_l1": "机械设备",
-    "industry_l2": "通用设备",
-    "industry_l3": "其他通用设备"
+    "industry_l2": "专用设备",
+    "industry_l3": "能源及重型设备"
   },
   "601089": {
     "name": "福元医药",
@@ -11679,7 +11715,7 @@
     "name": "九州通",
     "industry_l1": "医药生物",
     "industry_l2": "医药商业",
-    "industry_l3": "医药商业"
+    "industry_l3": "医药流通"
   },
   "600997": {
     "name": "开滦股份",
@@ -12471,7 +12507,7 @@
     "name": "人民同泰",
     "industry_l1": "医药生物",
     "industry_l2": "医药商业",
-    "industry_l3": "医药商业"
+    "industry_l3": "医药流通"
   },
   "600828": {
     "name": "茂业商业",
@@ -13167,7 +13203,7 @@
     "name": "南京医药",
     "industry_l1": "医药生物",
     "industry_l2": "医药商业",
-    "industry_l3": "医药商业"
+    "industry_l3": "医药流通"
   },
   "600712": {
     "name": "南宁百货",
@@ -14325,7 +14361,7 @@
     "name": "国药股份",
     "industry_l1": "医药生物",
     "industry_l2": "医药商业",
-    "industry_l3": "医药商业"
+    "industry_l3": "医药流通"
   },
   "600510": {
     "name": "黑牡丹",
@@ -14599,9 +14635,9 @@
   },
   "600455": {
     "name": "博通股份",
-    "industry_l1": "计算机",
-    "industry_l2": "软件开发",
-    "industry_l3": "垂直应用软件"
+    "industry_l1": "社会服务",
+    "industry_l2": "教育",
+    "industry_l3": "学历教育"
   },
   "600452": {
     "name": "涪陵电力",
@@ -14982,7 +15018,7 @@
     "industry_l3": "其他酒类"
   },
   "600363": {
-    "name": "联创光电",
+    "name": "ST联光",
     "industry_l1": "电子",
     "industry_l2": "消费电子",
     "industry_l3": "消费电子零部件及组装"
@@ -15188,8 +15224,8 @@
   "600322": {
     "name": "津投城开",
     "industry_l1": "房地产",
-    "industry_l2": "房地产开发",
-    "industry_l3": "住宅开发"
+    "industry_l2": "房地产服务",
+    "industry_l3": "物业管理"
   },
   "600321": {
     "name": "正源股份",
@@ -15465,7 +15501,7 @@
     "name": "开开实业",
     "industry_l1": "医药生物",
     "industry_l2": "医药商业",
-    "industry_l3": "医药商业"
+    "industry_l3": "医药流通"
   },
   "600271": {
     "name": "航天信息",
@@ -16659,7 +16695,7 @@
     "name": "中国医药",
     "industry_l1": "医药生物",
     "industry_l2": "医药商业",
-    "industry_l3": "医药商业"
+    "industry_l3": "医药流通"
   },
   "600055": {
     "name": "万东医疗",
@@ -16925,11 +16961,23 @@
     "industry_l2": "航空装备Ⅱ",
     "industry_l3": "航空装备Ⅲ"
   },
+  "301718": {
+    "name": "通则康威",
+    "industry_l1": "通信",
+    "industry_l2": "通信设备",
+    "industry_l3": "通信终端及配件"
+  },
   "301717": {
     "name": "超纯应材",
     "industry_l1": "电子",
     "industry_l2": "半导体",
     "industry_l3": "半导体设备"
+  },
+  "301716": {
+    "name": "C鸿富诚",
+    "industry_l1": "基础化工",
+    "industry_l2": "非金属材料Ⅱ",
+    "industry_l3": "非金属材料Ⅲ"
   },
   "301707": {
     "name": "展芯股份",
@@ -16944,7 +16992,7 @@
     "industry_l3": "金属制品"
   },
   "301697": {
-    "name": "C贝特利",
+    "name": "贝特利",
     "industry_l1": "电力设备",
     "industry_l2": "光伏设备",
     "industry_l3": "光伏辅材"
@@ -16962,7 +17010,7 @@
     "industry_l3": "仪器仪表"
   },
   "301688": {
-    "name": "C格林",
+    "name": "格林生物",
     "industry_l1": "基础化工",
     "industry_l2": "化学制品",
     "industry_l3": "其他化学制品"
@@ -17044,6 +17092,12 @@
     "industry_l1": "电力设备",
     "industry_l2": "电池",
     "industry_l3": "锂电专用设备"
+  },
+  "301660": {
+    "name": "粤芯半导体",
+    "industry_l1": "电子",
+    "industry_l2": "半导体",
+    "industry_l3": "集成电路制造"
   },
   "301658": {
     "name": "首航新能",
@@ -17221,9 +17275,9 @@
   },
   "301595": {
     "name": "太力科技",
-    "industry_l1": "轻工制造",
-    "industry_l2": "家居用品",
-    "industry_l3": "其他家居用品"
+    "industry_l1": "基础化工",
+    "industry_l2": "非金属材料Ⅱ",
+    "industry_l3": "非金属材料Ⅲ"
   },
   "301592": {
     "name": "六九一二",
@@ -17277,7 +17331,7 @@
     "name": "建发致新",
     "industry_l1": "医药生物",
     "industry_l2": "医药商业",
-    "industry_l3": "医药商业"
+    "industry_l3": "医药流通"
   },
   "301583": {
     "name": "托伦斯",
@@ -17321,6 +17375,12 @@
     "industry_l2": "军工电子Ⅱ",
     "industry_l3": "军工电子Ⅲ"
   },
+  "301569": {
+    "name": "联亚药业",
+    "industry_l1": "医药生物",
+    "industry_l2": "化学制药",
+    "industry_l3": "化学制剂"
+  },
   "301568": {
     "name": "思泰克",
     "industry_l1": "机械设备",
@@ -17352,7 +17412,7 @@
     "industry_l3": "其他电子Ⅲ"
   },
   "301560": {
-    "name": "众捷汽车",
+    "name": "众捷股份",
     "industry_l1": "汽车",
     "industry_l2": "汽车零部件",
     "industry_l3": "底盘与发动机系统"
@@ -17988,7 +18048,7 @@
     "industry_l3": "摩托车"
   },
   "301339": {
-    "name": "通行宝",
+    "name": "苏交数智",
     "industry_l1": "计算机",
     "industry_l2": "计算机设备",
     "industry_l3": "其他计算机设备"
@@ -18225,7 +18285,7 @@
     "name": "富乐德",
     "industry_l1": "电子",
     "industry_l2": "半导体",
-    "industry_l3": "半导体设备"
+    "industry_l3": "半导体材料"
   },
   "301296": {
     "name": "新巨丰",
@@ -18984,7 +19044,7 @@
     "industry_l3": "磁性材料"
   },
   "301139": {
-    "name": "*ST元道",
+    "name": "元道退",
     "industry_l1": "通信",
     "industry_l2": "通信服务",
     "industry_l3": "通信工程及服务"
@@ -19059,7 +19119,7 @@
     "name": "达嘉维康",
     "industry_l1": "医药生物",
     "industry_l2": "医药商业",
-    "industry_l3": "医药商业"
+    "industry_l3": "医药流通"
   },
   "301125": {
     "name": "腾亚精工",
@@ -19665,7 +19725,7 @@
     "name": "百洋医药",
     "industry_l1": "医药生物",
     "industry_l2": "医药商业",
-    "industry_l3": "医药商业"
+    "industry_l3": "医药流通"
   },
   "301013": {
     "name": "利和兴",
@@ -20109,7 +20169,7 @@
     "name": "药易购",
     "industry_l1": "医药生物",
     "industry_l2": "医药商业",
-    "industry_l3": "医药商业"
+    "industry_l3": "医药流通"
   },
   "300936": {
     "name": "中英科技",
@@ -22272,7 +22332,7 @@
     "industry_l3": "通信线缆及配套"
   },
   "300562": {
-    "name": "乐心医疗",
+    "name": "乐心股份",
     "industry_l1": "医药生物",
     "industry_l2": "医疗器械",
     "industry_l3": "医疗设备"
@@ -22476,7 +22536,7 @@
     "industry_l3": "院线"
   },
   "300527": {
-    "name": "ST应急",
+    "name": "中船应急",
     "industry_l1": "国防军工",
     "industry_l2": "地面兵装Ⅱ",
     "industry_l3": "地面兵装Ⅲ"
@@ -24360,7 +24420,7 @@
     "industry_l3": "IT服务Ⅲ"
   },
   "300211": {
-    "name": "*ST亿通",
+    "name": "亿通科技",
     "industry_l1": "通信",
     "industry_l2": "通信服务",
     "industry_l3": "通信工程及服务"
@@ -25044,7 +25104,7 @@
     "industry_l3": "其他自动化设备"
   },
   "300096": {
-    "name": "ST易联众",
+    "name": "易联众",
     "industry_l1": "计算机",
     "industry_l2": "IT服务Ⅱ",
     "industry_l3": "IT服务Ⅲ"
@@ -27033,7 +27093,7 @@
     "name": "鹭燕医药",
     "industry_l1": "医药生物",
     "industry_l2": "医药商业",
-    "industry_l3": "医药商业"
+    "industry_l3": "医药流通"
   },
   "002787": {
     "name": "华源控股",
@@ -27276,7 +27336,7 @@
     "industry_l3": "LED"
   },
   "002743": {
-    "name": "富煌钢构",
+    "name": "ST富煌",
     "industry_l1": "建筑装饰",
     "industry_l2": "专业工程",
     "industry_l3": "钢结构"
@@ -28045,9 +28105,9 @@
   },
   "002612": {
     "name": "朗姿股份",
-    "industry_l1": "纺织服饰",
-    "industry_l2": "服装家纺",
-    "industry_l3": "非运动服装"
+    "industry_l1": "美容护理",
+    "industry_l2": "医疗美容",
+    "industry_l3": "医美服务"
   },
   "002611": {
     "name": "东方精工",
@@ -28185,7 +28245,7 @@
     "name": "瑞康医药",
     "industry_l1": "医药生物",
     "industry_l2": "医药商业",
-    "industry_l3": "医药商业"
+    "industry_l3": "医药流通"
   },
   "002588": {
     "name": "史丹利",
@@ -28461,7 +28521,7 @@
     "name": "万和电气",
     "industry_l1": "家用电器",
     "industry_l2": "厨卫电器",
-    "industry_l3": "厨卫电器"
+    "industry_l3": "卫浴电器"
   },
   "002542": {
     "name": "*ST中岩",
@@ -28941,7 +29001,7 @@
     "name": "嘉事堂",
     "industry_l1": "医药生物",
     "industry_l2": "医药商业",
-    "industry_l3": "医药商业"
+    "industry_l3": "医药流通"
   },
   "002461": {
     "name": "珠江啤酒",
@@ -29373,7 +29433,7 @@
     "name": "信邦制药",
     "industry_l1": "医药生物",
     "industry_l2": "医药商业",
-    "industry_l3": "医药商业"
+    "industry_l3": "医药流通"
   },
   "002389": {
     "name": "航天彩虹",
@@ -31811,6 +31871,12 @@
     "industry_l2": "电网设备",
     "industry_l3": "线缆部件及其他"
   },
+  "001381": {
+    "name": "皇冠新材",
+    "industry_l1": "基础化工",
+    "industry_l2": "化学制品",
+    "industry_l3": "胶黏剂及胶带"
+  },
   "001380": {
     "name": "华纬科技",
     "industry_l1": "汽车",
@@ -32218,6 +32284,12 @@
     "industry_l1": "公用事业",
     "industry_l2": "电力",
     "industry_l3": "风力发电"
+  },
+  "001246": {
+    "name": "C力勤",
+    "industry_l1": "有色金属",
+    "industry_l2": "能源金属",
+    "industry_l3": "镍"
   },
   "001239": {
     "name": "永达股份",
@@ -32679,7 +32751,7 @@
     "name": "重药控股",
     "industry_l1": "医药生物",
     "industry_l2": "医药商业",
-    "industry_l3": "医药商业"
+    "industry_l3": "医药流通"
   },
   "000949": {
     "name": "新乡化纤",
@@ -33741,7 +33813,7 @@
     "name": "浙江震元",
     "industry_l1": "医药生物",
     "industry_l2": "医药商业",
-    "industry_l3": "医药商业"
+    "industry_l3": "医药流通"
   },
   "000703": {
     "name": "恒逸石化",
@@ -34917,7 +34989,7 @@
     "name": "英特集团",
     "industry_l1": "医药生物",
     "industry_l2": "医药商业",
-    "industry_l3": "医药商业"
+    "industry_l3": "医药流通"
   },
   "000410": {
     "name": "沈阳机床",
@@ -35097,7 +35169,7 @@
     "name": "ST海王",
     "industry_l1": "医药生物",
     "industry_l2": "医药商业",
-    "industry_l3": "医药商业"
+    "industry_l3": "医药流通"
   },
   "000070": {
     "name": "特发信息",
@@ -35295,7 +35367,7 @@
     "name": "国药一致",
     "industry_l1": "医药生物",
     "industry_l2": "医药商业",
-    "industry_l3": "医药商业"
+    "industry_l3": "医药流通"
   },
   "000027": {
     "name": "深圳能源",

@@ -243,3 +243,20 @@ def test_set_market_injection() -> None:
             set_market(None)
 
     asyncio.run(_run())
+
+
+def test_composite_stamps_slot_provider() -> None:
+    async def _run() -> None:
+        port = CompositeMarketData(_TagPort("equity"), _TagPort("crypto"), _TagPort("vix"))
+        # 各槽位结果带对应 provider id；equity 槽位不经 composite 盖章（由优先级链负责）
+        q_btc = await port.quote("BTC")
+        assert isinstance(q_btc, Quote)
+        assert q_btc.provider == "okx"
+        q_vix = await port.quote("300VIX")
+        assert isinstance(q_vix, Quote)
+        assert q_vix.provider == "vix"
+        q_etf = await port.quote("510300")
+        assert isinstance(q_etf, Quote)
+        assert q_etf.provider is None
+
+    asyncio.run(_run())
