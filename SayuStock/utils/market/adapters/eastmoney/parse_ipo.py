@@ -128,7 +128,23 @@ def _is_ipo_noise(market: IpoMarket, code: str, name: str) -> bool:
     return False
 
 
-def parse_ipo_clist_row(row: Mapping[str, object], market: IpoMarket) -> IpoEvent | None:
+def _iter_clist_diff(diff: object) -> list[Mapping[str, object]]:
+    """list 直接用；``{"0": row}`` 展开值。自带 f12 的对象是单行。"""
+    if isinstance(diff, list):
+        return [row for row in diff if isinstance(row, dict)]
+    if isinstance(diff, dict):
+        if "f12" in diff or "f14" in diff:
+            return [diff]
+        return [row for row in diff.values() if isinstance(row, dict)]
+    return []
+
+
+def parse_ipo_clist_row(
+    row: Mapping[str, object],
+    market: IpoMarket,
+    *,
+    board: str | None = None,
+) -> IpoEvent | None:
     code = opt_str(row, "f12")
     name = opt_str(row, "f14")
     if not code or not name:
@@ -138,36 +154,36 @@ def parse_ipo_clist_row(row: Mapping[str, object], market: IpoMarket) -> IpoEven
         return None
     if _is_ipo_noise(market, code, name):
         return None
-    f13 = opt_int(row, "f13")
     if market == IpoMarket.US:
-        board = _US_EXCHANGE.get(f13) if f13 is not None else None
+        f13 = opt_int(row, "f13")
+        label = _US_EXCHANGE.get(f13) if f13 is not None else None
     else:
-        board = "港交所创业板" if f13 == 117 else "港交所主板"
+        # f13 在港股 clist 里是市场号 116，区分不了主板/创业板，由查询侧传入
+        label = board
     return IpoEvent(
         market=market,
         code=code,
         name=name,
         listing_date=listing_date,
         currency="HKD" if market == IpoMarket.HK else "USD",
-        board=board,
+        board=label,
     )
 
 
-def parse_ipo_clist_payload(payload: object, market: IpoMarket) -> list[IpoEvent] | MarketError:
+def parse_ipo_clist_payload(
+    payload: object,
+    market: IpoMarket,
+    *,
+    board: str | None = None,
+) -> list[IpoEvent] | MarketError:
     root = as_mapping(payload)
     if root is None:
         return parse_error("IPO上市列表响应无效", provider=PROVIDER)
     data = require_mapping(root, "data")
     if data is None:
         return empty_error("IPO上市列表无数据", provider=PROVIDER)
-    diff = data.get("diff")
-    if isinstance(diff, dict):
-        rows: list[object] = [diff]
-    elif isinstance(diff, list):
-        rows = diff
-    else:
-        rows = []
-    events = [ev for ev in (parse_ipo_clist_row(r, market) for r in rows if isinstance(r, dict)) if ev is not None]
+    rows = _iter_clist_diff(data.get("diff"))
+    events = [ev for ev in (parse_ipo_clist_row(row, market, board=board) for row in rows) if ev is not None]
     if not events:
         return empty_error(f"{market.value} IPO上市列表为空", provider=PROVIDER)
     return events

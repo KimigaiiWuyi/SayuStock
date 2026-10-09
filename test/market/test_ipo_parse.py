@@ -4,15 +4,19 @@ from __future__ import annotations
 
 import re
 import json
+import asyncio
 from pathlib import Path
 from datetime import date
 
 import pytest
 
 from SayuStock.utils.render_data import IpoCalendarRow, build_ipo_calendar_render_data
+from SayuStock.stock_ipo.draw_ipo import parse_ipo_market_filter
 from SayuStock.utils.market.enums import IpoStage, IpoMarket
+from SayuStock.utils.market.errors import is_market_error
 from SayuStock.utils.market.models import IpoEvent
 from SayuStock.utils.market.adapters.nasdaq.parse import (
+    dedupe_ipo_events,
     months_for_window,
     parse_nasdaq_calendar,
 )
@@ -114,7 +118,26 @@ def test_parse_ipo_clist_hk_filters_noise() -> None:
     assert tongcheng.name == "彤程新材"
     assert tongcheng.listing_date == date(2026, 9, 29)
     assert tongcheng.market == IpoMarket.HK
-    assert tongcheng.board == "港交所主板"
+    # f13=116 区分不了板块，未传入 board 时留空
+    assert tongcheng.board is None
+
+
+def test_parse_ipo_clist_dict_diff_and_board() -> None:
+    payload = {
+        "data": {
+            "diff": {
+                "0": {"f12": "09607", "f13": 116, "f14": "彤程新材", "f26": 20260929},
+                "1": {"f12": "02533", "f13": 116, "f14": "某创业板", "f26": 20260930},
+            }
+        }
+    }
+    events = parse_ipo_clist_payload(payload, IpoMarket.HK, board="港交所创业板")
+    assert isinstance(events, list)
+    assert [e.code for e in events] == ["09607", "02533"]
+    assert all(e.board == "港交所创业板" for e in events)
+    single = {"data": {"diff": {"f12": "09607", "f13": 116, "f14": "彤程新材", "f26": 20260929}}}
+    one = parse_ipo_clist_payload(single, IpoMarket.HK, board="港交所主板")
+    assert isinstance(one, list) and len(one) == 1 and one[0].board == "港交所主板"
 
 
 def test_parse_ipo_clist_us_filters_noise() -> None:
@@ -151,6 +174,76 @@ def test_parse_nasdaq_calendar() -> None:
     lca = by_code["LCACU"]
     assert lca.listing_date is None
     assert lca.filed_date == date(2026, 9, 16)
+    assert by_code["BMB"].issue_price is None
+    assert by_code["BMB"].issue_price_text == "18.00-20.00"
+    assert by_code["HNUC"].issue_price_text == "15.00-18.00"
+
+
+def test_dedupe_prefers_priced_over_range() -> None:
+    upcoming = IpoEvent(
+        market=IpoMarket.US,
+        code="BMB",
+        name="Bamboo",
+        listing_date=date(2026, 9, 30),
+        issue_price_text="18.00-20.00",
+        currency="USD",
+    )
+    priced = IpoEvent(
+        market=IpoMarket.US,
+        code="bmb",
+        name="Bamboo",
+        listing_date=date(2026, 10, 2),
+        issue_price=19.0,
+        currency="USD",
+    )
+    merged = dedupe_ipo_events([upcoming, priced])
+    assert len(merged) == 1
+    assert merged[0].issue_price == pytest.approx(19.0)
+    assert merged[0].listing_date == date(2026, 10, 2)
+    assert merged[0].issue_price_text == "18.00-20.00"
+
+
+def test_parse_ipo_market_filter_tokens() -> None:
+    assert parse_ipo_market_filter("") is None
+    assert parse_ipo_market_filter("沪港通") is None
+    assert parse_ipo_market_filter("focus") is None
+    assert parse_ipo_market_filter("美股") == [IpoMarket.US]
+    assert parse_ipo_market_filter("a股 港股") == [IpoMarket.CN, IpoMarket.HK]
+    assert parse_ipo_market_filter("us") == [IpoMarket.US]
+
+
+def test_nasdaq_keeps_parsed_month_when_next_fails(monkeypatch: pytest.MonkeyPatch) -> None:
+    from SayuStock.utils.market.adapters.nasdaq import provider as nasdaq_provider
+    from SayuStock.utils.market.adapters.nasdaq.provider import NasdaqMarketData
+
+    calls = {"n": 0}
+
+    async def _fake(month: str) -> object:
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return _load("ipo_nasdaq_202609.json")
+        return "HTTP 429"
+
+    monkeypatch.setattr(nasdaq_provider, "fetch_calendar_month", _fake)
+    monkeypatch.setattr(nasdaq_provider, "months_for_window", lambda _anchor: ["2026-09", "2026-10"])
+    result = asyncio.run(NasdaqMarketData().ipo_calendar(IpoMarket.US))
+    assert isinstance(result, list)
+    assert any(ev.code == "HYACU" for ev in result)
+    assert any(ev.code == "BMB" and ev.issue_price_text == "18.00-20.00" for ev in result)
+
+
+def test_nasdaq_all_months_failed_is_network(monkeypatch: pytest.MonkeyPatch) -> None:
+    from SayuStock.utils.market.adapters.nasdaq import provider as nasdaq_provider
+    from SayuStock.utils.market.adapters.nasdaq.provider import NasdaqMarketData
+
+    async def _fake(_month: str) -> str:
+        return "HTTP 429"
+
+    monkeypatch.setattr(nasdaq_provider, "fetch_calendar_month", _fake)
+    monkeypatch.setattr(nasdaq_provider, "months_for_window", lambda _anchor: ["2026-09", "2026-10"])
+    result = asyncio.run(NasdaqMarketData().ipo_calendar(IpoMarket.US))
+    assert is_market_error(result)
+    assert result.code == "network"
 
 
 def test_months_for_window() -> None:

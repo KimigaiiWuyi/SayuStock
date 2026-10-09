@@ -1084,12 +1084,22 @@ class EastMoneyRequester:
             return f"[SayuStock] 新股申购接口错误代码: {resp}"
         return resp
 
-    @async_file_cache(market="新股上市", sector="{market}-clist", suffix="json", minutes=60)
-    async def get_ipo_clist(self, market: str) -> Union[Dict[str, Any], str]:
-        """clist 港股/美股按上市日(f26)倒序，含未来上市日，供 IPO 日历用。"""
-        # 港股 t:3=主板普通股 t:4=创业板普通股（t:1 为 ETF/基金、t:2 为人民币柜台）
-        fs = {"hk": "m:116 t:3,m:116 t:4", "us": "m:105,m:106,m:107"}.get(market)
-        if fs is None:
+    @async_file_cache(market="新股上市", sector="{market}-{board}-clist", suffix="json", minutes=60)
+    async def get_ipo_clist(self, market: str, board: str = "all") -> Union[Dict[str, Any], str]:
+        """clist 港股/美股按上市日(f26)倒序，含未来上市日，供 IPO 日历用。
+
+        港股 ``board`` 为 main / gem 时分开查询，解析层才能标板块。
+        """
+        # t:3 主板普通股，t:4 创业板普通股（t:1 为 ETF/基金、t:2 为人民币柜台）
+        if market == "us":
+            fs = "m:105,m:106,m:107"
+        elif market == "hk" and board == "gem":
+            fs = "m:116 t:4"
+        elif market == "hk" and board == "main":
+            fs = "m:116 t:3"
+        elif market == "hk":
+            fs = "m:116 t:3,m:116 t:4"
+        else:
             return f"[SayuStock] 未知 IPO 市场: {market}"
         url = "https://push2.eastmoney.com/api/qt/clist/get"
         params: List[Tuple[str, str]] = [

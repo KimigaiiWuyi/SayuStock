@@ -5,6 +5,7 @@ from __future__ import annotations
 import re
 from typing import Mapping
 from datetime import date, timedelta
+from dataclasses import replace
 
 from ...enums import IpoMarket
 from ...errors import MarketError, parse_error
@@ -43,13 +44,17 @@ def _parse_dollar_yi(value: object) -> float | None:
         return None
 
 
-def _parse_price(value: object) -> float | None:
+def _price_parts(value: object) -> tuple[float | None, str | None]:
+    """单值进 issue_price；``18.00-20.00`` 这类区间留在 issue_price_text。"""
     if not isinstance(value, str):
-        return None
+        return None, None
+    text = value.strip().lstrip("$").strip()
+    if not text:
+        return None, None
     try:
-        return float(value.strip().replace(",", ""))
+        return float(text.replace(",", "")), None
     except ValueError:
-        return None
+        return None, text
 
 
 def _board_of(value: object) -> str | None:
@@ -92,13 +97,15 @@ def parse_nasdaq_calendar(payload: object) -> list[IpoEvent] | MarketError:
         name = str(row.get("companyName") or "").strip()
         if listing is None or not name:
             continue
+        price, price_text = _price_parts(row.get("proposedSharePrice"))
         events.append(
             IpoEvent(
                 market=IpoMarket.US,
                 code=str(row.get("proposedTickerSymbol") or "").strip(),
                 name=name,
                 listing_date=listing,
-                issue_price=_parse_price(row.get("proposedSharePrice")),
+                issue_price=price,
+                issue_price_text=price_text,
                 raise_yi=_parse_dollar_yi(row.get("dollarValueOfSharesOffered")),
                 currency="USD",
                 board=_board_of(row.get("proposedExchange")),
@@ -109,13 +116,15 @@ def parse_nasdaq_calendar(payload: object) -> list[IpoEvent] | MarketError:
         name = str(row.get("companyName") or "").strip()
         if not name:
             continue
+        price, price_text = _price_parts(row.get("proposedSharePrice"))
         events.append(
             IpoEvent(
                 market=IpoMarket.US,
                 code=str(row.get("proposedTickerSymbol") or "").strip(),
                 name=name,
                 listing_date=_parse_us_date(row.get("expectedPriceDate")),
-                issue_price=_parse_price(row.get("proposedSharePrice")),
+                issue_price=price,
+                issue_price_text=price_text,
                 raise_yi=_parse_dollar_yi(row.get("dollarValueOfSharesOffered")),
                 currency="USD",
                 board=_board_of(row.get("proposedExchange")),
@@ -142,17 +151,68 @@ def parse_nasdaq_calendar(payload: object) -> list[IpoEvent] | MarketError:
     return dedupe_ipo_events(events)
 
 
+def _fill_score(ev: IpoEvent) -> int:
+    """有发行价和上市日的 priced 行优先于只有区间或申报日的行。"""
+    score = 0
+    if ev.issue_price is not None:
+        score += 8
+    if ev.listing_date is not None:
+        score += 4
+    if ev.issue_price_text:
+        score += 2
+    if ev.raise_yi is not None:
+        score += 1
+    if ev.filed_date is not None:
+        score += 1
+    return score
+
+
+def _merge_pair(left: IpoEvent, right: IpoEvent) -> IpoEvent:
+    primary, secondary = (left, right) if _fill_score(left) >= _fill_score(right) else (right, left)
+    listing = primary.listing_date if primary.listing_date is not None else secondary.listing_date
+    apply_date = primary.apply_date if primary.apply_date is not None else secondary.apply_date
+    apply_end = primary.apply_end_date if primary.apply_end_date is not None else secondary.apply_end_date
+    ballot = primary.ballot_date if primary.ballot_date is not None else secondary.ballot_date
+    pay = primary.pay_date if primary.pay_date is not None else secondary.pay_date
+    grey = primary.grey_market_date if primary.grey_market_date is not None else secondary.grey_market_date
+    filed = primary.filed_date if primary.filed_date is not None else secondary.filed_date
+    price = primary.issue_price if primary.issue_price is not None else secondary.issue_price
+    price_text = primary.issue_price_text if primary.issue_price_text is not None else secondary.issue_price_text
+    raised = primary.raise_yi if primary.raise_yi is not None else secondary.raise_yi
+    first_day = primary.first_day_change if primary.first_day_change is not None else secondary.first_day_change
+    oversub = primary.oversubscription if primary.oversubscription is not None else secondary.oversubscription
+    board = primary.board if primary.board is not None else secondary.board
+    return replace(
+        primary,
+        listing_date=listing,
+        apply_date=apply_date,
+        apply_end_date=apply_end,
+        ballot_date=ballot,
+        pay_date=pay,
+        grey_market_date=grey,
+        filed_date=filed,
+        issue_price=price,
+        issue_price_text=price_text,
+        raise_yi=raised,
+        first_day_change=first_day,
+        oversubscription=oversub,
+        board=board,
+    )
+
+
 def dedupe_ipo_events(events: list[IpoEvent]) -> list[IpoEvent]:
-    """按 (code, name) 去重；跨月抓取时同一笔交易可能出现两次。"""
-    seen: set[tuple[str, str]] = set()
-    out: list[IpoEvent] = []
+    """按 (code, name) 合并；跨月时保留信息更全的那一行，空字段用另一行补。"""
+    order: list[tuple[str, str]] = []
+    merged: dict[tuple[str, str], IpoEvent] = {}
     for ev in events:
-        key = (ev.code, ev.name)
-        if key in seen:
-            continue
-        seen.add(key)
-        out.append(ev)
-    return out
+        key = (ev.code.upper(), ev.name.casefold())
+        prev = merged.get(key)
+        if prev is None:
+            order.append(key)
+            merged[key] = ev
+        else:
+            merged[key] = _merge_pair(prev, ev)
+    return [merged[key] for key in order]
 
 
 def months_for_window(anchor: date, *, before: int = 2, after: int = 7) -> list[str]:
