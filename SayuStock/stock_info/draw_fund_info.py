@@ -10,6 +10,7 @@ from gsuid_core.ai_core.trigger_bridge import ai_return
 from ..utils.image import get_footer
 from .draw_my_info import DIFF_MAP, TEXT_PATH, draw_bar_from_quote
 from ..utils.market import get_market, is_market_error
+from ..utils.market.display import source_footer
 from ..utils.stock.request_utils import get_code_id, get_fund_pos_list
 
 
@@ -42,6 +43,7 @@ async def draw_fund_info(fcode: Union[str, int]) -> str | bytes:
     )
 
     all_p = 0.0
+    used: list[str | None] = []
     market = get_market()
     for index, d in enumerate(holdings):
         share_code = str(d.get("ShareCode", ""))
@@ -49,6 +51,7 @@ async def draw_fund_info(fcode: Union[str, int]) -> str | bytes:
         percent = f"{d.get('ShareProportion', '')}%"
         if is_market_error(q):
             continue
+        used.append(q.provider)
         bar = draw_bar_from_quote(q, q.symbol.code or share_code, percent=percent)
         all_p += float(q.change_pct) if q.change_pct is not None else 0.0
         img.paste(bar, (0, 400 + index * 110), bar)
@@ -73,6 +76,13 @@ async def draw_fund_info(fcode: Union[str, int]) -> str | bytes:
         footer,
         (25, img.size[1] - 55),
         footer,
+    )
+    img_draw.text(
+        (20, img.size[1] - 26),
+        source_footer(*used),
+        (150, 150, 150),
+        ss_font(18),
+        "lm",
     )
 
     res = await convert_img(img)

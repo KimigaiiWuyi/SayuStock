@@ -216,3 +216,32 @@ def test_get_news_cover_ms_backfills_until_window_covered(monkeypatch: Any) -> N
     # 翻到最旧条目早于 48h 才停
     assert pages["n"] >= 8
     assert pages["n"] <= req._NEWS_MAX_PAGES
+
+
+def test_get_news_400016_backs_off_to_cache(monkeypatch: Any) -> None:
+    from SayuStock.utils import request as req
+
+    pages = {"n": 0}
+    monkeypatch.setattr(req, "_news_backoff_until", 0.0)
+    monkeypatch.setattr(
+        req,
+        "NEWS",
+        {"next_max_id": 0, "items": [_item(7, 1_700_000_000_000)], "next_id": 0},
+    )
+
+    async def _limited(max_id: int = 0) -> int:
+        pages["n"] += 1
+        return -400016
+
+    monkeypatch.setattr(req, "get_news_list", _limited)
+    try:
+        first = asyncio.run(req.get_news())
+        assert isinstance(first, tuple)
+        assert first[0] == 7
+        assert pages["n"] == 1
+        second = asyncio.run(req.get_news())
+        assert isinstance(second, tuple)
+        assert second[0] == 7
+        assert pages["n"] == 1
+    finally:
+        req._news_backoff_until = 0.0

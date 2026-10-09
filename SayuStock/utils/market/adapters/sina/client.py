@@ -44,8 +44,19 @@ _NODE_MAX_PAGES = 80
 _HQ_RE = re.compile(r'hq_str_(?P<sym>[A-Za-z0-9_]+)="(?P<line>[^"]*)"')
 
 
-async def _get_text(url: str, params: Mapping[str, str] | None = None) -> str | MarketError:
-    timeout = ClientTimeout(total=20)
+def _exc_message(exc: BaseException) -> str:
+    """TimeoutError 的 str 是空的，空消息会让涨跌分布整页变成 0。"""
+    text = str(exc).strip()
+    return text or type(exc).__name__
+
+
+async def _get_text(
+    url: str,
+    params: Mapping[str, str] | None = None,
+    *,
+    timeout_s: float = 20,
+) -> str | MarketError:
+    timeout = ClientTimeout(total=timeout_s)
     try:
         async with ClientSession(headers=_HEADERS, timeout=timeout) as sess:
             async with sess.get(url, params=dict(params) if params else None) as res:
@@ -54,11 +65,11 @@ async def _get_text(url: str, params: Mapping[str, str] | None = None) -> str | 
                 return await res.text(encoding="gb18030", errors="replace")
     except (ClientError, TimeoutError) as e:
         logger.warning(f"[SayuStock][新浪] 请求失败: {e}")
-        return network_error(str(e), provider=PROVIDER)
+        return network_error(_exc_message(e), provider=PROVIDER)
 
 
-async def _get_json(url: str, params: Mapping[str, str]) -> object | MarketError:
-    timeout = ClientTimeout(total=20)
+async def _get_json(url: str, params: Mapping[str, str], *, timeout_s: float = 20) -> object | MarketError:
+    timeout = ClientTimeout(total=timeout_s)
     try:
         async with ClientSession(headers=_HEADERS, timeout=timeout) as sess:
             async with sess.get(url, params=dict(params)) as res:
@@ -71,7 +82,7 @@ async def _get_json(url: str, params: Mapping[str, str]) -> object | MarketError
                 return payload
     except (ClientError, TimeoutError) as e:
         logger.warning(f"[SayuStock][新浪] 请求失败: {e}")
-        return network_error(str(e), provider=PROVIDER)
+        return network_error(_exc_message(e), provider=PROVIDER)
 
 
 async def fetch_hq_lines(symbols: list[str]) -> dict[str, str] | MarketError:
@@ -149,7 +160,13 @@ async def fetch_minline(symbol: str) -> object | str:
     sp="{sort}-{asc}",
     minutes=1,
 )
-async def fetch_node_page(node: str, page: int, sort: str, asc: int) -> list[object] | str:
+async def fetch_node_page(
+    node: str,
+    page: int,
+    sort: str,
+    asc: int,
+    timeout_s: float = 20,
+) -> list[object] | str:
     params = {
         "page": str(page),
         "num": str(_NODE_PAGE_SIZE),
@@ -157,7 +174,7 @@ async def fetch_node_page(node: str, page: int, sort: str, asc: int) -> list[obj
         "asc": str(asc),
         "node": node,
     }
-    payload = await _get_json(NODE_URL, params)
+    payload = await _get_json(NODE_URL, params, timeout_s=timeout_s)
     if isinstance(payload, MarketError):
         return payload.message
     if not isinstance(payload, list):
@@ -228,29 +245,40 @@ async def fetch_turnover_lines() -> dict[str, str] | MarketError:
     return await fetch_hq_lines(list(TURNOVER_INDEXES))
 
 
-# breadth 需要全市场而非前 N 只：按总数翻页并发拉取。并发上限防新浪限流。
-_BREADTH_CONCURRENCY = 6
+# 全 A 约 70 页。16 路、单页 8 秒；默认 20 秒会吃掉 25 秒预算，一页超时分布就变 0。
+_BREADTH_CONCURRENCY = 16
+_BREADTH_PAGE_TIMEOUT_S = 8.0
 
 
+@async_file_cache(market="sina-breadth", sector="hs_a", suffix="json", minutes=3)
 async def fetch_breadth_rows() -> list[object] | MarketError:
     """沪深 A 全量行情（并发翻页）；breadth 统计用，失败即整条链顺延。"""
     count = await fetch_node_count("hs_a")
     if isinstance(count, str):
-        return network_error(count, provider=PROVIDER)
+        return network_error(count or "新浪成分数量失败", provider=PROVIDER)
     pages = max(1, -(-count // _NODE_PAGE_SIZE))
     pages = min(pages, _NODE_MAX_PAGES)
     gate = asyncio.Semaphore(_BREADTH_CONCURRENCY)
 
     async def one(page: int) -> list[object] | str:
         async with gate:
-            return await fetch_node_page("hs_a", page, "changepercent", 0)
+            chunk = await fetch_node_page("hs_a", page, "changepercent", 0, _BREADTH_PAGE_TIMEOUT_S)
+            if isinstance(chunk, str):
+                chunk = await fetch_node_page("hs_a", page, "changepercent", 0, _BREADTH_PAGE_TIMEOUT_S)
+            return chunk
 
     chunks = await asyncio.gather(*(one(p) for p in range(1, pages + 1)))
+    failed = [chunk for chunk in chunks if isinstance(chunk, str)]
     rows: list[object] = []
     for chunk in chunks:
-        if isinstance(chunk, str):
-            return network_error(chunk, provider=PROVIDER)
-        rows.extend(chunk)
+        if isinstance(chunk, list):
+            rows.extend(chunk)
+    # 缺一两页仍然能画分布；缺太多就交给下一条源。
+    if failed and len(failed) > max(1, len(chunks) // 10):
+        message = next((item.strip() for item in failed if item.strip()), "新浪全A翻页失败")
+        return network_error(message, provider=PROVIDER)
+    if failed:
+        logger.warning(f"[SayuStock][新浪] 涨跌分布缺 {len(failed)}/{len(chunks)} 页，用已拿到的页")
     if not rows:
         return parse_error("新浪全A列表为空", provider=PROVIDER)
     return rows

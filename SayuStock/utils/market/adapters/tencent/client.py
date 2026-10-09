@@ -83,7 +83,7 @@ async def fetch_fqkline(symbol: str, unit: str, datalen: int) -> object | str:
 
 @async_file_cache(market="{symbol}", sector="tencent-mkline-{unit}", suffix="json", sp="{datalen}", minutes=2)
 async def fetch_mkline(symbol: str, unit: str, datalen: int) -> object | str:
-    """分钟 K；unit ∈ m5|m15|m30|m60。"""
+    """分钟 K；unit ∈ m1|m5|m15|m30|m60。m1 供五日分时拼接。"""
     params = {"param": f"{symbol},{unit},,,{datalen}"}
     payload = await _get_json(MKLINE_URL, params)
     if isinstance(payload, MarketError):

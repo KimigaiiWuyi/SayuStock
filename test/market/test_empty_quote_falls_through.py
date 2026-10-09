@@ -64,3 +64,20 @@ def test_sina_empty_line_reports_empty_not_not_found() -> None:
     assert is_market_error(res)
     assert res.code == "empty", "空行报 not_found 会短路整条源链"
     assert res.provider == "sina"
+
+
+def test_sina_board_accepts_new_industry_node() -> None:
+    """行业菜单给出的 new_ 节点必须能取成分，不能报「不支持列表」。"""
+
+    async def _rows(node: str, *, sort: str, asc: bool, limit: int | None = None) -> list[dict[str, object]]:
+        assert node == "new_snhy"
+        assert sort == "changepercent"
+        return [{"code": "000546", "name": "金圆股份", "trade": "4.77", "changepercent": 9.9, "amount": 100}]
+
+    async def _run() -> object:
+        with patch.object(sina_provider, "fetch_node_rows", _rows):
+            return await SinaMarketData().board("new_snhy")
+
+    snap = asyncio.run(_run())
+    assert not is_market_error(snap)
+    assert snap.rows[0].name == "金圆股份"

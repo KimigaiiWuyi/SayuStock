@@ -100,7 +100,11 @@ async def fetch_a_share_universe(*, max_pages: int = 20) -> pd.DataFrame:
     断流），拿不到「按市值排序的前 ~2000 只」。属于端口能力缺口，非绕过。
     """
     fs = market_dict["沪深A"] if "沪深A" in market_dict else "m:0 t:6,m:0 t:80,m:1 t:2,m:1 t:23"
-    return await fetch_clist(fs, pz=100, max_pages=max_pages, sort_by_market_cap=True)
+    df = await fetch_clist(fs, pz=100, max_pages=max_pages, sort_by_market_cap=True)
+    # 这条仍直连东财 clist，不是端口链，来源固定。
+    if not df.empty:
+        df.attrs["provider"] = "eastmoney"
+    return df
 
 
 async def resolve_industry_fs(industry_name: str) -> tuple[str, str] | str:
@@ -142,16 +146,19 @@ async def fetch_board_members(board_code: str) -> pd.DataFrame:
     if is_market_error(snap):
         logger.warning(f"[stock_analysis] 板块 {board_code} 成分拉取失败: {snap.message}")
         return pd.DataFrame()
-    return board_to_df(snap)
+    df = board_to_df(snap)
+    if snap.provider:
+        df.attrs["provider"] = snap.provider
+    return df
 
 
-async def fetch_industry_pct_map() -> dict[str, float]:
-    """行业名 → 当日涨跌幅%（板块指数）。"""
+async def fetch_industry_pct_map() -> tuple[dict[str, float], str | None]:
+    """行业名 → 当日涨跌幅%，以及这条榜的 sourceBy。"""
     snap = await get_market().board("行业板块", limit=100, sort_asc=False)
     out: dict[str, float] = {}
     if is_market_error(snap):
-        return out
+        return out, None
     for row in snap.rows:
         if row.name and row.change_pct is not None:
             out[row.name] = row.change_pct
-    return out
+    return out, snap.provider

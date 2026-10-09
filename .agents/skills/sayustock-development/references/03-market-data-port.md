@@ -55,12 +55,20 @@ fin = await port.financial_snapshot("600519")
 
 列表展示：`display.from_quote` / `from_board_row` / `board_rows_to_items`。
 
-**数据来源归属（provider 字段）**：`Quote` / `KlineSeries` / `IntradaySeries` /
-`BoardSnapshot` / `RankSnapshot` / `ValueSeries` 均带 `provider: str | None`——
-equity 链在 `ConfigurableEquityMarket._dispatch` 命中时盖章（`display.stamp_provider`）；
-okx/vix/tiantian 槽位在 `CompositeMarketData` 路由时盖章。图表左下角「数据来源」
-标签用 `display.source_label(*providers)`（id→中文名，多源去重拼接，None 回退
-「东方财富」）；**禁止再硬编码「数据来源：东方财富」**。
+**sourceBy（代码字段 `provider: str | None = None`）**：成功模型都带这个字段。
+可盖章的是 `Quote`、`KlineSeries`、`IntradaySeries`、`BoardSnapshot`、`RankSnapshot`、
+`ValueSeries`、`MarketTurnover`、`BreadthBar`、`NorthboundFlow`、`FinancialSnapshot`
+（`display._STAMPABLE`）。equity 链在 `ConfigurableEquityMarket._dispatch` 命中时
+`stamp_provider`；okx / vix / tiantian 在 `CompositeMarketData` 路由时盖章。已有值不覆盖。
+不要再加第二个来源字段。分时再把同一个 id 写进嵌套 `quote`（序列上的才是链盖章的那份）。
+
+图角用 `display.source_footer(*providers, note="")`。它走 `source_label`：id 翻成中文、
+多源去重，拼成 `数据来源：… | SayuStock`。一个都没有时回退「东方财富」（历史口径，
+有单测锁着）。一图多块时把每块的 provider 都传进去。
+**禁止**再写死「数据来源：东方财富」。
+
+`sector_menu` 返回 `dict[str, str]`，装不下这个字段；用到菜单的图以同一次 `board`
+快照的 `provider` 为准。
 
 ## 3.4 `MarketDataPort` 方法清单
 
@@ -197,6 +205,12 @@ feature 模块不应再直接 `stock_request` 然后读 `f*`。
   分时 `type=1`（末时刻标注 09:31-16:00，逐 bar 量额，取最近交易日；**新鲜度守卫**：
   末点超 10 天（OTC/.inx/.dji 停更于 2020，.ixic 反而新鲜）→ unsupported 回落东财）。
   量=股、额/市值=美元；指数 a=0 时均价回退当前价。
+  东财前缀 `2`（中证指数，如 `2.932000` 中证2000）盘口和 K 线都没有，映射返回 None，
+  不要拼 `sh932000`，也不要改挂 ETF 或国证2000。`118.AU9999` → `gds_AU9999`
+  （沪金99，上金所，不是沪金期货 `nf_AU0`），`220.TLM` → `nf_TL0`（三十债主连）。
+  这两只只有盘口：`intraday` / `kline` 在拉数前返回 `unsupported`。列序以
+  2026-10-09 与东财对齐的采样为准（黄金 14 列、国债期货 50 列；期货成交额单位不明，
+  `amount` 留空）。商品连续的 `nf_` 名称在首列，不要走国债期货解析。
 - `tencent/client.py` + `parse.py` + `provider.py`：备用权益源。`qt.gtimg.cn` 盘口（GBK，含
   PE/PB/市值/涨跌停）、`fqkline` **前复权**日/周/月K、`mkline` 分钟K、`minute/query` 当日分时
   （累计量额差分）。K 行列序为**开、收、高、低**（与直觉相反）。无板块/排行（unsupported 回落）。
@@ -204,6 +218,8 @@ feature 模块不应再直接 `stock_request` 然后读 `f*`。
   代码与东财不同名）：**仅盘口**（量=股、额=美元、PB 在 43 列、时间为美东、无涨跌停）；
   美股 K线（fqkline/usfqkline 只回首末两根）、分钟K（mkline param error）与分时
   （minute/query 仅末点）无有效数据，unsupported 回落东财。
+  东财前缀 `2` 同样返回 None（2026-10-09 qt 与检索都没有中证2000）。
+  腾讯没有黄金9999和三十债主连。
 
 ## 3.8 薄封装 `utils/stock/request.py`
 
@@ -229,16 +245,27 @@ feature 模块不应再直接 `stock_request` 然后读 `f*`。
 
 ## 3.10 扩展新数据源 checklist
 
-1. 新建 `adapters/<name>/provider.py`，实现 `MarketDataPort`（可继承 `PartialMarketData` 只覆盖子集）。  
-2. 所有供应商 JSON 解析写在该 adapter 内，输出标准模型。  
+1. 新建 `adapters/<name>/provider.py`，实现 `MarketDataPort`（可继承 `PartialMarketData` 只覆盖子集）。
+   没实现的方法保持 `unsupported`，让链顺延。某一只标的这个源的目录里没有，也返回
+   `unsupported`（或映射函数返回 None），不要把别的 secid 拼成一个空代码。
+2. 供应商原始字段只在该 adapter 里解析，输出标准模型。非沪深京的品种用显式符号表，
+   列序先拿一条实盘和东财对齐再写解析器，把采样写进 `test/market/`。只拿到盘口的品种，
+   `intraday` / `kline` 必须在发请求之前 `unsupported`，不要送进 A 股解析器。
 3. 在 `provider_registry.py` 的 `_PROVIDER_FACTORIES` / `_PROVIDER_ALIASES` / `PROVIDER_LABELS` /
    `_SYSTEM_ORDER` 注册（`_SYSTEM_ORDER` 决定它排在链外兜底的位置）；
    无需新增配置项——五域源链对每个接口自动生效
    （能力不全的接口无需特殊处理，链式取数会自动跳过 unsupported 并顺延）。
    若它补齐了原先单源的接口（如板块能力给腾讯），要把该源加进对应域配置的 `options`
-   ——`options` 是手写的，能力表见 `doc/provider_coverage_matrix.md` §13.9。  
-4. 补 `test/market/` 解析与路由单测。  
-5. 不改 feature 模块字段假设。
+   ——`options` 是手写的，能力表见 `doc/provider_coverage_matrix.md` §13.9。
+   展示名加进 `display.PROVIDER_DISPLAY`。
+4. 成功模型带 `provider: str | None = None`（放在字段末尾，已有位置参数构造器才不会断）。
+   新模型加入 `display._STAMPABLE`，由路由盖章；adapter 自己不要填，除非结果不走链。
+   不走端口的直连（例如选股 clist）在结果上写死自己的 id。不要再加第二个来源字段。
+5. 每张新图调用 `source_footer`，把这张图用到的每个结果的 `provider` 都传进去。
+   一图多块（指数、板块、折线各走各的源）收成同一个角落，去重由 `source_footer` 做。
+6. 补 `test/market/` 解析与路由单测，至少锁住：符号映射、列序、`stamp_provider`、图角文案。
+7. 改 `doc/provider_coverage_matrix.md` 里被这次能力变化打脸的那几句，不要整表重写。
+8. 不改 feature 模块的字段假设。业务继续只读领域模型。
 
 ## 3.11 残留特例（知悉即可）
 

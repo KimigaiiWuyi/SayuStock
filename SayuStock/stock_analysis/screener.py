@@ -44,6 +44,8 @@ class ScreenerResult:
     df: pd.DataFrame
     filters_desc: list[str] = field(default_factory=list)
     error: str = ""
+    # sourceBy：股票池来自哪个数据源。
+    source_ids: tuple[str, ...] = ()
 
 
 def _prepare_df(df: pd.DataFrame) -> pd.DataFrame:
@@ -205,6 +207,8 @@ async def run_screener(text: str, *, top_n: int = 20) -> ScreenerResult:
     if "pct" in filtered.columns and not filtered.empty:
         filtered = filtered.sort_values("pct", ascending=False, na_position="last")
     shown_df = filtered.head(top_n)
+    raw_src = df.attrs["provider"] if "provider" in df.attrs else None
+    source_ids = (raw_src,) if isinstance(raw_src, str) and raw_src else ()
 
     return ScreenerResult(
         query=text,
@@ -214,4 +218,5 @@ async def run_screener(text: str, *, top_n: int = 20) -> ScreenerResult:
         shown=len(shown_df),
         df=shown_df,
         filters_desc=filters_to_desc(filters),
+        source_ids=source_ids,
     )

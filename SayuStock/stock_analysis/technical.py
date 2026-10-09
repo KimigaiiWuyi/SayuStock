@@ -65,6 +65,8 @@ class TechnicalReport:
     levels: dict[str, float | None] = field(default_factory=dict)
     indicators: dict[str, Any] = field(default_factory=dict)
     summary: str = ""
+    # sourceBy：这张技术分析图用到的数据源 id。
+    source_ids: tuple[str, ...] = ()
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -106,6 +108,7 @@ def build_technical_report(
     period_code: str,
     klines: list[str] | None = None,
     ohlcv_df: pd.DataFrame | None = None,
+    source_ids: tuple[str, ...] = (),
 ) -> TechnicalReport | str:
     """从 K 线构建技术报告。
 
@@ -287,6 +290,7 @@ def build_technical_report(
         position=position,
         signals=signals,
         risk_flags=risks,
+        source_ids=source_ids,
         levels=levels,
         indicators=ind,
         summary=summary,

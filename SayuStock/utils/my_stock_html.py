@@ -9,6 +9,7 @@ from functools import lru_cache
 
 from .utils import number_to_chinese
 from .market import Quote, DisplayItem
+from .market.display import source_footer
 
 TEXT_PATH = Path(__file__).resolve().parent.parent / "stock_info" / "texture2d"
 _FOOTER_PATH = Path(__file__).resolve().parent / "texture2d" / "footer.png"
@@ -125,6 +126,7 @@ def build_my_stock_html(
     index_items: list[DisplayItem],
     title_num: str,
     sparklines: dict[str, str] | None = None,
+    sources: tuple[str | None, ...] = (),
 ) -> str:
     """quotes: (Quote, 原始自选字符串)。index_items 已按展示顺序排好。"""
     n = len(quotes)
@@ -151,6 +153,10 @@ def build_my_stock_html(
                 spark = sparklines[q.symbol.code]
         bars.append(_bar_html(q, uid, y, x, spark))
     inner_bars = "".join(bars)
+    used: list[str | None] = list(sources)
+    used.extend(item.provider for item in index_items)
+    used.extend(q.provider for q, _ in quotes)
+    source_text = _e(source_footer(*used))
     return f"""<!DOCTYPE html>
 <html>
 <head>
@@ -214,6 +220,10 @@ body {{
   position: absolute; left: {title_x}px; top: {height - 55}px;
   width: 850px; height: 40px;
 }}
+.src {{
+  position: absolute; left: 24px; top: {height - 78}px;
+  font-size: 15px; color: rgba(210, 210, 210, 0.9); white-space: nowrap;
+}}
 </style>
 </head>
 <body>
@@ -222,6 +232,7 @@ body {{
   {idx_html}
   <img class="bar5" src="{bar5_uri}" width="850" height="90" />
   {inner_bars}
+  <div class="src">{source_text}</div>
   <img class="footer" src="{footer_uri}" width="850" height="40" />
 </div>
 </body>

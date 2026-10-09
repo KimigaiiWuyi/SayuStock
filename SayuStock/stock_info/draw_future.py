@@ -46,6 +46,9 @@ async def __get_item(
     if q is None:
         return
     item = from_quote(q)
+    # 链上盖的是序列的 sourceBy，嵌套 quote 可能还是空的。
+    if item.provider is None and series.provider:
+        item = replace(item, provider=series.provider)
     # 全天候格子按配置表的键展示/对齐；API 名可能是「黄金/美元」对不上 XAU
     if display_name and display_name != item.name:
         item = replace(item, name=display_name)
@@ -63,7 +66,11 @@ async def _get_items(_d: dict[str, str], sparks: SparkMap | None = None) -> Item
     return result
 
 
-async def _fetch_sparks(table: dict[str, str], sparks: SparkMap) -> None:
+async def _fetch_sparks(
+    table: dict[str, str],
+    sparks: SparkMap,
+    sources: list[str | None],
+) -> None:
     """只补 trends2 折线，不改格子报价（国际市场报价仍走 clist）。"""
 
     async def one(name: str, code: str) -> None:
@@ -74,6 +81,7 @@ async def _fetch_sparks(table: dict[str, str], sparks: SparkMap) -> None:
         series = await get_market().intraday(secid)
         if is_market_error(series):
             return
+        sources.append(series.provider)
         svg = sparkline_from_series(series, width=SPARK_W, height=SPARK_H)
         if not svg:
             return
@@ -100,13 +108,15 @@ async def draw_future_img() -> str | bytes:
 
     data_gz = board_rows_to_items(intl.rows)
     sparks: SparkMap = {}
+    # 国际市场格子来自板块快照，折线另一次分时，两边的 sourceBy 都要进图角。
+    extra_sources: list[str | None] = [intl.provider]
 
     results = await asyncio.gather(
         _get_items(commodity, sparks),
         _get_items(bond, sparks),
         _get_items(whsc, sparks),
         _get_items(crypto, sparks),
-        _fetch_sparks(i_code, sparks),
+        _fetch_sparks(i_code, sparks, extra_sources),
         return_exceptions=True,
     )
 
@@ -128,7 +138,7 @@ async def draw_future_img() -> str | bytes:
         ("加密货币", pick_display_items(data5, crypto)),
     ]
     _ai_return_all_weather(data_gz, data2, data3, data4, data5)
-    html = build_all_weather_html(sections, sparklines=sparks)
+    html = build_all_weather_html(sections, sparklines=sparks, sources=tuple(extra_sources))
     _, height = all_weather_canvas_size(sections, sparks)
     try:
         return await render_html_to_bytes(

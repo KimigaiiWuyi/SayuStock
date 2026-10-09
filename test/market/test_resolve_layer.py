@@ -16,6 +16,7 @@ from SayuStock.utils.market.errors import is_market_error
 from SayuStock.utils.stock.request_utils import (
     ResolveLayerError,
     get_code_id,
+    local_digit_code,
     get_code_id_strict,
 )
 from SayuStock.utils.market.adapters.sina.provider import SinaMarketData
@@ -78,6 +79,49 @@ def test_secid_form_carries_local_name_without_network() -> None:
     hit = asyncio.run(get_code_id_strict("1.600519"))
     assert hit is not None
     assert hit[1] == chinese_stocks["600519"]["name"] != ""
+
+
+def test_local_digit_code_maps_share_and_fund() -> None:
+    from SayuStock.utils.constant import chinese_stocks
+
+    hit = local_digit_code("600519")
+    assert hit == ("1.600519", chinese_stocks["600519"]["name"], "沪A")
+    star = local_digit_code("688981")
+    assert star is not None and star[0] == "1.688981" and star[2] == "科创板"
+    gem = local_digit_code("300750")
+    assert gem is not None and gem[0] == "0.300750" and gem[2] == "创业板"
+    bank = local_digit_code("000001")
+    assert bank == ("0.000001", chinese_stocks["000001"]["name"], "深A")
+    etf = local_digit_code("510300")
+    assert etf == ("1.510300", "", "基金")
+    # 000905 是厦门港务，不是中证500；中证500 只走 1.000905 / 名称表
+    port = local_digit_code("000905")
+    assert port == ("0.000905", chinese_stocks["000905"]["name"], "深A")
+    assert local_digit_code("000300") is None
+
+
+def test_bare_share_code_does_not_call_searchapi(monkeypatch) -> None:
+    def _boom(*_args: object, **_kwargs: object) -> None:
+        raise AssertionError("searchapi")
+
+    monkeypatch.setattr(request_utils, "ClientSession", _boom)
+    hit = asyncio.run(get_code_id_strict("600519"))
+    assert hit is not None
+    assert hit[0] == "1.600519"
+
+
+def test_bare_index_code_still_reaches_searchapi(monkeypatch) -> None:
+    called = {"n": 0}
+
+    class _Boom:
+        def __init__(self, *_args: object, **_kwargs: object) -> None:
+            called["n"] += 1
+            raise ResolveLayerError("blocked")
+
+    monkeypatch.setattr(request_utils, "ClientSession", _Boom)
+    with pytest.raises(ResolveLayerError):
+        asyncio.run(get_code_id_strict("000300"))
+    assert called["n"] == 1
 
 
 def test_secid_form_skips_name_on_market_mismatch() -> None:

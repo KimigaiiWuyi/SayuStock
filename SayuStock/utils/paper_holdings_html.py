@@ -9,6 +9,7 @@ from functools import lru_cache
 from dataclasses import dataclass
 
 from .market import DisplayItem
+from .market.display import source_footer
 
 TEXT_PATH = Path(__file__).resolve().parent.parent / "stock_info" / "texture2d"
 _FOOTER_PATH = Path(__file__).resolve().parent / "texture2d" / "footer.png"
@@ -45,6 +46,7 @@ class HoldingBarRow:
     unrealized_pnl: float
     unrealized_pnl_pct: float
     market_value: float
+    provider: str | None = None
 
 
 def paper_holdings_canvas_size(n: int) -> tuple[int, int]:
@@ -252,6 +254,9 @@ def build_paper_holdings_html(
     else:
         inner_bars = f'<div class="empty" style="top:{bars_y}px">当前无持仓 · 资金都在现金</div>'
 
+    used: list[str | None] = [item.provider for item in index_items]
+    used.extend(row.provider for row in holdings)
+    source_text = _e(source_footer(*used))
     return f"""<!DOCTYPE html>
 <html>
 <head>
@@ -407,6 +412,10 @@ body {{
   position: absolute; left: 25px; top: {height - 55}px;
   width: 850px; height: 40px;
 }}
+.src {{
+  position: absolute; left: 24px; top: {height - 78}px;
+  font-size: 15px; color: rgba(210, 210, 210, 0.9); white-space: nowrap;
+}}
 </style>
 </head>
 <body>
@@ -445,6 +454,7 @@ body {{
   </div>
   <img class="bar5" src="{bar5_uri}" width="850" height="90" />
   {inner_bars}
+  <div class="src">{source_text}</div>
   <img class="footer" src="{footer_uri}" width="850" height="40" />
 </div>
 </body>

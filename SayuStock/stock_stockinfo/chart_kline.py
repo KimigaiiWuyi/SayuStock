@@ -52,7 +52,7 @@ from .chart_base import (
 from .render_data import build_kline_render_data
 from ..utils.constant import ErroText
 from ..utils.market.models import KlineSeries
-from ..utils.market.display import source_label
+from ..utils.market.display import source_footer
 
 # BOLL 带：2σ 窄带淡红、3σ 宽带淡紫（Bands 填充 alpha=0.2，线色略实才能在暗底上看清）
 BOLL2_COLOR = "#c0392b"
@@ -416,7 +416,7 @@ def draw_single_kline_chart(series: KlineSeries, sp: str | None = None) -> DrawR
     fig.text(
         0.016,
         0.005,
-        f"数据来源：{source_label(series.provider)} | SayuStock",
+        source_footer(series.provider),
         color=FG_COLOR,
         fontsize=9,
         alpha=0.65,

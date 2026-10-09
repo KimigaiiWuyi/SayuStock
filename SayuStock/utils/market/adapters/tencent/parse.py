@@ -30,6 +30,9 @@ def tencent_symbol_from_secid(secid: str) -> str | None:
     prefix, code = secid.split(".", 1)
     if prefix == "1":
         return f"sh{code}"
+    # 东财 2. 是中证指数市场。2026-10-09 腾讯 qt 与检索都没有 932000。
+    if prefix == "2":
+        return None
     if prefix == "0":
         return f"bj{code}" if code.startswith(BJ_CODE_PREFIXES) else f"sz{code}"
     if prefix in ("105", "106", "107", "153"):
@@ -252,6 +255,108 @@ def parse_kline_payload(
     if not bars:
         return empty_error("腾讯K线解析后为空", provider=PROVIDER)
     return KlineSeries(symbol=symbol, period=period, bars=tuple(bars), adjusted=adjusted)
+
+
+def _quote_from_intraday(
+    symbol: SymbolRef,
+    points: Sequence[IntradayPoint],
+    ref_close: float | None,
+) -> Quote:
+    """报价接口失败时，用最后一节分时填页眉，避免今日涨跌和成交额显示成 0。"""
+    last_day = points[-1].ts.date()
+    day_pts = [p for p in points if p.ts.date() == last_day]
+    earlier = [p for p in points if p.ts.date() < last_day]
+    if earlier:
+        base = earlier[-1].price
+    elif ref_close is not None and ref_close > 0:
+        base = ref_close
+    else:
+        base = day_pts[0].open
+    last = day_pts[-1]
+    change_pct = round((last.price - base) / base * 100, 3) if base else None
+    change_amount = last.price - base if base else None
+    raw_amounts = [p.amount for p in day_pts]
+    # 分钟线经常没有成交额，全 0 不能写成「成交额 0」
+    amount = sum(raw_amounts) if any(value > 0 for value in raw_amounts) else None
+    return Quote(
+        symbol=symbol,
+        price=last.price,
+        open=day_pts[0].open,
+        high=max(p.high for p in day_pts),
+        low=min(p.low for p in day_pts),
+        prev_close=base,
+        change_pct=change_pct,
+        change_amount=change_amount,
+        volume=sum(p.volume for p in day_pts),
+        amount=amount,
+        turnover_rate=None,
+        pe=None,
+        pb=None,
+        market_cap=None,
+        float_market_cap=None,
+        industry=None,
+        limit_up=None,
+        limit_down=None,
+        as_of=last.ts,
+    )
+
+
+def intraday_from_minute_bars(
+    bars: Sequence[Bar],
+    *,
+    symbol: SymbolRef,
+    quote: Quote | None,
+    ndays: int,
+) -> IntradaySeries | MarketError:
+    """分钟 K → 多日分时。不足两个交易日视为本源没有五日数据。"""
+    ordered = sorted(bars, key=lambda bar: bar.ts)
+    days: list[datetime] = []
+    for bar in ordered:
+        if not days or days[-1].date() != bar.ts.date():
+            days.append(bar.ts)
+    if len(days) < 2:
+        return empty_error("腾讯分钟线不足两个交易日", provider=PROVIDER)
+    keep_days = {item.date() for item in days[-ndays:]}
+    window = [bar for bar in ordered if bar.ts.date() in keep_days]
+    first_ts = window[0].ts
+    prior = [bar for bar in ordered if bar.ts < first_ts]
+    ref_close = prior[-1].close if prior else None
+    points: list[IntradayPoint] = []
+    current: datetime | None = None
+    day_open = 0.0
+    day_high = 0.0
+    day_low = 0.0
+    for bar in window:
+        if current is None or bar.ts.date() != current.date():
+            current = bar.ts
+            day_open = bar.open
+            day_high = bar.high
+            day_low = bar.low
+        else:
+            day_high = max(day_high, bar.high)
+            day_low = min(day_low, bar.low)
+        points.append(
+            IntradayPoint(
+                ts=bar.ts,
+                price=bar.close,
+                open=day_open,
+                high=day_high,
+                low=day_low,
+                volume=bar.volume,
+                amount=bar.amount if bar.amount is not None else 0.0,
+                avg_price=bar.close,
+            )
+        )
+    if not points:
+        return empty_error("腾讯分钟线解析后为空", provider=PROVIDER)
+    header = quote if quote is not None else _quote_from_intraday(symbol, points, ref_close)
+    return IntradaySeries(
+        symbol=symbol,
+        points=tuple(points),
+        quote=header,
+        ndays=min(ndays, len(keep_days)),
+        ref_close=ref_close,
+    )
 
 
 def _minute_rows(payload: object, tencent_symbol: str) -> list[str] | MarketError:

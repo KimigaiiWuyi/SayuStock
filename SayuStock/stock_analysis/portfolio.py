@@ -23,6 +23,7 @@ class HoldingRow:
     weight: float
     pct: float | None
     price: float | None
+    provider: str | None = None
 
 
 @dataclass(slots=True)
@@ -37,6 +38,8 @@ class PortfolioRiskReport:
     effective_n: float
     risk_level: str
     messages: list[str] = field(default_factory=list)
+    # sourceBy：持仓报价和行业涨跌用到的数据源 id。
+    source_ids: tuple[str, ...] = ()
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -104,6 +107,7 @@ async def _fetch_one(code: str) -> HoldingRow | None:
         weight=0.0,
         pct=q.change_pct,
         price=q.price,
+        provider=q.provider,
     )
 
 
@@ -138,7 +142,7 @@ async def analyze_portfolio(codes: list[str]) -> PortfolioRiskReport | str:
     effective_n = (1.0 / hhi) if hhi > 0 else 0.0
     level = _risk_level(hhi, top1_w)
 
-    ind_pct = await fetch_industry_pct_map()
+    ind_pct, ind_src = await fetch_industry_pct_map()
     industry_day: dict[str, float] = {}
     for ind_name in industry_weights:
         if ind_name in ind_pct:
@@ -158,6 +162,13 @@ async def analyze_portfolio(codes: list[str]) -> PortfolioRiskReport | str:
     elif level == "分散":
         messages.append("行业分布较分散")
 
+    source_ids: list[str] = []
+    for holding in holdings:
+        if holding.provider and holding.provider not in source_ids:
+            source_ids.append(holding.provider)
+    if ind_src and ind_src not in source_ids:
+        source_ids.append(ind_src)
+
     return PortfolioRiskReport(
         holdings=holdings,
         industry_weights=dict(sorted_ind),
@@ -169,4 +180,5 @@ async def analyze_portfolio(codes: list[str]) -> PortfolioRiskReport | str:
         effective_n=effective_n,
         risk_level=level,
         messages=messages,
+        source_ids=tuple(source_ids),
     )

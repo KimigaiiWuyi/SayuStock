@@ -31,6 +31,9 @@ NEWS: XueQiu7x24 = {
     "next_id": 0,
 }
 XUEQIU_TOKEN = ""
+# 雪球 400016 后短退避，避免 5 分钟轮询和其它调用方连续打 token。
+_NEWS_BACKOFF_S = 90.0
+_news_backoff_until = 0.0
 
 
 async def get_token() -> object:
@@ -98,6 +101,12 @@ async def get_news_list(
     )
 
 
+def _cached_news() -> Optional[Tuple[int, XueQiu7x24]]:
+    if not NEWS["items"]:
+        return None
+    return max(item["id"] for item in NEWS["items"]), NEWS
+
+
 async def get_news(
     max_id: int = 0,
     cover_ms: int = 0,
@@ -107,7 +116,13 @@ async def get_news(
     cover_ms > 0 时持续翻页，直到缓存已覆盖该时长（汇总推送靠它回填隔夜/隔日区间，
     进程重启后缓存是空的，否则只能拿到最近 45 条）；为 0 时只取最新 _NEWS_LIVE_PAGES 页。
     """
-    global NEWS
+    global NEWS, _news_backoff_until
+    if time.monotonic() < _news_backoff_until:
+        cached = _cached_news()
+        if cached is not None:
+            logger.warning("[SayuStock] 雪球 400016 退避中，返回已缓存新闻")
+            return cached
+        return -400016
     _max_id = max_id
     return_max_id = max_id
     # 用 seen_ids 防止同一新闻被反复 append 进全局 NEWS
@@ -122,6 +137,12 @@ async def get_news(
     for i in range(max_pages):
         data = await get_news_list(max_id=_max_id)
         if isinstance(data, int):
+            if data == -400016:
+                _news_backoff_until = time.monotonic() + _NEWS_BACKOFF_S
+                logger.warning("[SayuStock] 雪球 400016，90 秒内不再请求")
+                cached = _cached_news()
+                if cached is not None:
+                    return cached
             return data
 
         if not data["items"]:

@@ -31,5 +31,5 @@ class Quote:
     limit_up: float | None
     limit_down: float | None
     as_of: datetime | None
-    # 命中数据源 id（eastmoney/tencent/sina/okx/tiantian/vix），渲染层展示真实来源
+    # sourceBy：命中数据源 id。渲染层用它画图角，已有值不覆盖。
     provider: str | None = None

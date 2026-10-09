@@ -12,7 +12,7 @@
 - 取数语义（尽可能交付）：按链逐一尝试，成功即返回；源返回 `unsupported`
   （不支持该接口）直接跳过；其余错误（网络/解析/空数据）顺延到下一个源；
   `not_found` 短路返回（标的解析层共用，换源无意义）。全部失败才报错，
-  报「优先级最高且真正出错」的那个源的错误。
+  错误码取优先级最高的真实失败，文案带上每一跳的原因。
 - 时间预算：每个源最多占 `SOURCE_TIMEOUT_S`；调用方可用 `chain_deadline()`
   再声明整链总预算，链内按「剩余预算 / 剩余源数」分片，且不低于
   `MIN_SOURCE_SLICE_S`。没有分片时，一个挂起的源会把预算吃光，后面的源
@@ -298,7 +298,7 @@ class ConfigurableEquityMarket:
                 message=f"行情API无可用供应商（接口 {iface}）",
                 provider="registry",
             )
-        first_real_error: MarketError | None = None
+        real_errors: list[MarketError] = []
         first_error: MarketError | None = None
         for i, (pid, port) in enumerate(chain):
             budget = _source_budget(len(chain) - i)
@@ -329,16 +329,20 @@ class ConfigurableEquityMarket:
                 # 该源没有此接口，属预期，静默跳过
                 logger.debug(f"[SayuStock][行情API] {iface} 在 {PROVIDER_LABELS.get(pid, pid)} 不支持，跳过")
                 continue
-            if first_real_error is None:
-                first_real_error = result
+            real_errors.append(result)
             nxt = chain[i + 1] if i + 1 < len(chain) else None
             logger.warning(
                 f"[SayuStock][行情API] {iface} 由 {PROVIDER_LABELS.get(pid, pid)} 失败"
                 f"（{result.code}: {result.message}），顺延 "
                 f"{PROVIDER_LABELS.get(nxt[0], nxt[0]) if nxt else '无下一源'}"
             )
-        if first_real_error is not None:
-            return first_real_error
+        if real_errors:
+            head = real_errors[0]
+            parts: list[str] = []
+            for err in real_errors:
+                label = PROVIDER_LABELS[err.provider] if err.provider in PROVIDER_LABELS else err.provider
+                parts.append(f"{label}: {err.message}")
+            return MarketError(code=head.code, message="；".join(parts), provider=head.provider)
         if first_error is not None:
             return first_error
         # 预算在动手之前就耗尽：必须回一个 MarketError，不能让 None 漏给调用方

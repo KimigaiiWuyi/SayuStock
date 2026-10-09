@@ -200,6 +200,7 @@ if not isinstance(raw_data, KlineSeries):
 8. ruff / **basedpyright**（Core venv `--pythonpath`）/ 相关 pytest 是否绿？typecheck **挡合并**。  
 9. 新测试是否在**扁平（无 Core）与嵌套**下都能 collection？（至少本地跑一遍 CI indicators 三件套 + `pytest test/`）  
 10. 是否更新了本 SKILL 对应章节（若改了不变量 / CI 约定）？  
+11. 新图角是否走 `source_footer`，而不是写死「数据来源：东方财富」？  
 
 ## 9.18 历史问题速查
 
@@ -221,6 +222,7 @@ if not isinstance(raw_data, KlineSeries):
 | S-16 | 全天候开盘灯 | `is_market_active_now` 为 `[start, end)`，收盘整点灭灯；港股持续交易 **16:00** 收（不是 15:30）；日股 BJT 08:00-10:30 / 11:30-14:30；时钟必须 `now_bjt()`（Asia/Shanghai），禁止 `datetime.now()` |
 | C-1…C-13 | CI 事故速查表 | [§10.8](./10-cicd-and-dev-workflow.md) |
 | M-1 | 领域模型迁移完成 | [§03](./03-market-data-port.md) |
+| M-2 | sourceBy / 图角 / 新源规范 | §9.20 / [§03 §3.10](./03-market-data-port.md) |
 
 ## 9.19 与 GsCore 坑的交叉
 
@@ -231,3 +233,11 @@ if not isinstance(raw_data, KlineSeries):
 - 输出闸误杀 → §12.22  
 
 排查「AI 调错工具 / 不调股票工具」时，先确认 Core 工具注册与嵌入配置，再查本插件 docstring。
+
+## 9.20 数据源归属与品种映射（M-2）
+
+- 成功结果的来源字段就叫 `provider`（文档里的 sourceBy）。图角只认它。再加一个字段会和盖章逻辑各写各的。
+- 分时链盖在 `IntradaySeries.provider` 上。只读 `series.quote.provider` 会丢来源；`stamp_provider` 会把同一个 id 补进嵌套 quote，画图仍建议两个都收。
+- 东财 `2.` 是中证指数市场。中证2000（`2.932000`）在腾讯、新浪、同花顺公开接口里都没有。映射返回 None。拼 `sh932000` 只会拿到空行，还可能被当成这只指数存在。不要改挂 ETF 或国证2000。
+- 黄金9999 是上金所沪金99（新浪 `gds_AU9999`），不是沪金期货 `nf_AU0`。三十债主连是 `nf_TL0`。这两只只有盘口，K 线/分时在发请求前 `unsupported`。期货那一列成交额单位对不上，留空。
+- 商品连续的 `nf_` 行是名称在首列的另一套列序，不能复用三十债解析。

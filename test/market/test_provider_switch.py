@@ -358,6 +358,8 @@ def test_all_fail_returns_highest_priority_real_error(stub_registry) -> None:
         assert is_market_error(q)
         assert q.provider == "eastmoney"
         assert q.code == "network"
+        assert "东方财富: boom" in q.message
+        assert "腾讯财经: boom" in q.message
         # 四个源都被尝试过
         for stub in stub_registry.values():
             assert "quote" in stub.calls

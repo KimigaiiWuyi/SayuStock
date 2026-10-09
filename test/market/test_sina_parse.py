@@ -6,18 +6,21 @@ from datetime import date, datetime
 
 from SayuStock.utils.market.enums import RankBy, BoardKind, AssetClass, KlinePeriod
 from SayuStock.utils.market.errors import is_market_error
-from SayuStock.utils.market.models import SymbolRef
+from SayuStock.utils.market.models import Quote, SymbolRef
 from SayuStock.utils.market.adapters.sina.parse import (
     _et_to_bj,
     industry_menu,
     parse_hq_line,
     parse_rank_rows,
+    sina_quote_only,
     parse_hq_line_us,
     parse_kline_rows,
     parse_node_board,
     node_for_industry,
+    parse_hq_line_sge,
     parse_minline_rows,
     parse_us_mink_rows,
+    parse_hq_line_cffex,
     parse_us_daily_rows,
     parse_industry_summary,
     parse_us_mink_intraday,
@@ -93,6 +96,13 @@ def test_sina_symbol_from_secid_maps_bse_to_bj_prefix() -> None:
     # 港股暂不覆盖
     assert sina_symbol_from_secid("116.00700") is None
     assert sina_symbol_from_secid("600519") is None
+    # 中证2000 新浪没有这只指数，不要拼成空的 sh932000
+    assert sina_symbol_from_secid("2.932000") is None
+    assert sina_symbol_from_secid("118.AU9999") == "gds_AU9999"
+    assert sina_symbol_from_secid("220.TLM") == "nf_TL0"
+    assert sina_quote_only("118.AU9999")
+    assert sina_quote_only("220.TLM")
+    assert not sina_quote_only("1.600519")
 
 
 def test_sina_us_mink_symbol_from_secid() -> None:
@@ -353,6 +363,75 @@ def test_parse_industry_summary_and_menu() -> None:
     assert node_for_industry(menu, "玻璃行业") == "new_blhy"
     assert node_for_industry(menu, "new_blhy") == "new_blhy"
     assert node_for_industry(menu, "不存在的板块") is None
+
+    asc = parse_industry_summary(
+        payload,
+        kind=BoardKind.INDUSTRY,
+        title="行业板块",
+        sort_asc=True,
+        limit=1,
+    )
+    assert not is_market_error(asc)
+    assert len(asc.rows) == 1
+    assert asc.rows[0].name == "玻璃行业"
+    assert sina_symbol_from_secid("2.932000") is None
+    assert sina_symbol_from_secid("0.899050") == "bj899050"
+
+
+def test_parse_sge_and_cffex_quote_lines() -> None:
+    """2026-10-09 与东财盘口对齐的列序。黄金是沪金99，不是沪金期货。"""
+    sge = SymbolRef(
+        code="AU9999",
+        name="黄金9999",
+        asset_class=AssetClass.OTHER,
+        exchange="SGE",
+        provider_symbol="118.AU9999",
+    )
+    line = "904.30,0,903.91,904.30,904.66,888.00,13:10:38,892.00,892.00,491626,99.00,160.00,2026-10-09,沪金99"
+    quote = parse_hq_line_sge(line, symbol=sge)
+    assert isinstance(quote, Quote)
+    assert quote.price == 904.30
+    assert quote.high == 904.66
+    assert quote.low == 888.00
+    assert quote.open == 892.00
+    assert quote.prev_close == 892.00
+    assert quote.symbol.name == "沪金99"
+    assert quote.change_pct == 1.379
+    assert quote.volume == 491626
+    assert quote.amount is None
+    assert quote.as_of == datetime(2026, 10, 9, 13, 10, 38)
+    assert is_market_error(parse_hq_line_sge("1,2,3", symbol=sge))
+
+    cols = [""] * 50
+    cols[0] = "116.960"
+    cols[1] = "117.120"
+    cols[2] = "116.880"
+    cols[3] = "117.090"
+    cols[4] = "52061"
+    cols[13] = "116.860"
+    cols[36] = "2026-10-09"
+    cols[37] = "13:11:03"
+    cols[49] = "30年期国债期货连续"
+    bond = SymbolRef(
+        code="TLM",
+        name="三十债主连",
+        asset_class=AssetClass.FUTURE,
+        exchange="CFFEX",
+        provider_symbol="220.TLM",
+    )
+    parsed = parse_hq_line_cffex(",".join(cols), symbol=bond)
+    assert isinstance(parsed, Quote)
+    assert parsed.price == 117.090
+    assert parsed.open == 116.960
+    assert parsed.high == 117.120
+    assert parsed.low == 116.880
+    assert parsed.prev_close == 116.860
+    assert parsed.volume == 52061
+    assert parsed.amount is None
+    assert parsed.symbol.name == "30年期国债期货连续"
+    assert parsed.change_pct == 0.197
+    assert parsed.as_of == datetime(2026, 10, 9, 13, 11, 3)
+    assert is_market_error(parse_hq_line_cffex("1,2,3", symbol=bond))
 
 
 # US_MinKService.getMinK?symbol=QQQ&type=5（2026-09-24 采样；时间戳为美东，跨日 bar 采样于头部）

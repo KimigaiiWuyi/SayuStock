@@ -12,6 +12,7 @@ from .parse import (
     parse_qt_line_us,
     parse_kline_payload,
     parse_minute_payload,
+    intraday_from_minute_bars,
     tencent_symbol_from_secid,
 )
 from .._base import PartialMarketData, resolve_em_symbol, resolve_em_symbol_safe
@@ -129,7 +130,7 @@ class TencentMarketData(PartialMarketData):
 
     async def intraday(self, query: str, *, ndays: int = 1) -> IntradaySeries | MarketError:
         if ndays > 1:
-            return unsupported("腾讯仅支持当日分时", provider=PROVIDER)
+            return await self._intraday_from_m1(query, ndays)
         symbol = await self._symbol_of(query)
         if isinstance(symbol, MarketError):
             return symbol
@@ -150,6 +151,37 @@ class TencentMarketData(PartialMarketData):
             tencent_symbol=qt_sym,
             quote=None if isinstance(quote, MarketError) else quote,
             trade_date=trade_date,
+        )
+
+    async def _intraday_from_m1(self, query: str, ndays: int) -> IntradaySeries | MarketError:
+        """五日分时：1 分钟 K 取最近若干交易日。东财 trends2 失败时由源链落到这里。"""
+        symbol = await self._symbol_of(query)
+        if isinstance(symbol, MarketError):
+            return symbol
+        qt_sym = tencent_symbol_from_secid(symbol.provider_symbol)
+        assert qt_sym is not None
+        if qt_sym.startswith("us"):
+            return unsupported("腾讯美股不支持分时（仅盘口）", provider=PROVIDER)
+        days = 5 if ndays > 5 else ndays
+        payload = await fetch_mkline(qt_sym, "m1", min(2000, days * 240 + 30))
+        if isinstance(payload, str):
+            return network_error(payload, provider=PROVIDER)
+        series = parse_kline_payload(
+            payload,
+            symbol=symbol,
+            tencent_symbol=qt_sym,
+            period=KlinePeriod.M5,
+            unit="m1",
+            adjusted=False,
+        )
+        if isinstance(series, MarketError):
+            return series
+        quote = await self.quote(query)
+        return intraday_from_minute_bars(
+            series.bars,
+            symbol=symbol,
+            quote=None if isinstance(quote, MarketError) else quote,
+            ndays=days,
         )
 
     async def kline(

@@ -30,6 +30,7 @@ from ..utils.image import is_plotly_html, render_image_by_pw
 from ..utils.constant import ErroText
 from ..utils.stock.utils import get_file
 from ..utils.market.models import BoardSnapshot
+from ..utils.market.display import source_footer
 from ..stock_config.stock_config import STOCK_CONFIG
 
 PLOTLY_COLORS = ["#1f77b4", "#ff7f0e", "#2ca02c", "#d62728", "#9467bd", "#17becf", "#e377c2"]
@@ -69,8 +70,19 @@ async def to_fig(snap: BoardSnapshot, market: str, sector: str | None = None, la
         textfont_size=50,
         textposition="middle center",
     )
+    fig.add_annotation(
+        text=source_footer(snap.provider),
+        xref="paper",
+        yref="paper",
+        x=0.012,
+        y=0.008,
+        xanchor="left",
+        yanchor="bottom",
+        showarrow=False,
+        font=dict(size=42, color="rgba(255,255,255,0.8)"),
+    )
     fig.update_layout(
-        margin=dict(t=0, b=0, l=0, r=0),
+        margin=dict(t=0, b=72, l=8, r=0),
         paper_bgcolor="black",
         plot_bgcolor="black",
         font=dict(color="white"),

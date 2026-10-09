@@ -158,6 +158,6 @@ ai_return(render_text.kline_text(series, sector))
 1. Port 能否返回已有模型？不能则扩展 Port/adapter。  
 2. `data.fetch` 增加分支，只放模型进 `CloudMapDataResult`。  
 3. `render_data` 增加 `build_xxx_render_data(模型)`。  
-4. `chart_xxx` 或 plotly 绘制。  
+4. `chart_xxx` 或 plotly 绘制。图角调用 `source_footer`，传入这张图用到的每个 `provider`。  
 5. `render_text.xxx_text` + `render_mpl._emit_ai_text` 分支。  
 6. 缓存前发文字；补测试。  

@@ -52,17 +52,36 @@ US_INDEX_MINK: dict[str, str] = {
 }
 
 
+# 东财专有市场里，新浪盘口实测有行的品种。K 线接口不认这些符号。
+# 118 上金所 Au99.99；220 三十债主连 = 30 年国债期货连续。
+_SINA_QUOTE_ONLY: dict[str, str] = {
+    "118.AU9999": "gds_AU9999",
+    "220.TLM": "nf_TL0",
+}
+
+
+def sina_quote_only(secid: str) -> bool:
+    """该 secid 在新浪只有盘口，没有分时/K 线。"""
+    return secid in _SINA_QUOTE_ONLY
+
+
 def sina_symbol_from_secid(secid: str) -> str | None:
     """东财 secid → 新浪盘口符号：1.600519→sh600519，0.920000→bj920000。
 
     北交所 secid 与深市同为 ``0.`` 前缀，但新浪行情中心用 ``bj`` 符号
     （``sz920000`` 返回空串）；不区分会把北交所股票误报成「不存在」。
+    东财 ``2.`` 是中证指数市场。2026-10-09 检索和盘口都没有 932000，
+    拼 ``sh`` 只会拿到空行，所以直接不支持。
     """
+    if secid in _SINA_QUOTE_ONLY:
+        return _SINA_QUOTE_ONLY[secid]
     if "." not in secid:
         return None
     prefix, code = secid.split(".", 1)
     if prefix == "1":
         return f"sh{code}"
+    if prefix == "2":
+        return None
     if prefix == "0":
         return f"bj{code}" if code.startswith(BJ_CODE_PREFIXES) else f"sz{code}"
     if prefix in ("105", "106", "107", "153"):
@@ -174,6 +193,119 @@ def parse_hq_line(line: str, *, symbol: SymbolRef) -> Quote | MarketError:
         limit_up=None,
         limit_down=None,
         as_of=as_of,
+    )
+
+
+def _clock(date_raw: str | None, time_raw: str | None) -> datetime | None:
+    if not date_raw or not time_raw:
+        return None
+    try:
+        return datetime.strptime(f"{date_raw} {time_raw}", "%Y-%m-%d %H:%M:%S")
+    except ValueError:
+        return None
+
+
+def _quote_from_ohlc(
+    symbol: SymbolRef,
+    *,
+    name: str,
+    price: float,
+    open_px: float | None,
+    high: float | None,
+    low: float | None,
+    prev_close: float | None,
+    volume: float | None,
+    as_of: datetime | None,
+) -> Quote:
+    change_amount = None
+    change_pct = None
+    if prev_close:
+        change_amount = price - prev_close
+        change_pct = round(change_amount / prev_close * 100, 3)
+    return Quote(
+        symbol=SymbolRef(
+            code=symbol.code,
+            name=name,
+            asset_class=symbol.asset_class,
+            exchange=symbol.exchange,
+            provider_symbol=symbol.provider_symbol,
+            sec_type=symbol.sec_type,
+        ),
+        price=price,
+        open=open_px,
+        high=high,
+        low=low,
+        prev_close=prev_close,
+        change_pct=change_pct,
+        change_amount=change_amount,
+        volume=volume,
+        amount=None,
+        turnover_rate=None,
+        pe=None,
+        pb=None,
+        market_cap=None,
+        float_market_cap=None,
+        industry=None,
+        limit_up=None,
+        limit_down=None,
+        as_of=as_of,
+    )
+
+
+def parse_hq_line_sge(line: str, *, symbol: SymbolRef) -> Quote | MarketError:
+    """上金所 gds_ 盘口。列序 2026-10-09 与东财 AU9999 对齐。
+
+    0 现价, 4 最高, 5 最低, 6 时间, 7 昨收, 8 今开, 9 成交量, 12 日期, 13 名称。
+    """
+    parts = line.split(",")
+    if len(parts) < 14:
+        return parse_error("新浪黄金盘口字段不足", provider=PROVIDER)
+    price = _f(parts, 0)
+    prev_close = _f(parts, 7)
+    open_px = _f(parts, 8)
+    if price is None or price <= 0:
+        price = prev_close or open_px
+    if price is None or price <= 0:
+        return empty_error("新浪黄金盘口无有效报价", provider=PROVIDER)
+    return _quote_from_ohlc(
+        symbol,
+        name=_s(parts, 13) or symbol.name,
+        price=price,
+        open_px=open_px,
+        high=_f(parts, 4),
+        low=_f(parts, 5),
+        prev_close=prev_close,
+        volume=_f(parts, 9),
+        as_of=_clock(_s(parts, 12), _s(parts, 6)),
+    )
+
+
+def parse_hq_line_cffex(line: str, *, symbol: SymbolRef) -> Quote | MarketError:
+    """中金所 nf_ 连续合约。列序 2026-10-09 与东财三十债主连对齐。
+
+    0 开, 1 高, 2 低, 3 现价, 4 成交量, 13 昨结, 36 日期, 37 时间, 49 名称。
+    成交额单位对不上，不填 amount。商品连续（名称在首列）不要走这里。
+    """
+    parts = line.split(",")
+    if len(parts) < 50:
+        return parse_error("新浪国债期货盘口字段不足", provider=PROVIDER)
+    price = _f(parts, 3)
+    prev_close = _f(parts, 13)
+    open_px = _f(parts, 0)
+    if price is None or price <= 0:
+        price = prev_close or open_px
+    if price is None or price <= 0:
+        return empty_error("新浪国债期货盘口无有效报价", provider=PROVIDER)
+    return _quote_from_ohlc(
+        symbol,
+        name=_s(parts, 49) or symbol.name,
+        price=price,
+        open_px=open_px,
+        high=_f(parts, 1),
+        low=_f(parts, 2),
+        prev_close=prev_close,
+        volume=_f(parts, 4),
+        as_of=_clock(_s(parts, 36), _s(parts, 37)),
     )
 
 
@@ -627,11 +759,14 @@ def parse_industry_summary(
     *,
     kind: BoardKind,
     title: str,
+    sort_asc: bool = False,
+    limit: int | None = None,
 ) -> BoardSnapshot | MarketError:
     """newSinaHy 变量表 → 行业板块 BoardSnapshot。
 
     行列序：节点,名称,家数,均价,涨跌额,涨跌幅,成交量,成交额,
     领涨代码,领涨涨跌幅,领涨价,?,领涨名。
+    sort_asc / limit 由调用方决定，领跌榜不能再和领涨榜共用降序前 N 名。
     """
     if not isinstance(payload, Mapping) or not payload:
         return empty_error("新浪行业板块为空", provider=PROVIDER)
@@ -668,7 +803,9 @@ def parse_industry_summary(
         )
     if not rows:
         return empty_error("新浪行业板块解析后为空", provider=PROVIDER)
-    rows.sort(key=lambda r: r.change_pct if r.change_pct is not None else 0.0, reverse=True)
+    rows.sort(key=lambda r: r.change_pct if r.change_pct is not None else 0.0, reverse=not sort_asc)
+    if limit is not None:
+        rows = rows[: max(0, limit)]
     return BoardSnapshot(kind=kind, title=title, rows=tuple(rows))
 
 

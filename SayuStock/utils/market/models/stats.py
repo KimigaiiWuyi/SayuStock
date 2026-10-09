@@ -60,6 +60,7 @@ class BreadthBar:
 
     buckets: tuple[BreadthBucket, ...]
     raw: Any | None = None
+    provider: str | None = None
 
 
 def breadth_counts(bar: BreadthBar) -> dict[str, int]:
@@ -94,3 +95,5 @@ class MarketTurnover:
 class NorthboundFlow:
     sh_net_yi: float
     sz_net_yi: float
+    # sourceBy：产出这条北向的数据源 id。注册表命中时盖章。
+    provider: str | None = None

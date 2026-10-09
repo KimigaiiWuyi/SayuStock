@@ -21,3 +21,5 @@ class FinancialSnapshot:
     net_interest_margin: float | None
     industry_type: Literal["standard", "bank"]
     missing_fields: tuple[str, ...]
+    # sourceBy：产出这条快照的数据源 id。注册表命中时盖章。
+    provider: str | None = None

@@ -50,6 +50,7 @@ async def run_technical_analysis(text: str) -> BotSendContent:
         code=series.symbol.code,
         period_code=period,
         ohlcv_df=df,
+        source_ids=(series.provider,) if series.provider else (),
     )
     if isinstance(report, str):
         return report

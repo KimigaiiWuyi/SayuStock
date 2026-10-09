@@ -16,6 +16,7 @@ from .screener import ScreenerResult
 from .portfolio import PortfolioRiskReport
 from .technical import TechnicalReport
 from ..utils.utils import number_to_chinese
+from ..utils.market.display import source_footer
 from ..stock_stockinfo.chart_base import (
     BG_COLOR,
     FG_COLOR,
@@ -146,7 +147,14 @@ def render_technical_image(report: TechnicalReport) -> Image.Image:
     y -= 0.04
     ax.text(0.08, y, report.summary, fontsize=12, color="#dddddd", wrap=True)
 
-    fig.text(0.02, 0.01, "数据来源：东方财富 | SayuStock 技术分析", color=FG_COLOR, fontsize=9, alpha=0.6)
+    fig.text(
+        0.02,
+        0.01,
+        source_footer(*report.source_ids, note="技术分析"),
+        color=FG_COLOR,
+        fontsize=9,
+        alpha=0.6,
+    )
     fig.subplots_adjust(left=0.04, right=0.96, top=0.98, bottom=0.04)
     return _fig_to_image(fig, dpi=140)
 
@@ -273,7 +281,14 @@ def render_card_image(card: TradeCardData) -> Image.Image:
     if report_date:
         ax.text(0.08, 0.12, f"报告期 {report_date}", fontsize=11, color="#888888")
 
-    fig.text(0.02, 0.01, "数据来源：东方财富 | SayuStock 股票卡片", color=FG_COLOR, fontsize=9, alpha=0.6)
+    fig.text(
+        0.02,
+        0.01,
+        source_footer(*card.source_ids, note="股票卡片"),
+        color=FG_COLOR,
+        fontsize=9,
+        alpha=0.6,
+    )
     fig.subplots_adjust(left=0.04, right=0.96, top=0.98, bottom=0.04)
     return _fig_to_image(fig, dpi=140)
 
@@ -338,7 +353,14 @@ def render_screener_image(result: ScreenerResult) -> Image.Image:
             if y < 0.06:
                 break
 
-    fig.text(0.02, 0.01, "数据来源：东方财富 | SayuStock 自动选股", color=FG_COLOR, fontsize=9, alpha=0.6)
+    fig.text(
+        0.02,
+        0.01,
+        source_footer(*result.source_ids, note="自动选股"),
+        color=FG_COLOR,
+        fontsize=9,
+        alpha=0.6,
+    )
     fig.subplots_adjust(left=0.03, right=0.98, top=0.90, bottom=0.05)
     return _fig_to_image(fig, dpi=140)
 
@@ -424,7 +446,14 @@ def render_portfolio_image(report: PortfolioRiskReport) -> Image.Image:
         ax_txt.text(0.0, y, f"· {msg}", fontsize=12, color="#dddddd")
         y -= 0.14
 
-    fig.text(0.02, 0.01, "数据来源：东方财富 | SayuStock 组合体检（等权）", color=FG_COLOR, fontsize=9, alpha=0.6)
+    fig.text(
+        0.02,
+        0.01,
+        source_footer(*report.source_ids, note="组合体检（等权）"),
+        color=FG_COLOR,
+        fontsize=9,
+        alpha=0.6,
+    )
     return _fig_to_image(fig, dpi=140)
 
 

@@ -8,12 +8,15 @@ from dataclasses import replace, dataclass
 from .models import (
     Quote,
     BoardRow,
+    BreadthBar,
     KlineSeries,
     ValueSeries,
     RankSnapshot,
     BoardSnapshot,
     IntradaySeries,
     MarketTurnover,
+    NorthboundFlow,
+    FinancialSnapshot,
 )
 
 # 数据源 id → 展示名（图表左下角「数据来源」标签用）
@@ -28,13 +31,36 @@ PROVIDER_DISPLAY: dict[str, str] = {
 }
 
 # 可盖章（写入 provider 字段）的结果模型
-_STAMPABLE = (Quote, KlineSeries, IntradaySeries, BoardSnapshot, RankSnapshot, ValueSeries, MarketTurnover)
+_STAMPABLE = (
+    Quote,
+    KlineSeries,
+    IntradaySeries,
+    BoardSnapshot,
+    RankSnapshot,
+    ValueSeries,
+    MarketTurnover,
+    BreadthBar,
+    NorthboundFlow,
+    FinancialSnapshot,
+)
 
 _T = TypeVar("_T")
 
 
 def stamp_provider(result: _T, pid: str) -> _T:
-    """把命中数据源 id 写进结果模型（已有值不覆盖），供渲染层展示真实来源。"""
+    """把命中数据源 id 写进结果模型（已有值不覆盖），供渲染层展示真实来源。
+
+    分时的来源在序列上。嵌套 quote 单独再盖一次，否则只读 quote 的图会丢来源。
+    """
+    if isinstance(result, IntradaySeries):
+        quote = result.quote
+        stamped_quote = quote
+        if quote is not None and quote.provider is None:
+            stamped_quote = replace(quote, provider=pid)
+        series_pid = result.provider if result.provider is not None else pid
+        if stamped_quote is not quote or series_pid != result.provider:
+            return cast("_T", replace(result, provider=series_pid, quote=stamped_quote))
+        return result
     if isinstance(result, _STAMPABLE) and result.provider is None:
         return cast("_T", replace(result, provider=pid))
     return result
@@ -57,6 +83,15 @@ def source_label(*providers: str | None) -> str:
     return "、".join(labels)
 
 
+def source_footer(*providers: str | None, note: str = "") -> str:
+    """图角一行。note 是图种，例如「技术分析」。
+
+    把本次用到的每个结果的 provider（sourceBy）都传进来，多源去重。
+    """
+    extra = f" {note}" if note else ""
+    return f"数据来源：{source_label(*providers)} | SayuStock{extra}"
+
+
 @dataclass(frozen=True, slots=True)
 class DisplayItem:
     """大盘块/列表行通用展示。"""
@@ -71,6 +106,8 @@ class DisplayItem:
     fall_name: str | None = None
     fall_change_pct: float | None = None
     code: str = ""
+    # sourceBy：这一格行情来自哪个源。
+    provider: str | None = None
 
 
 def from_board_row(row: BoardRow) -> DisplayItem:
@@ -96,6 +133,7 @@ def from_quote(q: Quote) -> DisplayItem:
         amount=q.amount,
         industry=q.industry,
         code=q.symbol.code,
+        provider=q.provider,
     )
 
 

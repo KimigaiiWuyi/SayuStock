@@ -151,6 +151,47 @@ async def get_code_id_strict(code: str, priority: Optional[str] = None) -> Optio
     return last
 
 
+# 纯 6 位代码本地映射。60/68/30 与场内基金前缀不会和指数撞码；
+# 00/京市必须在名称表里才短路，避免 000300 被当成深市股票。
+_LOCAL_DIGIT_MARKET: Dict[str, tuple[str, str]] = {
+    "60": ("1", "沪A"),
+    "68": ("1", "科创板"),
+    "30": ("0", "创业板"),
+    "00": ("0", "深A"),
+    "43": ("0", "京A"),
+    "83": ("0", "京A"),
+    "87": ("0", "京A"),
+    "92": ("0", "京A"),
+    "51": ("1", "基金"),
+    "56": ("1", "基金"),
+    "58": ("1", "基金"),
+    "15": ("0", "基金"),
+    "16": ("0", "基金"),
+}
+
+
+def local_digit_code(code: str) -> Optional[Tuple[str, str, str]]:
+    """6 位数字 → (secid, 名称, 证券类型)。无法确定时返回 None，交给 searchapi。"""
+    text = code.strip()
+    if not text.isdigit() or len(text) != 6:
+        return None
+    prefix = text[:2]
+    if prefix not in _LOCAL_DIGIT_MARKET:
+        return None
+    market, sec_type = _LOCAL_DIGIT_MARKET[prefix]
+    if text.startswith("688"):
+        sec_type = "科创板"
+    elif text.startswith("300"):
+        sec_type = "创业板"
+    info = chinese_stocks.get(text)
+    named = info is not None
+    # 00 与京市和指数撞码，名称表里没有就不本地猜测
+    if not named and text[:2] in ("00", "43", "83", "87", "92"):
+        return None
+    name = info["name"] if info is not None else ""
+    return f"{market}.{text}", name, sec_type
+
+
 # 本地 A 股名称表（chinese_stocks）的代码前缀 → 东财 secid 市场前缀。
 # 表里只有这些前缀（实测 5909 条：00/30/60/68/81/83/92）；
 # 未列出的前缀一律不补名，宁缺勿错。
@@ -234,6 +275,12 @@ async def _get_code_id_one(code: str, priority: Optional[str] = None) -> Optiona
 
     if code in code_id_dict.keys():
         return code_id_dict[code], code, ""
+
+    # 带 .us/.h/.kr 时不能把 6 位代码当成 A 股，否则 600519.us 会短路成茅台。
+    if priority is None or priority == "a":
+        local = local_digit_code(code)
+        if local is not None:
+            return local
 
     url = "https://searchapi.eastmoney.com/api/suggest/get"
     params = (

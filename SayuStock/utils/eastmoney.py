@@ -219,6 +219,10 @@ class EastMoneyRequester:
                             if req_url != urls[-1]:
                                 continue
                             return raw_data
+                        # 限流码换域名没用，立刻交给源链。再试 push2delay 会吃掉备用源的时间。
+                        if isinstance(raw_data, dict) and "rc" in raw_data and raw_data["rc"] == -400016:
+                            logger.warning(f"[SayuStock][EM] 限流 -400016，不再重试备用域名: {req_url}")
+                            return -400016
                         return raw_data
                 except ServerDisconnectedError:
                     logger.warning(f"[SayuStock][EM] 请求 {req_url} 连接断开。")

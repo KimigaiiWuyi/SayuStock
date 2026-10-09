@@ -78,6 +78,10 @@ description: >
   `_exclusive`（云图/北向/估值/财报）只有东方财富一个可选值；详见
   [三](./references/03-market-data-port.md)。
 - **供应商字段只在 adapter 内解析**：`utils/market/adapters/eastmoney/parse_*.py` 等是唯一合法解析点。
+- **sourceBy**：成功结果的字段名是 `provider`。路由命中时盖章，已有值不覆盖。图角用
+  `display.source_footer(*providers)`，把这张图实际用到的源去重画出来；禁止写死
+  「数据来源：东方财富」。`sector_menu` 仍是 `dict[str, str]`，来源看旁边的 `board`。
+  新源规范见 [三 §3.3 / §3.10](./references/03-market-data-port.md)。
 - **有图必有文字**：`ai_return(...)` 必须在**图片缓存判断之前**调用；部分模型看不到图，文字是唯一输入。
 - **指标单源**：图表与 AI 读数共用 `utils/indicators.py`（通达信/东财口径，勿改用 mplchart 西方 MACD/RSI）。
 - **渲染计算单源**：`utils/render_data.py`；`stock_stockinfo` 与 `stock_cloudmap` 只 re-export，不要再分叉拷贝。

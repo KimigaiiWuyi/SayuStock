@@ -14,13 +14,16 @@ from .parse import (
     industry_menu,
     parse_hq_line,
     parse_rank_rows,
+    sina_quote_only,
     parse_hq_line_us,
     parse_kline_rows,
     parse_node_board,
     node_for_industry,
+    parse_hq_line_sge,
     parse_breadth_rows,
     parse_minline_rows,
     parse_us_mink_rows,
+    parse_hq_line_cffex,
     parse_us_daily_rows,
     parse_money_flow_rank,
     parse_turnover_quotes,
@@ -95,6 +98,11 @@ _US_MINUTE_TYPE: dict[KlinePeriod, int] = {
 def _parse_us_or_cn(line: str, *, sina_sym: str, symbol: SymbolRef) -> Quote | MarketError:
     if sina_sym.startswith("gb_"):
         return parse_hq_line_us(line, symbol=symbol)
+    if sina_sym.startswith("gds_"):
+        return parse_hq_line_sge(line, symbol=symbol)
+    if sina_sym.startswith("nf_"):
+        # 目前只映射三十债主连。商品连续是另一套列序，不要从这里进。
+        return parse_hq_line_cffex(line, symbol=symbol)
     return parse_hq_line(line, symbol=symbol)
 
 
@@ -171,6 +179,8 @@ class SinaMarketData(PartialMarketData):
         symbol = await self._symbol_of(query)
         if isinstance(symbol, MarketError):
             return symbol
+        if sina_quote_only(symbol.provider_symbol):
+            return unsupported("新浪该品种仅有盘口", provider=PROVIDER)
         sina_sym = sina_symbol_from_secid(symbol.provider_symbol)
         assert sina_sym is not None
         us_mink = sina_us_mink_symbol_from_secid(symbol.provider_symbol)
@@ -215,6 +225,8 @@ class SinaMarketData(PartialMarketData):
         symbol = await self._symbol_of(query)
         if isinstance(symbol, MarketError):
             return symbol
+        if sina_quote_only(symbol.provider_symbol):
+            return unsupported("新浪该品种仅有盘口", provider=PROVIDER)
         sina_sym = sina_symbol_from_secid(symbol.provider_symbol)
         assert sina_sym is not None
         datalen = _PERIOD_BARS.get(period, 400)
@@ -267,13 +279,25 @@ class SinaMarketData(PartialMarketData):
             payload = await fetch_industry_summary()
             if isinstance(payload, str):
                 return network_error(payload, provider=PROVIDER)
-            return parse_industry_summary(payload, kind=BoardKind.INDUSTRY, title="行业板块")
+            return parse_industry_summary(
+                payload,
+                kind=BoardKind.INDUSTRY,
+                title="行业板块",
+                sort_asc=sort_asc,
+                limit=limit,
+            )
         # 概念板块：newFLJK param=class，一次拿到全概念板块汇总
         if key in ("概念板块", "概念", "concept"):
             payload = await fetch_fljk_summary("class")
             if isinstance(payload, str):
                 return network_error(payload, provider=PROVIDER)
-            return parse_industry_summary(payload, kind=BoardKind.CONCEPT, title="概念板块")
+            return parse_industry_summary(
+                payload,
+                kind=BoardKind.CONCEPT,
+                title="概念板块",
+                sort_asc=sort_asc,
+                limit=limit,
+            )
         node: str | None = None
         title = key
         board_kind = BoardKind.OTHER
@@ -285,8 +309,8 @@ class SinaMarketData(PartialMarketData):
             node = "hs_s"
             title = "主要指数"
             board_kind = BoardKind.INDEX
-        elif key.startswith("gn_") or key.startswith("hangye_"):
-            # 板块成分：sector 直接给了 newFLJK 节点码（gn_xxx / hangye_xxx）
+        elif key.startswith(("gn_", "hangye_", "new_")):
+            # 菜单代码直接取成分：概念 gn_、申万 hangye_、新浪行业 new_。
             node = key
             board_kind = BoardKind.CONCEPT if key.startswith("gn_") else BoardKind.INDUSTRY
             title = key

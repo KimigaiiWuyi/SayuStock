@@ -37,13 +37,26 @@ snap = await market.hotmap()
 ## 扩展新数据源
 
 1. 实现 `MarketDataPort`（可继承 `adapters._base.PartialMarketData` 只覆盖子集）。
+   没实现的方法，以及目录里根本没有的那只标的，返回 `unsupported`（或映射函数返回 None）。
+   不要把别的 secid 拼成一个空代码。只拿到盘口的品种，分时和 K 线在发请求前就拒绝。
 2. 在 `provider_registry._PROVIDER_FACTORIES` / `PROVIDER_LABELS` 注册供应商，并把 id 加进
    `_SYSTEM_ORDER`（链尾兜底次序）；无需新增配置项——五域源链对每个接口自动生效。
    能力不全无需特殊处理——`unsupported` 会自动落到链上后续源。
    若新源补齐了原先「只有一个源」的接口，记得把该源加进对应域配置的 `options`
    （域与配置键的对应关系见 `_IFACE_GROUPS` / `_GROUP_CHAIN_CONFIG_KEYS`；
    有测试保证每个域都有键，但 `options` 是手写的，见覆盖面矩阵 §13.9 的能力表）。
-3. **禁止**在 feature 模块解析供应商原始字段。
+   展示名加进 `display.PROVIDER_DISPLAY`。
+3. **禁止**在 feature 模块解析供应商原始字段。非沪深京品种用显式符号表，列序先拿一条
+   实盘和东财对齐再写解析器。
+4. 成功模型带 `provider`（文档里的 sourceBy，`str | None = None`，放字段末尾）。
+   新模型加入 `display._STAMPABLE`，由路由盖章，已有值不覆盖。不要再加第二个来源字段。
+   不走端口的直连在结果上写死自己的 id。`sector_menu` 仍是名字到代码的 dict，来源看旁边的 `board`。
+5. 每张图用 `display.source_footer(*providers)` 把这次用到的源画在角落里。一图多块时全部传进去。
+   禁止写死「数据来源：东方财富」。
+6. 补 `test/market/`：符号映射、列序、盖章、图角文案。改覆盖面矩阵里被这次打脸的那几句。
+
+品种备忘（2026-10-09）：中证2000 `2.932000` 腾讯/新浪/同花顺都没有，前缀 `2` 映射为 None。
+黄金9999 新浪是 `gds_AU9999`（沪金99，仅盘口）。三十债主连新浪是 `nf_TL0`（仅盘口，成交额留空）。
 
 ## 行情API 数据源优先级（后台设置「行情API」）
 

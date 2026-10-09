@@ -15,8 +15,9 @@ from gsuid_core.ai_core.trigger_bridge import ai_return
 
 from . import db
 from ..utils.image import get_footer
-from ..utils.market import DisplayItem, get_market, is_market_error, board_rows_to_items
+from ..utils.market import DisplayItem, get_market, is_market_error
 from ..utils.sparkline import sparkline_from_series
+from ..utils.index_quotes import quote_index_items
 from ..utils.paper_holdings_html import (
     SPARK_H,
     SPARK_W,
@@ -199,20 +200,7 @@ def _title_num_for_avg(avg_p: float) -> str:
 
 
 async def _load_index_items() -> list[DisplayItem]:
-    market = get_market()
-    zs_snap = await market.board("主要指数", limit=100, sort_asc=False)
-    if is_market_error(zs_snap):
-        return []
-    zs_items = board_rows_to_items(zs_snap.rows)
-    wanted = ["上证指数", "深证成指", "中证A500", "中证2000"]
-    out: list[DisplayItem] = []
-    for zs_name in wanted:
-        for item in zs_items:
-            if zs_name != item.name.split("(")[0].strip() and zs_name not in item.name:
-                continue
-            out.append(item)
-            break
-    return out
+    return await quote_index_items(["上证指数", "深证成指", "中证A500", "中证2000"])
 
 
 def _fallback_price(position: SayuPaperPosition) -> float:
@@ -226,12 +214,16 @@ async def _fetch_holding_row(position: SayuPaperPosition) -> tuple[HoldingBarRow
     day_chg: float | None = None
     spark = ""
     live: float | None = None
+    source_id: str | None = None
     query = position.secid or position.stock_code
     if query:
         series = await get_market().intraday(query)
         if not is_market_error(series):
+            source_id = series.provider
             quote = series.quote
             if quote is not None:
+                if quote.provider:
+                    source_id = source_id or quote.provider
                 if quote.price > 0:
                     price = float(quote.price)
                     live = price
@@ -255,6 +247,7 @@ async def _fetch_holding_row(position: SayuPaperPosition) -> tuple[HoldingBarRow
         unrealized_pnl=round(unreal, 2),
         unrealized_pnl_pct=round(unreal_pct, 4),
         market_value=round(mv, 2),
+        provider=source_id,
     )
     return row, spark, live
 

@@ -40,6 +40,8 @@ class TradeCardData:
     mv: float | None = None
     high: float | None = None
     low: float | None = None
+    # sourceBy：卡片上行情、K 线、财报各自的数据源 id。
+    source_ids: tuple[str, ...] = ()
 
 
 def _clean_name(name: str) -> str:
@@ -76,32 +78,45 @@ async def build_trade_card(query: str) -> TradeCardData | str:
     async def _kline() -> Any:
         return await market.kline(query, KlinePeriod.D1)
 
-    async def _fin() -> dict[str, Any]:
+    async def _fin() -> FinancialSnapshot | None:
         # 财务仅 A 股 6 位代码有意义
         q = await market.quote(query)
         if is_market_error(q):
-            return {}
+            return None
         code6 = q.symbol.code
         if not code6.isdigit() or len(code6) > 6:
             pure = code6.split(".")[-1]
             code6 = pure[-6:] if pure.isdigit() else pure
         if not code6.isdigit():
-            return {}
+            return None
         try:
             snap = await market.financial_snapshot(code6)
         except (OSError, TimeoutError, RuntimeError, ValueError, TypeError) as e:
             logger.warning(f"[card] finance fail: {e}")
-            return {}
+            return None
         if is_market_error(snap):
-            return {}
-        return _fin_to_dict(snap)
+            return None
+        return snap
 
-    spot, kline, fin, ind_map = await asyncio.gather(
+    spot, kline, fin_snap, ind_pair = await asyncio.gather(
         _spot(),
         _kline(),
         _fin(),
         fetch_industry_pct_map(),
     )
+    ind_map, ind_src = ind_pair
+    candidates: list[str | None] = []
+    if not is_market_error(spot):
+        candidates.append(spot.provider)
+    if not is_market_error(kline):
+        candidates.append(kline.provider)
+    if fin_snap is not None:
+        candidates.append(fin_snap.provider)
+    candidates.append(ind_src)
+    pids: list[str] = []
+    for pid in candidates:
+        if pid and pid not in pids:
+            pids.append(pid)
 
     if is_market_error(spot):
         if is_market_error(kline):
@@ -149,6 +164,7 @@ async def build_trade_card(query: str) -> TradeCardData | str:
             code=kline.symbol.code or code,
             period_code="101",
             ohlcv_df=df,
+            source_ids=(kline.provider,) if kline.provider else (),
         )
         if isinstance(rep, TechnicalReport):
             technical = rep
@@ -166,10 +182,11 @@ async def build_trade_card(query: str) -> TradeCardData | str:
         industry=industry,
         industry_pct=industry_pct,
         technical=technical,
-        finance=fin if isinstance(fin, dict) else {},
+        finance=_fin_to_dict(fin_snap) if fin_snap is not None else {},
         pe=pe,
         pb=pb,
         mv=mv,
         high=high,
         low=low,
+        source_ids=tuple(pids),
     )

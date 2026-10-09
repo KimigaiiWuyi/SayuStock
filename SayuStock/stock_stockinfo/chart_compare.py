@@ -39,7 +39,7 @@ from .chart_base import (
 from .render_data import build_compare_render_data
 from ..utils.constant import ErroText
 from ..utils.market.models import KlineSeries
-from ..utils.market.display import source_label
+from ..utils.market.display import source_footer
 
 
 async def to_compare_fig(series_list: list[KlineSeries]) -> DrawResult:
@@ -311,7 +311,7 @@ def draw_compare_chart(series_list: list[KlineSeries]) -> DrawResult:
     fig.text(
         0.016,
         0.005,
-        f"数据来源：{source_label(*(s.provider for s in series_list))} | SayuStock",
+        source_footer(*(s.provider for s in series_list)),
         color=FG_COLOR,
         fontsize=9,
         alpha=0.65,

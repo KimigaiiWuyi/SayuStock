@@ -12,8 +12,9 @@ from gsuid_core.ai_core.trigger_bridge import ai_return
 
 from .draw_info import DIFF_MAP
 from ..utils.utils import convert_list, number_to_chinese
-from ..utils.market import Quote, DisplayItem, get_market, is_market_error, board_rows_to_items
+from ..utils.market import Quote, get_market, is_market_error
 from ..utils.sparkline import sparkline_from_series
+from ..utils.index_quotes import quote_index_items
 from ..utils.my_stock_html import SPARK_H, SPARK_W, build_my_stock_html, my_stock_canvas_size
 from ..utils.database.models import SsBind
 
@@ -69,10 +70,6 @@ async def draw_my_stock_img(ev: Event) -> str | bytes:
 
     uid = convert_list(uid)
     market = get_market()
-    zs_snap = await market.board("主要指数", limit=100, sort_asc=False)
-    if is_market_error(zs_snap):
-        return zs_snap.message
-    zs_items = board_rows_to_items(zs_snap.rows)
 
     two_col = len(uid) >= 18
     zyzs = (
@@ -80,18 +77,14 @@ async def draw_my_stock_img(ev: Event) -> str | bytes:
         if not two_col
         else ["上证指数", "深证成指", "创业板指", "上证50", "沪深300", "中证A500", "中证2000", "国债指数"]
     )
-    index_items: list[DisplayItem] = []
-    for zs_name in zyzs:
-        for item in zs_items:
-            if zs_name != item.name.split("(")[0].strip() and zs_name not in item.name:
-                continue
-            index_items.append(item)
-            break
+    # 涨跌幅前 100 里没有上证。按代码报价，缺的卡片跳过。
+    index_items = await quote_index_items(zyzs)
 
     all_p = 0.0
     stock_details: list[dict[str, object]] = []
     quotes: list[tuple[Quote, str] | None] = [None] * len(uid)
     sparks: dict[str, str] = {}
+    series_sources: list[str | None] = []
 
     async def sg(index: int, u: str) -> None:
         nonlocal all_p
@@ -99,6 +92,7 @@ async def draw_my_stock_img(ev: Event) -> str | bytes:
         series = await market.intraday(query)
         if is_market_error(series):
             return
+        series_sources.append(series.provider)
         q = series.quote
         if q is None:
             return
@@ -136,6 +130,7 @@ async def draw_my_stock_img(ev: Event) -> str | bytes:
         index_items=index_items,
         title_num=title_num,
         sparklines=sparks,
+        sources=tuple(series_sources),
     )
     width, height, _ = my_stock_canvas_size(len(filled))
     _ai_return_my_stock(uid, all_p, stock_details)

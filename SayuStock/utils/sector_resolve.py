@@ -7,10 +7,15 @@
 from __future__ import annotations
 
 from typing import Literal
+from dataclasses import replace
+from collections.abc import AsyncIterator
+
+from gsuid_core.logger import logger
 
 from .market import get_market, is_market_error
 from .constant import ErroText, chinese_stocks
 from .stock.utils import async_file_cache
+from .market.errors import MarketError
 from .market.models import BoardSnapshot
 
 _QUERY_TAILS = ("云图", "板块", "行业", "概念")
@@ -165,15 +170,51 @@ def filter_snapshot_by_codes(snap: BoardSnapshot, codes: list[str], title: str) 
     return BoardSnapshot(kind=snap.kind, title=title, rows=rows)
 
 
-async def fetch_industry_from_hotmap(query: str) -> tuple[str, BoardSnapshot | str]:
-    """成分名单（本地或 30 天缓存）∩ 大盘 hotmap，不并发拉个股。"""
+async def _iter_sector_menus(
+    kind: Literal["industry", "concept"],
+) -> AsyncIterator[tuple[str, dict[str, str] | MarketError]]:
+    """按板块源链逐个取菜单。命中一份不含目标名字的菜单时，继续问下一个源。"""
+    from .market.provider_registry import ConfigurableEquityMarket
+
     port = get_market()
-    menu = await port.sector_menu("industry")
-    if is_market_error(menu):
-        return query.strip(), menu.message
-    matched = match_sector_menu(query, menu)
-    if matched is None:
-        return query.strip(), ErroText["typemap"]
+    if isinstance(port, ConfigurableEquityMarket):
+        for pid, adapter in port._chain("board"):
+            yield pid, await adapter.sector_menu(kind)
+        return
+    yield "market", await port.sector_menu(kind)
+
+
+async def resolve_sector_match(
+    kind: Literal["industry", "concept"],
+    query: str,
+) -> tuple[str, str] | str:
+    """返回 (菜单名, 板块代码)，或给用户的错误文案。"""
+    errors: list[str] = []
+    saw_menu = False
+    async for pid, menu in _iter_sector_menus(kind):
+        if is_market_error(menu):
+            if menu.code != "unsupported":
+                errors.append(f"{pid}: {menu.message}")
+            continue
+        saw_menu = True
+        matched = match_sector_menu(query, menu)
+        if matched is not None:
+            return matched
+        logger.info(f"[SayuStock] 板块菜单 {pid} 不含 {query!r}，继续下一源")
+    if errors and not saw_menu:
+        return "；".join(errors)
+    return ErroText["typemap"]
+
+
+async def fetch_industry_from_hotmap(query: str) -> tuple[str, BoardSnapshot | str]:
+    """成分名单（本地或 30 天缓存）∩ 大盘 hotmap，不并发拉个股。
+
+    热力图失败时改用板块成分行情，避免云图只有东财一条路。
+    """
+    port = get_market()
+    matched = await resolve_sector_match("industry", query)
+    if isinstance(matched, str):
+        return query.strip(), matched
     name, bk_code = matched
     local = local_industry_member_codes(name)
     if local is not None:
@@ -185,7 +226,11 @@ async def fetch_industry_from_hotmap(query: str) -> tuple[str, BoardSnapshot | s
         codes = loaded
     hot = await port.hotmap()
     if is_market_error(hot):
-        return name, hot.message
+        logger.warning(f"[SayuStock] 行业云图热力图失败，改拉成分行情: {hot.message}")
+        snap = await port.board(bk_code, limit=None, sort_asc=False)
+        if is_market_error(snap):
+            return name, f"{hot.message}；成分行情：{snap.message}"
+        return name, replace(snap, title=name)
     return name, filter_snapshot_by_codes(hot, codes, title=name)
 
 
@@ -196,12 +241,9 @@ async def fetch_named_board(
     if kind == "industry":
         return await fetch_industry_from_hotmap(query)
     port = get_market()
-    menu = await port.sector_menu(kind)
-    if is_market_error(menu):
-        return query.strip(), menu.message
-    matched = match_sector_menu(query, menu)
-    if matched is None:
-        return query.strip(), ErroText["typemap"]
+    matched = await resolve_sector_match(kind, query)
+    if isinstance(matched, str):
+        return query.strip(), matched
     name, code = matched
     snap = await port.board(code, limit=None, sort_asc=False)
     if is_market_error(snap):

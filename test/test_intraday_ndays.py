@@ -155,6 +155,67 @@ def test_five_day_render_keeps_day_panels() -> None:
     assert abs(result.today_change - 0.5) < 1e-9
 
 
+def test_missing_quote_derives_change_and_hides_blank_turnover() -> None:
+    symbol = _symbol()
+    series = IntradaySeries(
+        symbol=symbol,
+        points=(
+            IntradayPoint(
+                ts=datetime(2026, 9, 1, 9, 31),
+                price=100.0,
+                open=100.0,
+                high=100.0,
+                low=100.0,
+                volume=1.0,
+                amount=0.0,
+                avg_price=100.0,
+            ),
+            IntradayPoint(
+                ts=datetime(2026, 9, 1, 15, 0),
+                price=110.0,
+                open=100.0,
+                high=110.0,
+                low=100.0,
+                volume=1.0,
+                amount=0.0,
+                avg_price=105.0,
+            ),
+        ),
+        quote=None,
+        ndays=1,
+    )
+    result = build_single_stock_render_data(series)
+    assert not isinstance(result, str), result
+    assert abs(result.today_change - 10.0) < 1e-6
+    assert "换手率 —" in result.title_text
+    assert "成交额 —" in result.title_text
+
+
+def test_flat_quote_keeps_zero_change() -> None:
+    symbol = _symbol()
+    series = IntradaySeries(
+        symbol=symbol,
+        points=(
+            IntradayPoint(
+                ts=datetime(2026, 9, 1, 15, 0),
+                price=3970.0,
+                open=3970.0,
+                high=3970.0,
+                low=3970.0,
+                volume=1.0,
+                amount=1.0,
+                avg_price=3970.0,
+            ),
+        ),
+        quote=replace(_quote(symbol, 3970.0), change_pct=0.0, amount=0.0),
+        ndays=1,
+    )
+    result = build_single_stock_render_data(series)
+    assert not isinstance(result, str), result
+    assert result.today_change == 0.0
+    assert "成交额 0.0" in result.title_text
+
+
 def test_one_day_render_has_no_five_day_title() -> None:
     symbol = _symbol()
     series = IntradaySeries(

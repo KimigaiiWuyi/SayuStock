@@ -10,7 +10,7 @@ from functools import lru_cache
 
 from .constant import bond, whsc, crypto, i_code, commodity
 from .time_range import now_bjt, is_market_active_now, get_sessions_for_code, has_session_started_today
-from .market.display import DisplayItem
+from .market.display import DisplayItem, source_footer
 
 _FOOTER_PATH = Path(__file__).resolve().parent / "texture2d" / "footer.png"
 
@@ -25,6 +25,7 @@ _CELL_H_SPARK = 192
 _FOOT_H = 40
 _FOOT_GAP = 16
 _FOOT_PAD = _FOOT_GAP + _FOOT_H + _FOOT_GAP
+_SRC_H = 22
 SPARK_W = 168.0
 SPARK_H = 32.0
 
@@ -227,7 +228,7 @@ def all_weather_canvas_size(
     sections: list[tuple[str, list[DisplayItem]]],
     sparklines: dict[str, str] | None = None,
 ) -> tuple[int, int]:
-    height = _HEAD_H + _FOOT_PAD
+    height = _HEAD_H + _SRC_H + _FOOT_PAD
     for _, items in sections:
         if not items:
             continue
@@ -387,6 +388,7 @@ def build_all_weather_html(
     *,
     now: datetime | None = None,
     sparklines: dict[str, str] | None = None,
+    sources: tuple[str | None, ...] = (),
 ) -> str:
     """时间轴 + 分区标题 + 行情格全部 HTML；高度随内容变。"""
     as_of = now or now_bjt()
@@ -394,6 +396,10 @@ def build_all_weather_html(
     width, height = all_weather_canvas_size(sections, sparklines)
     inner = "".join(_section_html(title, items, as_of, sparklines) for title, items in sections)
     footer_uri = _data_uri(str(_FOOTER_PATH))
+    used: list[str | None] = list(sources)
+    for _, items in sections:
+        used.extend(item.provider for item in items)
+    source_text = _e(source_footer(*used))
     return f"""<!DOCTYPE html>
 <html>
 <head>
@@ -498,6 +504,14 @@ body {{
 .tile .nm.long {{ font-size: 20px; font-weight: 630; }}
 .tile .rest {{ font-size: 14px; font-weight: 630; color: #fde68a; flex: none; }}
 .tile.stale {{ opacity: 0.6; }}
+.src {{
+  flex: none;
+  height: {_SRC_H}px;
+  padding: 0 70px;
+  font-size: 13px;
+  line-height: {_SRC_H}px;
+  color: #8b95a8;
+}}
 .footer {{
   flex: none;
   width: 850px; height: {_FOOT_H}px;
@@ -510,6 +524,7 @@ body {{
   <!-- as_of:{_e(stamp)} -->
   <div class="head">{_timeline_html(as_of)}</div>
   <div class="body">{inner}</div>
+  <div class="src">{source_text}</div>
   <img class="footer" src="{footer_uri}" width="850" height="40" />
 </div>
 </body>

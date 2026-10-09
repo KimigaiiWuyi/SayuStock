@@ -23,6 +23,7 @@ from ..utils.eastmoney import (
     EASTMONEY_VALUE_NAME_MAP,
     EastMoneyStockItem,
 )
+from ..utils.market.display import source_label, source_footer
 from ..utils.mplchart_compat import Chart, Price  # noqa: E402
 from ..stock_stockinfo.chart_base import (  # noqa: E402
     FONT_W_REG,
@@ -124,6 +125,8 @@ class ValueSeries:
     name: str
     sec_type: str
     df: pd.DataFrame
+    # sourceBy：这条估值曲线的数据源 id。
+    provider: str | None = None
 
     @property
     def label(self) -> str:
@@ -304,6 +307,7 @@ async def fetch_eastmoney_value_series(
         name=stock["name"],
         sec_type=stock["sec_type"],
         df=output_df,
+        provider=series.provider,
     )
 
 
@@ -418,7 +422,14 @@ def draw_value_compare_chart(
         _annotate_dividend_events(ax, prices, series_list, value_columns, span, data_min, data_max)
 
     ax.set_title(title, fontsize=24, fontweight="bold", color=FG_COLOR, pad=24)
-    fig.text(0.016, 0.005, "数据来源：东方财富 | SayuStock", color=FG_COLOR, fontsize=9, alpha=0.65)
+    fig.text(
+        0.016,
+        0.005,
+        source_footer(*(item.provider for item in series_list)),
+        color=FG_COLOR,
+        fontsize=9,
+        alpha=0.65,
+    )
     return _fig_to_image(fig)
 
 
@@ -591,7 +602,7 @@ def _ai_return_value_compare(
         value_name = VALUE_NAME_MAP[_type]
         lines = [
             f"【{value_name}历史走势对比】",
-            "数据来源：东方财富",
+            f"数据来源：{source_label(*(item.provider for item in series_list))}",
             f"对比标的数量：{len(series_list)}",
         ]
         latest_values: list[tuple[str, float]] = []

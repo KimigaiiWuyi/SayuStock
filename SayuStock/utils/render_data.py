@@ -335,6 +335,11 @@ def _kline_render_from_cn_df(df: pd.DataFrame, title_name: str) -> KlineRenderDa
     chart_df = chart_df.dropna(subset=["open", "high", "low", "close"])
     if chart_df.empty:
         return ErroText["notData"]
+    turnover_col = chart_df["turnover"]
+    if isinstance(turnover_col, pd.Series) and not turnover_col.empty:
+        if float(turnover_col.fillna(0).abs().max()) == 0.0:
+            # 备用源日 K 常常没有换手字段，全 0 会画成贴地直线
+            chart_df["turnover"] = np.nan
 
     turnover = _numeric_series(df["换手率"]) if "换手率" in df else pd.Series(dtype=float)
     df["is_max"] = turnover == turnover.rolling(window=3, center=True).max()
@@ -580,6 +585,33 @@ def _intraday_day_axis(
     return starts, tick_pos, tick_lab
 
 
+def _last_session_change_amount(price_history_pd: pd.DataFrame) -> tuple[float | None, float | None]:
+    """最后一节分时的涨跌幅（%）和成交额。报价缺失时给页眉用。"""
+    if price_history_pd.empty:
+        return None, None
+    dts = pd.to_datetime(_frame_column(price_history_pd, "dt"))
+    prices = _frame_column(price_history_pd, "price")
+    money = _frame_column(price_history_pd, "money")
+    days = dts.dt.date
+    # 会话补齐会在末尾垫无价分钟，最后一节必须是有成交价的那天
+    priced_days = days[prices.notna()].dropna()
+    if priced_days.empty:
+        return None, None
+    last_day = priced_days.iloc[-1]
+    today_mask = days == last_day
+    prev_mask = days < last_day
+    today_prices = prices[today_mask].dropna()
+    if today_prices.empty:
+        return None, None
+    last_px = float(today_prices.iloc[-1])
+    prev_prices = prices[prev_mask].dropna()
+    base = float(prev_prices.iloc[-1]) if not prev_prices.empty else float(today_prices.iloc[0])
+    change = ((last_px / base) - 1.0) * 100.0 if base else None
+    today_money = money[today_mask].dropna()
+    amount = float(today_money.sum()) if not today_money.empty else None
+    return change, amount
+
+
 def _first_session_last_price(price_history_pd: pd.DataFrame, code_id: str) -> float | None:
     """多日分时窗口里第一天最后一个有效价（该日收盘）。"""
     dts = _frame_column(price_history_pd, "dt")
@@ -743,7 +775,13 @@ def build_single_stock_render_data(series: IntradaySeries) -> SingleStockRenderD
         last_valid = curr_f
 
     quote = series.quote
-    today_change = float(quote.change_pct) if quote is not None and quote.change_pct is not None else 0.0
+    session_change, session_amount = _last_session_change_amount(price_history_pd)
+    if quote is not None and quote.change_pct is not None:
+        today_change = float(quote.change_pct)
+    elif session_change is not None:
+        today_change = session_change
+    else:
+        today_change = 0.0
     last_px = float(priced_only.iloc[-1])
     ndays_change = ((last_px / open_price) - 1.0) * 100.0 if ndays > 1 else today_change
     gained = ndays_change if ndays > 1 else today_change
@@ -751,24 +789,30 @@ def build_single_stock_render_data(series: IntradaySeries) -> SingleStockRenderD
         custom_info = f"五日{int_to_percentage(ndays_change)}  今日{int_to_percentage(today_change)}"
     else:
         custom_info = int_to_percentage(gained)
-    amount_v = quote.amount if quote is not None else None
-    total_amount = number_to_chinese(amount_v) if isinstance(amount_v, float) else 0
+    if quote is not None and quote.amount is not None:
+        amount_v: float | None = quote.amount
+    elif session_amount:
+        amount_v = session_amount
+    else:
+        amount_v = None
+    total_amount = number_to_chinese(amount_v) if isinstance(amount_v, float) else "—"
     stock_name = series.symbol.display_name or "N/A"
     stock_code = series.symbol.code
     new_price = quote.price if quote is not None else series.points[-1].price
-    turnover_rate = quote.turnover_rate if quote is not None else 0
+    turnover_rate = quote.turnover_rate if quote is not None else None
+    turnover_text = f"{turnover_rate}%" if isinstance(turnover_rate, float) else "—"
     name_bit = f"{stock_name} {ndays}日分时" if ndays > 1 else stock_name
     if ndays > 1:
         title_text = (
             f"【{name_bit} 最新价：{new_price}】 "
             f"五日累计：{int_to_percentage(ndays_change)} "
             f"今日：{int_to_percentage(today_change)} "
-            f"换手率 {turnover_rate}% 成交额 {total_amount}"
+            f"换手率 {turnover_text} 成交额 {total_amount}"
         )
     else:
         title_text = (
             f"【{name_bit} 最新价：{new_price}】 开盘价：{open_price} "
-            f"涨跌幅：{custom_info} 换手率 {turnover_rate}% "
+            f"涨跌幅：{custom_info} 换手率 {turnover_text} "
             f"成交额 {total_amount}"
         )
     day_starts: list[int] = []
