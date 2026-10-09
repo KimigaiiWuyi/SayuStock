@@ -121,6 +121,13 @@ def _reset_df(df: pd.DataFrame, *, drop: bool = True) -> pd.DataFrame:
     return df.reset_index(drop=drop)
 
 
+def _bool_mask_series(series: pd.Series, mask: pd.Series) -> pd.Series:
+    """布尔掩码切片。pandas 3 把结果标成 Series 或 ndarray。"""
+    sliced = series[mask]
+    assert isinstance(sliced, pd.Series), "布尔掩码应切出 Series"
+    return sliced
+
+
 def _frame_column(df: pd.DataFrame, key: str) -> pd.Series:
     column = df[key]
     assert isinstance(column, pd.Series), f"列 {key} 存在重复标签"
@@ -600,14 +607,14 @@ def _last_session_change_amount(price_history_pd: pd.DataFrame) -> tuple[float |
     last_day = priced_days.iloc[-1]
     today_mask = days == last_day
     prev_mask = days < last_day
-    today_prices = prices[today_mask].dropna()
+    today_prices = _bool_mask_series(prices, today_mask).dropna()
     if today_prices.empty:
         return None, None
     last_px = float(today_prices.iloc[-1])
-    prev_prices = prices[prev_mask].dropna()
+    prev_prices = _bool_mask_series(prices, prev_mask).dropna()
     base = float(prev_prices.iloc[-1]) if not prev_prices.empty else float(today_prices.iloc[0])
     change = ((last_px / base) - 1.0) * 100.0 if base else None
-    today_money = money[today_mask].dropna()
+    today_money = _bool_mask_series(money, today_mask).dropna()
     amount = float(today_money.sum()) if not today_money.empty else None
     return change, amount
 

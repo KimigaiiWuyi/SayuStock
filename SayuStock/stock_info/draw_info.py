@@ -95,19 +95,18 @@ def remove_color_range(
     lower_bound: tuple[int, int, int],
     upper_bound: tuple[int, int, int],
 ) -> Image.Image:
-    datas = img.getdata()
-
-    new_data = []
-    for item in datas:
-        # 检查像素是否在颜色范围内
-        if (
-            lower_bound[0] <= item[0] <= upper_bound[0]
-            and lower_bound[1] <= item[1] <= upper_bound[1]
-            and lower_bound[2] <= item[2] <= upper_bound[2]
-        ):
-            new_data.append((255, 255, 255, 0))
-        else:
-            new_data.append(item)
+    # Pillow 12 的像素是元组或 float，先收窄再按下标抠近白底。
+    new_data: list[tuple[int, ...]] = []
+    for item in img.get_flattened_data():
+        if isinstance(item, tuple) and len(item) >= 3:
+            matched = (
+                lower_bound[0] <= item[0] <= upper_bound[0]
+                and lower_bound[1] <= item[1] <= upper_bound[1]
+                and lower_bound[2] <= item[2] <= upper_bound[2]
+            )
+            new_data.append((255, 255, 255, 0) if matched else item)
+        elif isinstance(item, (int, float)):
+            new_data.append((int(item),))
 
     img.putdata(new_data)
     return img
