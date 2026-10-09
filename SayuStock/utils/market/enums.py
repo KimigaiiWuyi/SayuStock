@@ -77,3 +77,36 @@ def resolve_rank_by(rank_by: RankBy | str) -> RankBy | None:
         if raw == m.value or raw.lower() == m.value:
             return m
     return None
+
+
+class IpoMarket(str, Enum):
+    """IPO 日历市场。"""
+
+    CN = "cn"
+    HK = "hk"
+    US = "us"
+
+
+_IPO_MARKET_ALIASES = {"cn": IpoMarket.CN, "hk": IpoMarket.HK, "us": IpoMarket.US}
+
+
+def coerce_ipo_market(value: IpoMarket | str) -> IpoMarket | None:
+    """市场归一化：枚举直通；字符串接受 cn/hk/us 与 A股/港股/美股。"""
+    if isinstance(value, IpoMarket):
+        return value
+    raw = (value or "").strip().lower()
+    if raw in _IPO_MARKET_ALIASES:
+        return _IPO_MARKET_ALIASES[raw]
+    for alias, m in (("a股", IpoMarket.CN), ("沪深", IpoMarket.CN), ("港股", IpoMarket.HK), ("美股", IpoMarket.US)):
+        if raw == alias:
+            return m
+    return None
+
+
+class IpoStage(str, Enum):
+    """IPO 阶段（相对查看日 anchor 推导，见 ``IpoEvent.stage_on``）。"""
+
+    FILED = "filed"  # 已申报（美股纳斯达克源）
+    APPLY = "apply"  # A股申购日已到或未到
+    PENDING = "pending"  # 待上市
+    LISTED = "listed"  # 已上市

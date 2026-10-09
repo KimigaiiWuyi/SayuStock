@@ -6,10 +6,11 @@ from typing import Literal, Protocol
 from datetime import date
 from collections.abc import Sequence
 
-from .enums import RankBy, BoardKind, ValueKind, KlinePeriod
+from .enums import RankBy, BoardKind, IpoMarket, ValueKind, KlinePeriod
 from .errors import MarketError
 from .models import (
     Quote,
+    IpoEvent,
     SymbolRef,
     BreadthBar,
     KlineSeries,
@@ -71,3 +72,5 @@ class MarketDataPort(Protocol):
     async def valuation_series(self, query: str, kind: ValueKind) -> ValueSeries | MarketError: ...
 
     async def financial_snapshot(self, code: str) -> FinancialSnapshot | MarketError: ...
+
+    async def ipo_calendar(self, market: IpoMarket | str) -> list[IpoEvent] | MarketError: ...

@@ -68,7 +68,7 @@ NYMEX 原油 `hf_CL`、综合铜 `hf_CAD`、螺纹/豆粕/焦煤/生猪 `nf_RB0`
 ## 行情API 数据源优先级（后台设置「行情API」）
 
 - 网页控制台 → 插件配置 →「行情API」→ **六个源链列表**（`GsListStrConfig`）：
-  全局 `market_api_chain` + 五域 `market_api_chain_{quote,kline,board,market,exclusive}`。
+  全局 `market_api_chain` + 六域 `market_api_chain_{quote,kline,board,market,exclusive,ipo}`。
   列表顺序即优先级；域链只作用于该域接口，清空回落全局链；全局链清空用内置默认链
   （东财→腾讯→新浪→同花顺）。
 - **默认值已按推荐预填**（2026-10-08 起，见覆盖面矩阵 §16）：全局与①②＝东财→腾讯→新浪，
@@ -101,6 +101,22 @@ NYMEX 原油 `hf_CL`、综合铜 `hf_CAD`、螺纹/豆粕/焦煤/生猪 `nf_RB0`
   `ths`（同花顺扶摇 fuyao.aicubes.cn：A股票（含北交所）/指数/ETF 盘口+前复权日K，
   API Key 见「同花顺API密钥」配置；分时/分钟K的高频动向接口未开放外部接入）。
 - `resolve` 的 `provider_symbol` 恒为东财 secid（`150.*` 判场外基金依赖此约定），不随源切换变化。
+
+## IPO 日历（`ipo_calendar(market)`）
+
+- 接口按市场拆三个 iface（`ipo_cn` / `ipo_hk` / `ipo_us`），都映射到 `ipo` 域
+  （后台「⑥ IPO 日历源链」）；`market` 参数收 `IpoMarket` 或 `cn/hk/us/A股/港股/美股`。
+- 可选供应商：`eastmoney`（三市场全覆盖：A股 datacenter 申购表含申购/中签/缴款/上市全流程，
+  港美股 push2 clist 按上市日排序）＋ `nasdaq`（仅美股官方日历，含已申报/预期定价阶段、
+  发行价与募资额；限流时返回错误顺延）。`nasdaq` 不在 `_SYSTEM_ORDER`，只有 IPO 域链
+  显式配置才参与，默认链＝纯东财（满足「出厂默认＝清空回落」不变量，
+  见 `test_market_config_defaults`）。
+- `adapters/aastocks/` 是港股**增强源**（非独立供应商）：东财 provider 的 hk 分支内合并
+  招股截止日/暗盘/上市价/超购倍数/首日表现，失败仅告警；push2 不可达时降级为港股兜底数据
+  （不含 GEM/介绍上市，名称为繁体）。
+- 领域模型 `IpoEvent`（`models/ipo.py`）：阶段不落库，按查看日 `stage_on()` 推导
+  （申购→待上市→已上市；美股另有已申报）。业务入口 `stock_ipo/draw_ipo.py`，
+  命令「IPO日历 / IPO / ipo」（可带市场筛选，如 `aIPO 美股`）。
 
 ## OKX / VIX / 场外基金
 

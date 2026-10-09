@@ -21,12 +21,15 @@ from datetime import date
 import pandas as pd
 
 from .indicators import swing_stats, normalize_pct, compute_indicators
+from .render_data import IpoCalendarRow, IpoCalendarRenderData
+from .market.enums import IpoStage
 from .market.models import KlineSeries, BoardSnapshot, IntradaySeries
 from .market.convert.dataframe import kline_to_df
 
 __all__ = [
     "cloudmap_text",
     "compare_text",
+    "ipo_calendar_text",
     "kline_text",
     "single_stock_text",
 ]
@@ -407,3 +410,68 @@ def cloudmap_text(
         f"涨停约 {limit_up} 家, 跌停约 {limit_down} 家；平均涨跌幅 {avg:+.2f}%"
     )
     return "\n".join(lines)
+
+
+def ipo_calendar_text(data: IpoCalendarRenderData) -> str:
+    """IPO 日历渲染数据 → 文字（图上画了什么，文字里就有什么）。"""
+    head = (
+        f"【IPO日历】{data.window_start.month:02d}-{data.window_start.day:02d}"
+        f" ~ {data.window_end.month:02d}-{data.window_end.day:02d}"
+        f"（T-2至T+7，共{data.total}只）"
+    )
+    if data.total == 0:
+        return head + "\n\n窗口内 A股/港股/美股 均无新股发行或上市安排。"
+    sections: list[str] = []
+    for group in data.groups:
+        if not group.rows:
+            sections.append(f"【{group.label}】0只\n- 窗口内无安排")
+            continue
+        lines = [f"【{group.label}】{len(group.rows)}只"]
+        for r in group.rows:
+            board = f" {r.board}" if r.board else ""
+            parts = [f"- {r.name}({r.code}){board}"]
+            if r.stage == IpoStage.APPLY:
+                if r.apply_date is not None:
+                    parts.append(f"{r.apply_date.month:02d}-{r.apply_date.day:02d}申购")
+                elif r.apply_end_date is not None:
+                    parts.append(f"申购至{r.apply_end_date.month:02d}-{r.apply_end_date.day:02d}")
+            # 里程碑与图上副标题一致：不按阶段裁剪
+            if r.ballot_date is not None and r.ballot_date == r.pay_date:
+                parts.append(f"中签缴款{r.ballot_date.month:02d}-{r.ballot_date.day:02d}")
+            else:
+                if r.ballot_date is not None:
+                    parts.append(f"中签公布{r.ballot_date.month:02d}-{r.ballot_date.day:02d}")
+                if r.pay_date is not None:
+                    parts.append(f"缴款{r.pay_date.month:02d}-{r.pay_date.day:02d}")
+            if r.grey_market_date is not None:
+                parts.append(f"暗盘{r.grey_market_date.month:02d}-{r.grey_market_date.day:02d}")
+            if r.stage == IpoStage.LISTED and r.listing_date is not None:
+                seg = f"{r.listing_date.month:02d}-{r.listing_date.day:02d}上市"
+                if r.first_day_change is not None:
+                    seg += f" 首日{r.first_day_change:+.1f}%"
+                parts.append(seg)
+                if r.oversubscription is not None:
+                    parts.append(f"超购{r.oversubscription:g}倍")
+                _ipo_price_into(parts, r)
+            elif r.stage == IpoStage.PENDING and r.listing_date is not None:
+                parts.append(f"{r.listing_date.month:02d}-{r.listing_date.day:02d}上市 待上市")
+                _ipo_price_into(parts, r)
+            elif r.listing_date is not None:
+                parts.append(f"{r.listing_date.month:02d}-{r.listing_date.day:02d}上市")
+                _ipo_price_into(parts, r)
+            elif r.stage == IpoStage.FILED and r.filed_date is not None:
+                parts.append(f"{r.filed_date.month:02d}-{r.filed_date.day:02d}申报 已申报")
+            if r.raise_yi is not None:
+                unit = "亿美元" if r.currency == "USD" else "亿元"
+                parts.append(f"募资{r.raise_yi:.2f}{unit}")
+            lines.append(" ".join(parts))
+        sections.append("\n".join(lines))
+    return head + "\n\n" + "\n".join(sections)
+
+
+def _ipo_price_into(parts: list[str], r: IpoCalendarRow) -> None:
+    unit = "美元" if r.currency == "USD" else ("港元" if r.currency == "HKD" else "元")
+    if r.issue_price_text:
+        parts.append(f"招股价{r.issue_price_text}{unit}")
+    elif r.issue_price is not None:
+        parts.append(f"发行价{r.issue_price:g}{unit}")

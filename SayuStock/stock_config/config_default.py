@@ -115,6 +115,16 @@ CONFIG_DEFAULT: Dict[str, GSC] = {
         ["东方财富"],
         options=["东方财富"],
     ),
+    "market_api_chain_ipo": GsListStrConfig(
+        "⑥ IPO 日历源链",
+        "作用于新股 IPO 日历（A股/港股/美股，T-2至T+7）。"
+        "东方财富覆盖三个市场（A股含申购/中签/缴款/上市全流程，港股另有 AAStocks 增强与兜底）；"
+        "纳斯达克只有美股官方日历（多出已申报/预期定价阶段、发行价与募资额），A股/港股会自动跳过，"
+        "东财挂掉时可作美股备源——需要时把它加进链里即可。"
+        "默认已按推荐填好：东方财富（清空则跟随全局链）",
+        ["东方财富"],
+        options=["东方财富", "纳斯达克"],
+    ),
     "eastmoney_cookie": GsStrConfig(
         "东财Cookie",
         "东财Cookie",

@@ -37,10 +37,11 @@ except ImportError:  # 最小依赖 CI（Indicator math job）只装 pandas/nump
     logger = logging.getLogger("SayuStock")
 
 from .port import MarketDataPort
-from .enums import RankBy, BoardKind, ValueKind, KlinePeriod
-from .errors import MarketError, network_error, is_market_error
+from .enums import RankBy, BoardKind, IpoMarket, ValueKind, KlinePeriod, coerce_ipo_market
+from .errors import MarketError, unsupported, network_error, is_market_error
 from .models import (
     Quote,
+    IpoEvent,
     SymbolRef,
     BreadthBar,
     KlineSeries,
@@ -59,6 +60,7 @@ PROVIDER_LABELS: dict[str, str] = {
     "sina": "新浪财经",
     "tencent": "腾讯财经",
     "ths": "同花顺",
+    "nasdaq": "纳斯达克",
 }
 
 # 选单值/手写值 → 供应商 id（含常用简称）
@@ -74,6 +76,8 @@ _PROVIDER_ALIASES: dict[str, str] = {
     "tencent": "tencent",
     "同花顺": "ths",
     "ths": "ths",
+    "纳斯达克": "nasdaq",
+    "nasdaq": "nasdaq",
 }
 
 CHAIN_CONFIG_KEY = "market_api_chain"
@@ -89,12 +93,17 @@ _GROUP_CHAIN_CONFIG_KEYS: dict[str, str] = {
     "board": "market_api_chain_board",
     "market": "market_api_chain_market",
     "exclusive": "market_api_chain_exclusive",
+    # IPO 日历域：东方财富全覆盖，纳斯达克仅美股（cn/hk 返回 unsupported 跳过）
+    "ipo": "market_api_chain_ipo",
 }
 
 # 接口 → 功能域；未列出的接口（resolve 等）走全局链。
 # 分域依据是「该接口还有没有第二个源」：有第二源的才值得让用户调优先级，
 # 只有一个源的接口并进 exclusive，避免用户在必然失败的选择上浪费时间。
 _IFACE_GROUPS: dict[str, str] = {
+    "ipo_cn": "ipo",
+    "ipo_hk": "ipo",
+    "ipo_us": "ipo",
     "quote": "quote",
     "quotes": "quote",
     "intraday": "quote",
@@ -214,11 +223,18 @@ def _build_ths() -> MarketDataPort:
     return THSMarketData()
 
 
+def _build_nasdaq() -> MarketDataPort:
+    from .adapters.nasdaq import NasdaqMarketData
+
+    return NasdaqMarketData()
+
+
 _PROVIDER_FACTORIES: dict[str, Callable[[], MarketDataPort]] = {
     "eastmoney": _build_eastmoney,
     "sina": _build_sina,
     "tencent": _build_tencent,
     "ths": _build_ths,
+    "nasdaq": _build_nasdaq,
 }
 
 
@@ -430,3 +446,11 @@ class ConfigurableEquityMarket:
     async def financial_snapshot(self, code: str) -> FinancialSnapshot | MarketError:
         result = await self._dispatch("financial_snapshot", "financial_snapshot", code)
         return cast("FinancialSnapshot | MarketError", result)
+
+    async def ipo_calendar(self, market: IpoMarket | str) -> list[IpoEvent] | MarketError:
+        m = coerce_ipo_market(market)
+        if m is None:
+            return unsupported(f"未知 IPO 市场 {market!r}", provider="registry")
+        iface = {"cn": "ipo_cn", "hk": "ipo_hk", "us": "ipo_us"}[m.value]
+        result = await self._dispatch(iface, "ipo_calendar", m)
+        return cast("list[IpoEvent] | MarketError", result)

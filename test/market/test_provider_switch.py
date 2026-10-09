@@ -169,6 +169,10 @@ class _StubPort:
     async def financial_snapshot(self, code: str) -> MarketError:
         return self._ret("financial_snapshot")  # type: ignore[return-value]
 
+    async def ipo_calendar(self, market: object) -> object:
+        key = getattr(market, "value", str(market))
+        return self._ret(f"ipo_{key}")
+
 
 @pytest.fixture()
 def stub_registry(monkeypatch: pytest.MonkeyPatch):
@@ -191,6 +195,39 @@ def stub_registry(monkeypatch: pytest.MonkeyPatch):
         },
     )
     return {"eastmoney": em, "sina": sina, "tencent": tencent, "ths": ths}
+
+
+@pytest.fixture()
+def stub_registry_ipo(monkeypatch: pytest.MonkeyPatch):
+    """IPO 域专用：东财 + 纳斯达克（仅美股 IPO，其余接口 unsupported）。"""
+    em = _StubPort("eastmoney")
+    nasdaq = _StubPort(
+        "nasdaq",
+        unsupported_ifaces=frozenset(
+            {
+                "quote",
+                "intraday",
+                "kline",
+                "board",
+                "rank_list",
+                "hotmap",
+                "sector_menu",
+                "breadth",
+                "market_turnover",
+                "northbound",
+                "valuation_series",
+                "financial_snapshot",
+                "ipo_cn",
+                "ipo_hk",
+            }
+        ),
+    )
+    monkeypatch.setattr(
+        pr,
+        "_PROVIDER_FACTORIES",
+        {"eastmoney": lambda: em, "nasdaq": lambda: nasdaq},
+    )
+    return {"eastmoney": em, "nasdaq": nasdaq}
 
 
 def _reader(cfg: dict[str, object]) -> Callable[[str, object], object]:
@@ -586,5 +623,50 @@ def test_winner_provider_stamped(stub_registry) -> None:
         stub_registry["eastmoney"].fail_ifaces = {"kline": "network"}
         kl = await m.kline("600519", KlinePeriod.D1)
         assert kl == "tencent:kline"
+
+    asyncio.run(_run())
+
+
+def test_ipo_calendar_default_routes_to_eastmoney(stub_registry_ipo) -> None:
+    async def _run() -> None:
+        m = _market({})
+        assert await m.ipo_calendar("cn") == "eastmoney:ipo_cn"
+        assert await m.ipo_calendar("hk") == "eastmoney:ipo_hk"
+        assert await m.ipo_calendar("us") == "eastmoney:ipo_us"
+        assert "ipo_cn" in stub_registry_ipo["eastmoney"].calls
+        assert stub_registry_ipo["nasdaq"].calls == []
+
+    asyncio.run(_run())
+
+
+def test_ipo_us_switches_to_nasdaq(stub_registry_ipo) -> None:
+    async def _run() -> None:
+        # IPO 域链把纳斯达克放链头：美股命中；A股/港股不支持自动跳过回落东财
+        m = _market({"market_api_chain_ipo": ["纳斯达克"]})
+        assert await m.ipo_calendar("us") == "nasdaq:ipo_us"
+        assert await m.ipo_calendar("cn") == "eastmoney:ipo_cn"
+        assert await m.ipo_calendar("hk") == "eastmoney:ipo_hk"
+
+    asyncio.run(_run())
+
+
+def test_ipo_nasdaq_in_global_chain_falls_back(stub_registry_ipo) -> None:
+    async def _run() -> None:
+        # 全局链把纳斯达克放链头：A股/港股 IPO 不支持 → 顺延东财；美股 IPO 命中
+        m = _market({"market_api_chain": ["纳斯达克"]})
+        assert await m.ipo_calendar("cn") == "eastmoney:ipo_cn"
+        assert await m.ipo_calendar("hk") == "eastmoney:ipo_hk"
+        assert await m.ipo_calendar("us") == "nasdaq:ipo_us"
+        assert "ipo_cn" in stub_registry_ipo["nasdaq"].calls
+
+    asyncio.run(_run())
+
+
+def test_ipo_unknown_market(stub_registry_ipo) -> None:
+    async def _run() -> None:
+        m = _market({})
+        result = await m.ipo_calendar("xx")
+        assert is_market_error(result) and result.code == "unsupported"
+        assert stub_registry_ipo["eastmoney"].calls == []
 
     asyncio.run(_run())

@@ -9,15 +9,20 @@ plotly 版（``stock_cloudmap/render.py``）与 mpl 版（``stock_stockinfo``）
 from __future__ import annotations
 
 import math
-from typing import Any, List, cast
-from datetime import date, datetime
+from typing import Any, List, Sequence, cast
+from datetime import date, datetime, timedelta
 from collections import defaultdict
 from dataclasses import dataclass
 
 import numpy as np
 import pandas as pd
 
-from gsuid_core.logger import logger
+try:
+    from gsuid_core.logger import logger
+except ImportError:  # 最小依赖 CI（仅 pandas/numpy/pytest）没有 gsuid_core，
+    import logging  # 与 market/errors.py、provider_registry.py 同款降级
+
+    logger = logging.getLogger("SayuStock")
 
 from .utils import int_to_percentage, number_to_chinese
 from .constant import ErroText
@@ -26,7 +31,8 @@ from .time_range import (
     get_trading_datetimes_bjt,
     is_within_trading_day_window,
 )
-from .market.models import KlineSeries, BoardSnapshot, IntradaySeries
+from .market.enums import IpoStage, IpoMarket
+from .market.models import IpoEvent, KlineSeries, BoardSnapshot, IntradaySeries
 from .market.convert.dataframe import kline_to_cn_df
 
 DataResult = str
@@ -1041,3 +1047,193 @@ def build_cloudmap_render_data(
         title = f"{market} - {sector}"
 
     return CloudmapRenderData(df=df, title=title, treemap_path=treemap_path)
+
+
+# ---------------------------------------------------------------------------
+# IPO 日历（T-2 ~ T+7）
+# ---------------------------------------------------------------------------
+
+IPO_WINDOW_BEFORE = 2
+IPO_WINDOW_AFTER = 7
+
+_MARKET_LABEL: dict[IpoMarket, str] = {IpoMarket.CN: "A股", IpoMarket.HK: "港股", IpoMarket.US: "美股"}
+# 与全天候时间轴同源的市场配色
+_MARKET_COLOR: dict[IpoMarket, str] = {
+    IpoMarket.CN: "#ef4444",
+    IpoMarket.HK: "#d946ef",
+    IpoMarket.US: "#60a5fa",
+}
+
+
+@dataclass(slots=True)
+class IpoCalendarRow:
+    """窗口内一行：位置为窗口内天数索引（0..span），越界日期夹到边缘。"""
+
+    market: IpoMarket
+    stage: IpoStage
+    name: str
+    display_name: str
+    code: str
+    board: str | None
+    apply_date: date | None
+    apply_end_date: date | None
+    ballot_date: date | None
+    pay_date: date | None
+    grey_market_date: date | None
+    listing_date: date | None
+    filed_date: date | None
+    issue_price: float | None
+    issue_price_text: str | None
+    raise_yi: float | None
+    currency: str
+    first_day_change: float | None
+    oversubscription: float | None
+    apply_start_pos: float | None
+    apply_pos: float | None
+    apply_end_pos: float | None
+    ballot_pos: float | None
+    pay_pos: float | None
+    grey_pos: float | None
+    listing_pos: float | None
+    filed_pos: float | None
+
+
+@dataclass(slots=True)
+class IpoCalendarGroup:
+    market: IpoMarket
+    label: str
+    color: str
+    rows: list[IpoCalendarRow]
+
+
+@dataclass(slots=True)
+class IpoCalendarRenderData:
+    anchor: date
+    window_start: date
+    window_end: date
+    span_days: int
+    days: tuple[date, ...]
+    groups: list[IpoCalendarGroup]
+    total: int
+
+
+def _ipo_pos(value: date | None, start: date, span: int) -> float | None:
+    """日期 → 窗口内索引；窗口外夹到 [0, span]。"""
+    if value is None:
+        return None
+    idx = (value - start).days
+    return max(0.0, min(float(idx), float(span)))
+
+
+def build_ipo_calendar_render_data(
+    events: List[IpoEvent],
+    *,
+    anchor: date | None = None,
+    markets: Sequence[IpoMarket | str] | None = None,
+    before: int = IPO_WINDOW_BEFORE,
+    after: int = IPO_WINDOW_AFTER,
+) -> IpoCalendarRenderData:
+    """IpoEvent 列表 → 窗口渲染数据（供应商无关、纯逻辑可单测）。
+
+    只保留 apply/listing/filed 任一日期落在 [anchor-before, anchor+after] 的事件；
+    阶段按 anchor 推导（``IpoEvent.stage_on``）。
+    """
+    from .market.enums import coerce_ipo_market
+
+    a = anchor or date.today()
+    start = a - timedelta(days=before)
+    end = a + timedelta(days=after)
+    span = (end - start).days
+
+    selected: set[IpoMarket] = set(IpoMarket)
+    if markets:
+        picked = {coerce_ipo_market(m) for m in markets}
+        selected = {m for m in picked if m is not None}
+    if not selected:
+        selected = set(IpoMarket)
+
+    def _in_window(value: date | None) -> bool:
+        return value is not None and start <= value <= end
+
+    groups: list[IpoCalendarGroup] = []
+    total = 0
+    for m in (IpoMarket.CN, IpoMarket.HK, IpoMarket.US):
+        if m not in selected:
+            continue
+        rows: list[IpoCalendarRow] = []
+        for ev in events:
+            if ev.market != m:
+                continue
+            if not any(
+                _in_window(d)
+                for d in (
+                    ev.apply_date,
+                    ev.apply_end_date,
+                    ev.ballot_date,
+                    ev.pay_date,
+                    ev.grey_market_date,
+                    ev.listing_date,
+                    ev.filed_date,
+                )
+            ):
+                continue
+            # 港股招股期只有截止日时，按港股惯例前推 3 天作为申购窗口起点（仅影响画条）
+            apply_end = ev.apply_end_date or ev.apply_date
+            if ev.apply_date is not None:
+                apply_start = ev.apply_date
+            elif ev.apply_end_date is not None:
+                apply_start = ev.apply_end_date - timedelta(days=3)
+            else:
+                apply_start = None
+            rows.append(
+                IpoCalendarRow(
+                    market=m,
+                    stage=ev.stage_on(a),
+                    name=ev.name,
+                    # 美股公司名动辄 25+ 字符，主名一律用 ticker，全名进副标题；
+                    # 纳斯达克源已申报行可能未分到代码，回退公司名
+                    display_name=(ev.code or ev.name) if m == IpoMarket.US else ev.name,
+                    code=ev.code,
+                    board=ev.board,
+                    apply_date=ev.apply_date,
+                    apply_end_date=ev.apply_end_date,
+                    ballot_date=ev.ballot_date,
+                    pay_date=ev.pay_date,
+                    grey_market_date=ev.grey_market_date,
+                    listing_date=ev.listing_date,
+                    filed_date=ev.filed_date,
+                    issue_price=ev.issue_price,
+                    issue_price_text=ev.issue_price_text,
+                    raise_yi=ev.raise_yi,
+                    currency=ev.currency,
+                    first_day_change=ev.first_day_change,
+                    oversubscription=ev.oversubscription,
+                    apply_start_pos=_ipo_pos(apply_start, start, span),
+                    apply_pos=_ipo_pos(ev.apply_date, start, span),
+                    apply_end_pos=_ipo_pos(apply_end, start, span),
+                    ballot_pos=_ipo_pos(ev.ballot_date, start, span),
+                    pay_pos=_ipo_pos(ev.pay_date, start, span),
+                    grey_pos=_ipo_pos(ev.grey_market_date, start, span),
+                    listing_pos=_ipo_pos(ev.listing_date, start, span),
+                    filed_pos=_ipo_pos(ev.filed_date, start, span),
+                )
+            )
+
+        def _row_key(r: IpoCalendarRow) -> tuple[date, str]:
+            primary = r.listing_date or r.filed_date or r.apply_date
+            return (primary or date.max, r.code)
+
+        rows.sort(key=_row_key)
+        total += len(rows)
+        groups.append(IpoCalendarGroup(market=m, label=_MARKET_LABEL[m], color=_MARKET_COLOR[m], rows=rows))
+
+    days = tuple(start + timedelta(days=i) for i in range(span + 1))
+    return IpoCalendarRenderData(
+        anchor=a,
+        window_start=start,
+        window_end=end,
+        span_days=span,
+        days=days,
+        groups=groups,
+        total=total,
+    )

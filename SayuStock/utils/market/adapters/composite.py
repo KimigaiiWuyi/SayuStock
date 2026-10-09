@@ -7,10 +7,11 @@ from datetime import date
 from collections.abc import Sequence
 
 from ..port import MarketDataPort
-from ..enums import RankBy, BoardKind, ValueKind, AssetClass, KlinePeriod
+from ..enums import RankBy, BoardKind, IpoMarket, ValueKind, AssetClass, KlinePeriod
 from ..errors import MarketError, is_market_error
 from ..models import (
     Quote,
+    IpoEvent,
     SymbolRef,
     BreadthBar,
     KlineSeries,
@@ -154,3 +155,6 @@ class CompositeMarketData:
 
     async def financial_snapshot(self, code: str) -> FinancialSnapshot | MarketError:
         return await self._equity.financial_snapshot(code)
+
+    async def ipo_calendar(self, market: IpoMarket | str) -> list[IpoEvent] | MarketError:
+        return await self._equity.ipo_calendar(market)

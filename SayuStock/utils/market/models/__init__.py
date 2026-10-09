@@ -1,5 +1,6 @@
 """领域模型导出。"""
 
+from .ipo import IpoEvent
 from .rank import RANKING_CAVEAT, RankRow, RankSnapshot
 from .board import BoardRow, BoardExtras, BoardSnapshot
 from .quote import Quote
@@ -29,6 +30,7 @@ __all__ = [
     "BreadthBucket",
     "FinancialSnapshot",
     "IntradayPoint",
+    "IpoEvent",
     "IntradaySeries",
     "KlineSeries",
     "MarketTurnover",

@@ -1,7 +1,7 @@
 """行情数据源抽象层：业务只依赖本包公开 API。"""
 
 from .port import MarketDataPort
-from .enums import RankBy, BoardKind, ValueKind, AssetClass, KlinePeriod
+from .enums import RankBy, IpoStage, BoardKind, IpoMarket, ValueKind, AssetClass, KlinePeriod, coerce_ipo_market
 from .errors import MarketError, is_market_error
 from .models import (
     BREADTH_BANDS,
@@ -11,6 +11,7 @@ from .models import (
     Quote,
     RankRow,
     BoardRow,
+    IpoEvent,
     SymbolRef,
     BreadthBar,
     ValuePoint,
@@ -54,6 +55,9 @@ __all__ = [
     "breadth_up_down",
     "ConfigurableEquityMarket",
     "FinancialSnapshot",
+    "IpoEvent",
+    "IpoMarket",
+    "IpoStage",
     "IntradayPoint",
     "IntradaySeries",
     "KlinePeriod",
@@ -77,6 +81,7 @@ __all__ = [
     "board_rows_to_items",
     "board_to_df",
     "chain_deadline",
+    "coerce_ipo_market",
     "from_board_row",
     "from_quote",
     "pick_display_items",
