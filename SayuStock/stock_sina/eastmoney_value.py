@@ -31,6 +31,7 @@ from ..stock_stockinfo.chart_base import (  # noqa: E402
     _setup_mpl,
     _pct_change,
     _apply_detail_legend,
+    _reserve_source_band,
     _draw_end_point_labels,
     _paint_chart_background,
     _draw_dodged_text_labels,
@@ -430,6 +431,7 @@ def draw_value_compare_chart(
         fontsize=9,
         alpha=0.65,
     )
+    _reserve_source_band(fig)
     return _fig_to_image(fig)
 
 

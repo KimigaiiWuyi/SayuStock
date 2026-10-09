@@ -24,6 +24,7 @@ from ..utils.market import (
     is_market_error,
     board_rows_to_items,
 )
+from ..utils.bottom_chrome import layout_bottom_chrome
 from ..utils.market.models import BoardSnapshot, BreadthBucket, MarketTurnover
 from ..utils.market.display import source_label
 from ..utils.stock.request_utils import get_image_from_em
@@ -273,7 +274,16 @@ async def draw_info_img(is_save: bool = False) -> str | bytes:
     _ai_return_market_overview(data_zs_items, data_hy_z, data_hy_f, up_value, down_value, diff_bar)
 
     h0 = 90
-    h = 1060 + 20 * h0
+    content_bottom = 980 + 20 * h0
+    footer = get_footer()
+    chrome = layout_bottom_chrome(
+        1700,
+        content_bottom,
+        font_size=24,
+        footer_w=footer.size[0],
+        footer_h=footer.size[1],
+    )
+    h = chrome.canvas_h
     img = Image.new("RGBA", (1700, h), (7, 9, 27))
     img_draw = ImageDraw.Draw(img)
 
@@ -438,10 +448,10 @@ async def draw_info_img(is_save: bool = False) -> str | bytes:
     await draw_bar(data_gn_z[:20], img, 860, 980, h0)
     await draw_bar(data_gn_f[:20], img, 1265, 980, h0)
 
-    footer = get_footer()
-    img.paste(footer, (425, h - 50), footer)
+    img.paste(footer, (chrome.footer_x, chrome.footer_y), footer)
 
     # 指数、板块、涨跌、成交额可能来自不同源，脚注按段标明。
+    # 来源行在 footer 图上方，避免和「Power By GsCore」叠在一起。
     source_bits = [f"指数{source_label(*index_providers)}"]
     source_bits.append(f"板块{source_label(hy_z_r.provider, hy_f_r.provider, gn_z_r.provider, gn_f_r.provider)}")
     if breadth_provider:
@@ -449,7 +459,7 @@ async def draw_info_img(is_save: bool = False) -> str | bytes:
     if turnover_provider:
         source_bits.append(f"成交额{source_label(turnover_provider)}")
     img_draw.text(
-        (20, h - 26),
+        (24, chrome.source_y),
         f"数据来源：{' '.join(source_bits)} | SayuStock",
         (150, 150, 150),
         ss_font(24),

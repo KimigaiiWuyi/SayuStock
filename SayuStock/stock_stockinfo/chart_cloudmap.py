@@ -115,5 +115,15 @@ def draw_cloudmap_chart(snap: BoardSnapshot, market: str, sector: str | None = N
         )
 
     ax.set_title(cloudmap.title, color=FG_COLOR, fontsize=28, fontweight="bold", pad=18)
-    fig.text(0.01, 0.01, source_footer(snap.provider), color=FG_COLOR, fontsize=9, alpha=0.65)
+    # 树图铺满坐标轴。来源行放在轴下面，避免压在最底一排格子上。
+    fig.subplots_adjust(left=0.012, right=0.988, top=0.93, bottom=0.046)
+    fig.text(
+        0.016,
+        0.02,
+        source_footer(snap.provider),
+        color=FG_COLOR,
+        fontsize=10,
+        alpha=0.8,
+        va="center",
+    )
     return _fig_to_image(fig, dpi=220)

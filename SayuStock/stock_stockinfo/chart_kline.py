@@ -43,6 +43,7 @@ from .chart_base import (
     _apply_month_ticks,
     _axes_top_to_bottom,
     _format_percent_axis,
+    _reserve_source_band,
     _paint_chart_background,
     _draw_dodged_text_labels,
     _hide_root_x_tick_labels,
@@ -424,4 +425,5 @@ def draw_single_kline_chart(series: KlineSeries, sp: str | None = None) -> DrawR
     )
     fig.subplots_adjust(left=0.045, right=0.988, top=0.885, bottom=0.10, hspace=0.055)
     _hide_root_x_tick_labels(fig)
+    _reserve_source_band(fig)
     return _fig_to_image(fig)

@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
+import re
 from datetime import datetime
 
 from SayuStock.utils.market.enums import AssetClass
 from SayuStock.utils.market.models import Quote, SymbolRef
-from SayuStock.utils.my_stock_html import build_my_stock_html, my_stock_canvas_size
+from SayuStock.utils.my_stock_html import BAR_H, HEAD_H, FOOT_PAD, build_my_stock_html, my_stock_canvas_size
 from SayuStock.utils.market.display import DisplayItem
 
 
@@ -46,15 +47,16 @@ def test_canvas_size_nine_rows() -> None:
     w, h, two = my_stock_canvas_size(9)
     assert w == 900
     assert two is False
-    assert h == 541 + 9 * 110 + 60
+    assert h == HEAD_H + 9 * BAR_H + FOOT_PAD
 
 
 def test_html_embeds_textures_and_layout() -> None:
     q = _quote("512880", "证券ETF国泰", 1.105, 0.64)
     idx = DisplayItem(name="上证指数", price=3930.12, change_pct=-0.3, code="000001")
     html = build_my_stock_html(quotes=[(q, "512880")], index_items=[idx], title_num="5")
+    _, canvas_h, _ = my_stock_canvas_size(1)
     assert "width: 900px" in html
-    assert "height: 711px" in html
+    assert f"height: {canvas_h}px" in html
     assert "data:image/png;base64," in html
     assert "证券ETF国泰" in html
     assert "+0.64%" in html
@@ -77,3 +79,30 @@ def test_html_injects_sparkline() -> None:
     assert "font-size: 30px" in html
     assert "width: 136.5px" in html
     assert "left: 503.5px" in html
+
+
+def _css_px(html: str, selector: str, prop: str) -> int:
+    block = re.search(rf"{re.escape(selector)}\s*\{{([^}}]*)\}}", html)
+    assert block is not None
+    found = re.search(rf"{prop}:\s*(-?\d+)px", block.group(1))
+    assert found is not None
+    return int(found.group(1))
+
+
+def test_source_sits_above_footer() -> None:
+    q = _quote("512880", "证券ETF国泰", 1.105, 0.64)
+    html = build_my_stock_html(
+        quotes=[(q, "512880")],
+        index_items=[],
+        title_num="5",
+        sources=("eastmoney", "sina", "tencent"),
+    )
+    _, height, _ = my_stock_canvas_size(1)
+    src_top = _css_px(html, ".src", "top")
+    src_h = _css_px(html, ".src", "height")
+    foot_top = _css_px(html, ".footer", "top")
+    foot_h = _css_px(html, ".footer", "height")
+    assert src_top >= height - FOOT_PAD
+    assert src_top + src_h <= foot_top
+    assert foot_top + foot_h <= height
+    assert "数据来源：" in html

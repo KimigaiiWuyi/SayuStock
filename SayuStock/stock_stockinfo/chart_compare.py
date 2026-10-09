@@ -30,6 +30,7 @@ from .chart_base import (
     _axes_top_to_bottom,
     _apply_detail_legend,
     _format_percent_axis,
+    _reserve_source_band,
     _draw_end_point_labels,
     _paint_chart_background,
     _draw_dodged_text_labels,
@@ -318,4 +319,5 @@ def draw_compare_chart(series_list: list[KlineSeries]) -> DrawResult:
         fontweight=FONT_W_LIGHT,
     )
     _hide_root_x_tick_labels(fig)
+    _reserve_source_band(fig)
     return _fig_to_image(fig)

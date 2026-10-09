@@ -511,6 +511,9 @@ body {{
   font-size: 13px;
   line-height: {_SRC_H}px;
   color: #8b95a8;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }}
 .footer {{
   flex: none;

@@ -39,6 +39,7 @@ from .chart_base import (
     _format_money_axis,
     _axes_top_to_bottom,
     _apply_detail_legend,
+    _reserve_source_band,
     _draw_end_point_labels,
     _paint_chart_background,
     _hide_root_x_tick_labels,
@@ -283,6 +284,7 @@ def draw_single_stock_chart(series: IntradaySeries) -> DrawResult:
     bottom = 0.13 if stock.ndays > 1 else 0.10
     fig.subplots_adjust(left=0.045, right=0.988, top=0.88, bottom=bottom, hspace=0.04)
     _hide_root_x_tick_labels(fig)
+    _reserve_source_band(fig)
     return _fig_to_image(fig)
 
 
@@ -544,4 +546,5 @@ def draw_multi_stock_chart(series_list: list[IntradaySeries]) -> DrawResult:
     bottom = 0.13 if multi_ndays > 1 else 0.10
     fig.subplots_adjust(left=0.045, right=0.965, top=0.855, bottom=bottom, hspace=0.04)
     _hide_root_x_tick_labels(fig)
+    _reserve_source_band(fig)
     return _fig_to_image(fig)

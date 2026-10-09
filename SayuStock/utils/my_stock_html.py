@@ -9,6 +9,7 @@ from functools import lru_cache
 
 from .utils import number_to_chinese
 from .market import Quote, DisplayItem
+from .bottom_chrome import FOOTER_H, FOOTER_W, footer_top, source_top, footer_left, chrome_height, source_band_h
 from .market.display import source_footer
 
 TEXT_PATH = Path(__file__).resolve().parent.parent / "stock_info" / "texture2d"
@@ -16,7 +17,8 @@ _FOOTER_PATH = Path(__file__).resolve().parent / "texture2d" / "footer.png"
 
 BAR_H = 110
 HEAD_H = 541
-FOOT_PAD = 60
+_SRC_FONT = 15
+FOOT_PAD = chrome_height(font_size=_SRC_FONT)
 TITLE_X_SINGLE = 25
 TITLE_X_DOUBLE = 475
 TITLE_Y = -31
@@ -157,6 +159,10 @@ def build_my_stock_html(
     used.extend(item.provider for item in index_items)
     used.extend(q.provider for q, _ in quotes)
     source_text = _e(source_footer(*used))
+    src_top = source_top(height, font_size=_SRC_FONT)
+    src_h = source_band_h(_SRC_FONT)
+    foot_top = footer_top(height)
+    foot_left = footer_left(width)
     return f"""<!DOCTYPE html>
 <html>
 <head>
@@ -217,12 +223,14 @@ body {{
   font-size: 26px; font-weight: 700; color: #ffffff; white-space: nowrap;
 }}
 .footer {{
-  position: absolute; left: {title_x}px; top: {height - 55}px;
-  width: 850px; height: 40px;
+  position: absolute; left: {foot_left}px; top: {foot_top}px;
+  width: {FOOTER_W}px; height: {FOOTER_H}px;
 }}
 .src {{
-  position: absolute; left: 24px; top: {height - 78}px;
-  font-size: 15px; color: rgba(210, 210, 210, 0.9); white-space: nowrap;
+  position: absolute; left: 24px; top: {src_top}px;
+  width: {width - 48}px; height: {src_h}px; line-height: {src_h}px;
+  font-size: {_SRC_FONT}px; color: rgba(210, 210, 210, 0.9);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }}
 </style>
 </head>

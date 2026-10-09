@@ -42,3 +42,5 @@ def _ensure_pkg_shell(name: str, path: Path) -> None:
 _PKG = _PLUGIN_ROOT / "SayuStock"
 _ensure_pkg_shell("SayuStock", _PKG)
 _ensure_pkg_shell("SayuStock.utils", _PKG / "utils")
+_ensure_pkg_shell("SayuStock.stock_stockinfo", _PKG / "stock_stockinfo")
+_ensure_pkg_shell("SayuStock.stock_analysis", _PKG / "stock_analysis")

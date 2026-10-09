@@ -37,6 +37,7 @@ from matplotlib.ticker import FuncFormatter  # noqa: E402
 from matplotlib.patches import Rectangle  # noqa: E402
 from matplotlib.offsetbox import HPacker, TextArea, AnnotationBbox  # noqa: E402
 from matplotlib.backend_bases import RendererBase  # noqa: E402
+from matplotlib.layout_engine import TightLayoutEngine  # noqa: E402
 
 from gsuid_core.utils.fonts.fonts import FONT_ORIGIN_PATH
 
@@ -219,6 +220,14 @@ def _fig_to_image(fig: Figure, *, dpi: int = 180) -> Image.Image:
     plt.close(fig)
     _ = output.seek(0)
     return Image.open(output).convert("RGB")
+
+
+def _reserve_source_band(fig: Figure) -> None:
+    """tight 布局缩进底边，斜向刻度收在贴底来源行的上面。
+
+    mplchart 在绘制时重跑 tight layout，直接改轴位置会被盖掉。
+    """
+    fig.set_layout_engine(TightLayoutEngine(rect=(0, 0.04, 1, 1)))
 
 
 async def _draw_in_thread(func: Callable[P, R], *args: P.args, **kwargs: P.kwargs) -> R:

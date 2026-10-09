@@ -10,6 +10,7 @@ from gsuid_core.ai_core.trigger_bridge import ai_return
 from ..utils.image import get_footer
 from .draw_my_info import DIFF_MAP, TEXT_PATH, draw_bar_from_quote
 from ..utils.market import get_market, is_market_error
+from ..utils.bottom_chrome import layout_bottom_chrome
 from ..utils.market.display import source_footer
 from ..utils.stock.request_utils import get_code_id, get_fund_pos_list
 
@@ -28,11 +29,16 @@ async def draw_fund_info(fcode: Union[str, int]) -> str | bytes:
     if not holdings:
         return "获取基金持仓数据失败，请稍后再试~"
 
-    img = Image.new(
-        "RGBA",
-        (900, 400 + 60 + len(holdings) * 110),
-        (7, 9, 27),
+    content_bottom = 400 + len(holdings) * 110
+    footer = get_footer()
+    chrome = layout_bottom_chrome(
+        900,
+        content_bottom,
+        font_size=18,
+        footer_w=footer.size[0],
+        footer_h=footer.size[1],
     )
+    img = Image.new("RGBA", (900, chrome.canvas_h), (7, 9, 27))
     img_draw = ImageDraw.Draw(img)
     img_draw.text(
         (450, 355),
@@ -71,14 +77,9 @@ async def draw_fund_info(fcode: Union[str, int]) -> str | bytes:
         title,
     )
 
-    footer = get_footer()
-    img.paste(
-        footer,
-        (25, img.size[1] - 55),
-        footer,
-    )
+    img.paste(footer, (chrome.footer_x, chrome.footer_y), footer)
     img_draw.text(
-        (20, img.size[1] - 26),
+        (24, chrome.source_y),
         source_footer(*used),
         (150, 150, 150),
         ss_font(18),

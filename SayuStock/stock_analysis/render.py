@@ -147,15 +147,21 @@ def render_technical_image(report: TechnicalReport) -> Image.Image:
     y -= 0.04
     ax.text(0.08, y, report.summary, fontsize=12, color="#dddddd", wrap=True)
 
+    # 信号/风险把摘要顶出画布时，下沿跟着放宽，来源行仍留在轴外。
+    ymin = min(0.0, y - 0.05)
+    ax.set_ylim(ymin, 1)
+    if ymin < 0:
+        fig.set_size_inches(12, 14 * (1 - ymin), forward=True)
+    fig.subplots_adjust(left=0.04, right=0.96, top=0.98, bottom=0.055)
     fig.text(
         0.02,
-        0.01,
+        0.022,
         source_footer(*report.source_ids, note="技术分析"),
         color=FG_COLOR,
         fontsize=9,
         alpha=0.6,
+        va="center",
     )
-    fig.subplots_adjust(left=0.04, right=0.96, top=0.98, bottom=0.04)
     return _fig_to_image(fig, dpi=140)
 
 

@@ -70,19 +70,24 @@ async def to_fig(snap: BoardSnapshot, market: str, sector: str | None = None, la
         textfont_size=50,
         textposition="middle center",
     )
-    fig.add_annotation(
-        text=source_footer(snap.provider),
-        xref="paper",
-        yref="paper",
-        x=0.012,
-        y=0.008,
-        xanchor="left",
-        yanchor="bottom",
-        showarrow=False,
-        font=dict(size=42, color="rgba(255,255,255,0.8)"),
-    )
+    # 大盘云图不贴来源。行业、概念用小号灰字贴在树图下沿。
+    bottom = 0
+    if market != "大盘云图":
+        bottom = 32
+        fig.add_annotation(
+            text=source_footer(snap.provider),
+            xref="paper",
+            yref="paper",
+            x=0.008,
+            y=0,
+            xanchor="left",
+            yanchor="top",
+            yshift=-6,
+            showarrow=False,
+            font=dict(size=16, color="rgba(160,160,160,0.5)"),
+        )
     fig.update_layout(
-        margin=dict(t=0, b=72, l=8, r=0),
+        margin=dict(t=0, b=bottom, l=8, r=0),
         paper_bgcolor="black",
         plot_bgcolor="black",
         font=dict(color="white"),

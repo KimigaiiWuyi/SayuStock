@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import re
+
 from SayuStock.utils.market.display import DisplayItem
 from SayuStock.utils.paper_holdings_html import (
+    FOOT_PAD,
     HoldingBarRow,
     build_paper_holdings_html,
     paper_holdings_canvas_size,
@@ -76,6 +79,36 @@ def test_html_embeds_summary_legend_and_bars() -> None:
     assert 'class="tile"' in html
     assert "上证指数" in html
     assert 'class="spark"' not in html
+
+
+def _css_px(html: str, selector: str, prop: str) -> int:
+    block = re.search(rf"{re.escape(selector)}\s*\{{([^}}]*)\}}", html)
+    assert block is not None
+    found = re.search(rf"{prop}:\s*(-?\d+)px", block.group(1))
+    assert found is not None
+    return int(found.group(1))
+
+
+def test_source_sits_above_footer() -> None:
+    row = _row("512880", "证券ETF国泰")
+    html = build_paper_holdings_html(
+        account_name="默认模拟盘",
+        strategy_id="multi_factor",
+        enabled=True,
+        cash=1.0,
+        initial_cash=1.0,
+        holdings=[row],
+        index_items=[],
+        title_num="5",
+    )
+    _, height = paper_holdings_canvas_size(1)
+    src_top = _css_px(html, ".src", "top")
+    src_h = _css_px(html, ".src", "height")
+    foot_top = _css_px(html, ".footer", "top")
+    foot_h = _css_px(html, ".footer", "height")
+    assert src_top >= height - FOOT_PAD
+    assert src_top + src_h <= foot_top
+    assert foot_top + foot_h <= height
 
 
 def test_html_injects_sparkline_and_empty_state() -> None:
