@@ -2,18 +2,23 @@
 
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, datetime
 
 from SayuStock.utils.market.enums import AssetClass, KlinePeriod
 from SayuStock.utils.market.errors import is_market_error
-from SayuStock.utils.market.models import SymbolRef
+from SayuStock.utils.market.models import Quote, SymbolRef
 from SayuStock.utils.market.adapters.tencent.parse import (
     parse_qt_line,
+    parse_qt_line_fx,
+    parse_qt_line_hf,
+    parse_qt_line_hk,
     parse_qt_line_us,
+    tencent_quote_only,
     parse_kline_payload,
     parse_minute_payload,
     tencent_symbol_from_secid,
 )
+from SayuStock.utils.market.adapters.tencent.client import _QT_RE
 
 # qt.gtimg.cn q=sh600519（2026-09-18 收盘后采样，~ 分隔）
 QT_600519 = "~".join(
@@ -136,9 +141,69 @@ def test_tencent_symbol_from_secid() -> None:
     assert tencent_symbol_from_secid("100.DJIA") == "usDJI"
     assert tencent_symbol_from_secid("100.NDX") == "usIXIC"
     assert tencent_symbol_from_secid("100.RUT") is None
-    # 港股/韩股暂不覆盖
+    assert tencent_symbol_from_secid("100.HSI") == "hkHSI"
+    assert tencent_symbol_from_secid("122.XAU") == "hf_XAU"
+    assert tencent_symbol_from_secid("122.XAG") == "hf_XAG"
+    assert tencent_symbol_from_secid("102.CL00Y") == "hf_CL"
+    assert tencent_symbol_from_secid("109.LCPT") == "hf_CAD"
+    assert tencent_symbol_from_secid("119.USDJPY") == "fxUSDJPY"
+    assert tencent_symbol_from_secid("119.USDCHF") == "fxUSDCHF"
+    assert tencent_symbol_from_secid("100.N225") is None
+    assert tencent_symbol_from_secid("100.UDI") is None
+    assert tencent_symbol_from_secid("133.USDCNH") is None
+    assert tencent_symbol_from_secid("171.CN10Y") is None
+    assert tencent_quote_only("122.XAU")
+    assert not tencent_quote_only("1.600519")
+    # 港股个股仍不覆盖；恒生指数走 hkHSI。
     assert tencent_symbol_from_secid("116.00700") is None
     assert tencent_symbol_from_secid("600519") is None
+
+
+def test_qt_regex_keeps_underscore_symbols() -> None:
+    text = 'v_hf_XAU="4190,伦敦金";v_sh600519="1~茅台";'
+    found = {m.group("sym") for m in _QT_RE.finditer(text)}
+    assert found == {"hf_XAU", "sh600519"}
+
+
+def test_parse_all_weather_tencent_aliases() -> None:
+    """2026-10-09 腾讯全天候符号实采。"""
+    hk = (
+        "100~恒生指数~HSI~24210.940~23785.790~23941.260~15031411~0~0~24210.940"
+        "~0~0~0~0~0~0~0~0~0~24210.940~0~0~0~0~0~0~0~0~0~0.0"
+        "~2026/10/09 14:15:52~425.150~1.79~24224.050~23941.260"
+    )
+    hk_q = parse_qt_line_hk(hk, symbol=_sym_us("100.HSI", "恒生指数"))
+    assert isinstance(hk_q, Quote)
+    assert hk_q.symbol.name == "恒生指数"
+    assert hk_q.price == 24210.940
+    assert hk_q.change_pct == 1.79
+    assert hk_q.high == 24224.050
+    assert hk_q.volume is None
+    assert hk_q.as_of == datetime(2026, 10, 9, 14, 15, 52)
+
+    xau = "4190.83,1.39,4190.83,4191.18,4207.46,4130.90,14:29:00,4133.46,4134.26,0,0,0,2026-10-09,伦敦金（现货黄金）"
+    xau_q = parse_qt_line_hf(xau, symbol=_sym_us("122.XAU", "XAU"))
+    assert isinstance(xau_q, Quote)
+    assert xau_q.symbol.name == "伦敦金（现货黄金）"
+    assert xau_q.price == 4190.83
+    assert xau_q.prev_close == 4133.46
+    assert xau_q.high == 4207.46
+    assert xau_q.change_pct == 1.388
+    assert xau_q.as_of == datetime(2026, 10, 9, 14, 29)
+
+    fx = (
+        "310~美元日元~USDJPY~158.2000~0~20261009143020~157.8200~157.8200~158.2100"
+        "~157.7500~158.1900~158.2000~0.3800~0.24~0.58"
+    )
+    fx_q = parse_qt_line_fx(fx, symbol=_sym_us("119.USDJPY", "美元兑日元"))
+    assert isinstance(fx_q, Quote)
+    assert fx_q.symbol.name == "美元日元"
+    assert fx_q.price == 158.2
+    assert fx_q.prev_close == 157.82
+    assert fx_q.change_pct == 0.24
+    assert fx_q.high == 158.21
+    assert fx_q.low == 157.75
+    assert fx_q.as_of == datetime(2026, 10, 9, 14, 30, 20)
 
 
 def test_parse_qt_line() -> None:

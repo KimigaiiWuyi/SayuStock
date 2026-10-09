@@ -15,21 +15,26 @@ from .parse import (
     parse_hq_line,
     parse_rank_rows,
     sina_quote_only,
+    parse_hq_line_fx,
+    parse_hq_line_hk,
     parse_hq_line_us,
     parse_kline_rows,
     parse_node_board,
+    sina_domestic_nf,
     node_for_industry,
     parse_hq_line_sge,
     parse_breadth_rows,
     parse_minline_rows,
     parse_us_mink_rows,
     parse_hq_line_cffex,
+    parse_hq_line_world,
     parse_us_daily_rows,
     parse_money_flow_rank,
     parse_turnover_quotes,
     parse_industry_summary,
     parse_us_mink_intraday,
     sina_symbol_from_secid,
+    parse_hq_line_commodity,
     sina_us_mink_symbol_from_secid,
 )
 from .._base import PartialMarketData, resolve_em_symbol, resolve_em_symbol_safe
@@ -98,11 +103,21 @@ _US_MINUTE_TYPE: dict[KlinePeriod, int] = {
 def _parse_us_or_cn(line: str, *, sina_sym: str, symbol: SymbolRef) -> Quote | MarketError:
     if sina_sym.startswith("gb_"):
         return parse_hq_line_us(line, symbol=symbol)
-    if sina_sym.startswith("gds_"):
+    if sina_sym.startswith("gds_") or sina_sym.startswith("hf_"):
+        # hf_ 伦敦金/原油/伦铜与上金所 gds_ 同列（2026-10-09）。
         return parse_hq_line_sge(line, symbol=symbol)
-    if sina_sym.startswith("nf_"):
-        # 目前只映射三十债主连。商品连续是另一套列序，不要从这里进。
+    if sina_sym == "nf_TL0":
         return parse_hq_line_cffex(line, symbol=symbol)
+    if sina_domestic_nf(sina_sym):
+        return parse_hq_line_commodity(line, symbol=symbol)
+    if sina_sym.startswith("nf_"):
+        return parse_hq_line_cffex(line, symbol=symbol)
+    if sina_sym.startswith(("hk", "rt_hk")):
+        return parse_hq_line_hk(line, symbol=symbol)
+    if sina_sym.startswith("b_"):
+        return parse_hq_line_world(line, symbol=symbol)
+    if sina_sym.startswith("fx_") or sina_sym == "DINIW":
+        return parse_hq_line_fx(line, symbol=symbol)
     return parse_hq_line(line, symbol=symbol)
 
 

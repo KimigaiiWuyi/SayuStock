@@ -18,6 +18,23 @@ _US_INDEX_SYMBOLS: dict[str, str] = {
     "NDX": "usIXIC",
 }
 
+# 全天候里东财 secid 与腾讯符号不同名，且只有盘口。2026-10-09 实采。
+# 122.XAU 是伦敦金 hf_XAU，不是 COMEX hf_GC，也不是沪金99。
+_TENCENT_QUOTE_ONLY: dict[str, str] = {
+    "100.HSI": "hkHSI",
+    "122.XAU": "hf_XAU",
+    "122.XAG": "hf_XAG",
+    "102.CL00Y": "hf_CL",
+    "109.LCPT": "hf_CAD",
+    "119.USDJPY": "fxUSDJPY",
+    "119.USDCHF": "fxUSDCHF",
+}
+
+
+def tencent_quote_only(secid: str) -> bool:
+    """该 secid 在腾讯只有盘口。"""
+    return secid in _TENCENT_QUOTE_ONLY
+
 
 def tencent_symbol_from_secid(secid: str) -> str | None:
     """东财 secid → 腾讯符号：1.600519→sh600519，0.920000→bj920000，105.QQQ→usQQQ。
@@ -25,6 +42,8 @@ def tencent_symbol_from_secid(secid: str) -> str | None:
     北交所 secid 与深市同为 ``0.`` 前缀，但腾讯行情用 ``bj`` 符号
     （``sz920000`` 返回空值）；不区分会把北交所股票误报成「不存在」。
     """
+    if secid in _TENCENT_QUOTE_ONLY:
+        return _TENCENT_QUOTE_ONLY[secid]
     if "." not in secid:
         return None
     prefix, code = secid.split(".", 1)
@@ -169,6 +188,161 @@ def parse_qt_line_us(line: str, *, symbol: SymbolRef) -> Quote | MarketError:
         limit_down=None,
         # 东财主源美股 Quote 也不带 as_of；腾讯美股时间戳为美东时间，保持一致置空
         as_of=None,
+    )
+
+
+def _quote_plain(
+    symbol: SymbolRef,
+    *,
+    name: str,
+    price: float,
+    open_px: float | None,
+    high: float | None,
+    low: float | None,
+    prev_close: float | None,
+    change_pct: float | None,
+    change_amount: float | None,
+    as_of: datetime | None,
+) -> Quote:
+    if change_pct is None and prev_close:
+        change_amount = price - prev_close
+        change_pct = round(change_amount / prev_close * 100, 3)
+    return Quote(
+        symbol=SymbolRef(
+            code=symbol.code,
+            name=name,
+            asset_class=symbol.asset_class,
+            exchange=symbol.exchange,
+            provider_symbol=symbol.provider_symbol,
+            sec_type=symbol.sec_type,
+        ),
+        price=price,
+        open=open_px,
+        high=high,
+        low=low,
+        prev_close=prev_close,
+        change_pct=change_pct,
+        change_amount=change_amount,
+        volume=None,
+        amount=None,
+        turnover_rate=None,
+        pe=None,
+        pb=None,
+        market_cap=None,
+        float_market_cap=None,
+        industry=None,
+        limit_up=None,
+        limit_down=None,
+        as_of=as_of,
+    )
+
+
+def parse_qt_line_hf(line: str, *, symbol: SymbolRef) -> Quote | MarketError:
+    """外盘 hf_ 逗号行。2026-10-09 与新浪 hf_XAU 同列。
+
+    0 现价, 4 最高, 5 最低, 6 时间, 7 昨收, 8 今开, 12 日期, 13 名称。
+    """
+    parts = line.split(",")
+    if len(parts) < 14:
+        return parse_error("腾讯外盘盘口字段不足", provider=PROVIDER)
+    price = _f(parts, 0)
+    prev_close = _f(parts, 7)
+    open_px = _f(parts, 8)
+    if price is None or price <= 0:
+        price = prev_close or open_px
+    if price is None or price <= 0:
+        return empty_error("腾讯外盘盘口无有效报价", provider=PROVIDER)
+    as_of = None
+    date_raw = parts[12].strip() if len(parts) > 12 else ""
+    time_raw = parts[6].strip()
+    if date_raw and time_raw:
+        if len(time_raw) == 5:
+            time_raw = f"{time_raw}:00"
+        try:
+            as_of = datetime.strptime(f"{date_raw} {time_raw}", "%Y-%m-%d %H:%M:%S")
+        except ValueError:
+            as_of = None
+    name = parts[13].strip() or symbol.name
+    return _quote_plain(
+        symbol,
+        name=name,
+        price=price,
+        open_px=open_px,
+        high=_f(parts, 4),
+        low=_f(parts, 5),
+        prev_close=prev_close,
+        change_pct=None,
+        change_amount=None,
+        as_of=as_of,
+    )
+
+
+def parse_qt_line_hk(line: str, *, symbol: SymbolRef) -> Quote | MarketError:
+    """港股指数 ~ 行。2026-10-09 hkHSI。价位列与 A 股相同，量额不是手/万。"""
+    parts = line.split("~")
+    if len(parts) < 35:
+        return parse_error("腾讯港股指数盘口字段不足", provider=PROVIDER)
+    price = _f(parts, 3)
+    prev_close = _f(parts, 4)
+    open_px = _f(parts, 5)
+    if price is None or price <= 0:
+        price = prev_close or open_px
+    if price is None or price <= 0:
+        return empty_error("腾讯港股指数盘口无有效报价", provider=PROVIDER)
+    as_of = None
+    raw_ts = parts[30].strip() if len(parts) > 30 else ""
+    if raw_ts:
+        try:
+            as_of = datetime.strptime(raw_ts, "%Y/%m/%d %H:%M:%S")
+        except ValueError:
+            as_of = None
+    return _quote_plain(
+        symbol,
+        name=parts[1].strip() or symbol.name,
+        price=price,
+        open_px=open_px,
+        high=_f(parts, 33),
+        low=_f(parts, 34),
+        prev_close=prev_close,
+        change_pct=_f(parts, 32),
+        change_amount=_f(parts, 31),
+        as_of=as_of,
+    )
+
+
+def parse_qt_line_fx(line: str, *, symbol: SymbolRef) -> Quote | MarketError:
+    """外汇 ~ 行。2026-10-09 fxUSDJPY / fxUSDCHF。
+
+    1 名称, 3 现价, 5 时间, 6 昨收, 7 今开, 8 高, 9 低, 12 涨跌, 13 涨跌%。
+    """
+    parts = line.split("~")
+    if len(parts) < 14:
+        return parse_error("腾讯外汇盘口字段不足", provider=PROVIDER)
+    price = _f(parts, 3)
+    prev_close = _f(parts, 6)
+    open_px = _f(parts, 7)
+    if price is None or price <= 0:
+        price = prev_close or open_px
+    if price is None or price <= 0:
+        return empty_error("腾讯外汇盘口无有效报价", provider=PROVIDER)
+    as_of = None
+    raw_ts = parts[5].strip()
+    if len(raw_ts) >= 14 and raw_ts[:14].isdigit():
+        try:
+            as_of = datetime.strptime(raw_ts[:14], "%Y%m%d%H%M%S")
+        except ValueError:
+            as_of = None
+    return _quote_plain(
+        symbol,
+        name=parts[1].strip() or symbol.name,
+        price=price,
+        open_px=open_px,
+        high=_f(parts, 8),
+        low=_f(parts, 9),
+        prev_close=prev_close,
+        change_pct=_f(parts, 13),
+        change_amount=_f(parts, 12),
+        as_of=as_of,
     )
 
 

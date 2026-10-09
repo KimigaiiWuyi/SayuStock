@@ -6,7 +6,7 @@ from gsuid_core.utils.plugins_config.gs_config import StringConfig
 from .config_default import CONFIG_DEFAULT
 from ..utils.resource_path import CONFIG_PATH
 
-# 雪球新闻推送分级的三个群列表键（stock_news 消费；优先级：小时 > 交易时段 > 每日）
+# 财经快讯推送分级的三个群列表键（stock_news 消费；优先级：小时 > 交易时段 > 每日）
 _NEWS_PUSH_LIST_NAMES = {
     "news_push_hourly_groups": "小时汇总",
     "news_push_trading_session_groups": "交易时段汇总",

@@ -52,17 +52,41 @@ US_INDEX_MINK: dict[str, str] = {
 }
 
 
-# 东财专有市场里，新浪盘口实测有行的品种。K 线接口不认这些符号。
-# 118 上金所 Au99.99；220 三十债主连 = 30 年国债期货连续。
+# 东财专有市场里，新浪只有盘口、且符号与 secid 不同名的品种。
+# K 线接口不认这些符号。118 是沪金99；122.XAU 是伦敦金，两只不要混。
 _SINA_QUOTE_ONLY: dict[str, str] = {
     "118.AU9999": "gds_AU9999",
     "220.TLM": "nf_TL0",
+    "100.HSI": "rt_hkHSI",
+    "100.N225": "b_NKY",
+    "100.FTSE": "b_UKX",
+    "100.FCHI": "b_CAC",
+    "100.GDAXI": "b_DAX",
+    "122.XAU": "hf_XAU",
+    "122.XAG": "hf_XAG",
+    "102.CL00Y": "hf_CL",
+    "109.LCPT": "hf_CAD",
+    "113.rbm": "nf_RB0",
+    "114.mm": "nf_M0",
+    "114.jmm": "nf_JM0",
+    "114.lhm": "nf_LH0",
+    "133.USDCNH": "fx_susdcnh",
+    "119.USDCHF": "fx_susdchf",
+    "119.USDJPY": "fx_susdjpy",
+    "100.UDI": "DINIW",
 }
+# 商品连续：名称在首列。三十债 nf_TL0 不在这里。
+_SINA_DOMESTIC_NF = frozenset({"nf_RB0", "nf_M0", "nf_JM0", "nf_LH0"})
 
 
 def sina_quote_only(secid: str) -> bool:
     """该 secid 在新浪只有盘口，没有分时/K 线。"""
     return secid in _SINA_QUOTE_ONLY
+
+
+def sina_domestic_nf(sina_sym: str) -> bool:
+    """商品连续（螺纹/豆粕/焦煤/生猪）。列序与三十债不同。"""
+    return sina_sym in _SINA_DOMESTIC_NF
 
 
 def sina_symbol_from_secid(secid: str) -> str | None:
@@ -199,8 +223,14 @@ def parse_hq_line(line: str, *, symbol: SymbolRef) -> Quote | MarketError:
 def _clock(date_raw: str | None, time_raw: str | None) -> datetime | None:
     if not date_raw or not time_raw:
         return None
+    date_text = date_raw.strip().replace("/", "-")
+    time_text = time_raw.strip()
+    if len(time_text) == 6 and time_text.isdigit():
+        time_text = f"{time_text[0:2]}:{time_text[2:4]}:{time_text[4:6]}"
+    elif len(time_text) == 5 and time_text[2] == ":":
+        time_text = f"{time_text}:00"
     try:
-        return datetime.strptime(f"{date_raw} {time_raw}", "%Y-%m-%d %H:%M:%S")
+        return datetime.strptime(f"{date_text} {time_text}", "%Y-%m-%d %H:%M:%S")
     except ValueError:
         return None
 
@@ -306,6 +336,124 @@ def parse_hq_line_cffex(line: str, *, symbol: SymbolRef) -> Quote | MarketError:
         prev_close=prev_close,
         volume=_f(parts, 4),
         as_of=_clock(_s(parts, 36), _s(parts, 37)),
+    )
+
+
+def parse_hq_line_hk(line: str, *, symbol: SymbolRef) -> Quote | MarketError:
+    """港股指数 rt_hk/hk。2026-10-09 rt_hkHSI。
+
+    1 名称, 2 开, 3 昨收, 4 高, 5 低, 6 现价, 17 日期, 18 时间。
+    成交额单位对不上恒指全日成交，不填 amount。
+    """
+    parts = line.split(",")
+    if len(parts) < 19:
+        return parse_error("新浪港股指数盘口字段不足", provider=PROVIDER)
+    price = _f(parts, 6)
+    prev_close = _f(parts, 3)
+    open_px = _f(parts, 2)
+    if price is None or price <= 0:
+        price = prev_close or open_px
+    if price is None or price <= 0:
+        return empty_error("新浪港股指数盘口无有效报价", provider=PROVIDER)
+    return _quote_from_ohlc(
+        symbol,
+        name=_s(parts, 1) or symbol.name,
+        price=price,
+        open_px=open_px,
+        high=_f(parts, 4),
+        low=_f(parts, 5),
+        prev_close=prev_close,
+        volume=None,
+        as_of=_clock(_s(parts, 17), _s(parts, 18)),
+    )
+
+
+def parse_hq_line_world(line: str, *, symbol: SymbolRef) -> Quote | MarketError:
+    """b_ 全球指数。2026-10-09 b_NKY / b_UKX。
+
+    0 名称, 1 现价, 6 行情日期, 7 时间, 8 开, 9 昨收, 10 高, 11 低。
+    第 4、5 列可能是过期标签，日期以第 6 列为准。
+    """
+    parts = line.split(",")
+    if len(parts) < 12:
+        return parse_error("新浪全球指数盘口字段不足", provider=PROVIDER)
+    price = _f(parts, 1)
+    prev_close = _f(parts, 9)
+    open_px = _f(parts, 8)
+    if price is None or price <= 0:
+        price = prev_close or open_px
+    if price is None or price <= 0:
+        return empty_error("新浪全球指数盘口无有效报价", provider=PROVIDER)
+    return _quote_from_ohlc(
+        symbol,
+        name=_s(parts, 0) or symbol.name,
+        price=price,
+        open_px=open_px,
+        high=_f(parts, 10),
+        low=_f(parts, 11),
+        prev_close=prev_close,
+        volume=None,
+        as_of=_clock(_s(parts, 6), _s(parts, 7)),
+    )
+
+
+def parse_hq_line_fx(line: str, *, symbol: SymbolRef) -> Quote | MarketError:
+    """外汇与美元指数。2026-10-09 fx_susdcnh / DINIW。
+
+    0 时间, 3 昨收, 6 高, 7 低, 8 现价, 9 名称，日期在最后一列。
+    """
+    parts = line.split(",")
+    if len(parts) < 10:
+        return parse_error("新浪外汇盘口字段不足", provider=PROVIDER)
+    price = _f(parts, 8) or _f(parts, 1)
+    prev_close = _f(parts, 3)
+    if price is None or price <= 0:
+        price = prev_close
+    if price is None or price <= 0:
+        return empty_error("新浪外汇盘口无有效报价", provider=PROVIDER)
+    date_raw = _s(parts, len(parts) - 1)
+    if date_raw is None or ("-" not in date_raw and "/" not in date_raw):
+        date_raw = None
+    return _quote_from_ohlc(
+        symbol,
+        name=_s(parts, 9) or symbol.name,
+        price=price,
+        open_px=None,
+        high=_f(parts, 6),
+        low=_f(parts, 7),
+        prev_close=prev_close,
+        volume=None,
+        as_of=_clock(date_raw, _s(parts, 0)),
+    )
+
+
+def parse_hq_line_commodity(line: str, *, symbol: SymbolRef) -> Quote | MarketError:
+    """内盘商品连续。2026-10-09 nf_RB0。名称在首列，不要走三十债解析。
+
+    0 名称, 1 时间 HHMMSS, 2 开, 3 高, 4 低, 8 现价, 10 昨结, 14 成交量, 17 日期。
+    """
+    parts = line.split(",")
+    if len(parts) < 18 or _f(parts, 0) is not None:
+        return parse_error("新浪商品连续盘口字段不足", provider=PROVIDER)
+    price = _f(parts, 8)
+    prev_close = _f(parts, 10)
+    if prev_close is None or prev_close <= 0:
+        prev_close = _f(parts, 5)
+    open_px = _f(parts, 2)
+    if price is None or price <= 0:
+        price = prev_close or open_px
+    if price is None or price <= 0:
+        return empty_error("新浪商品连续盘口无有效报价", provider=PROVIDER)
+    return _quote_from_ohlc(
+        symbol,
+        name=_s(parts, 0) or symbol.name,
+        price=price,
+        open_px=open_px,
+        high=_f(parts, 3),
+        low=_f(parts, 4),
+        prev_close=prev_close,
+        volume=_f(parts, 14),
+        as_of=_clock(_s(parts, 17), _s(parts, 1)),
     )
 
 

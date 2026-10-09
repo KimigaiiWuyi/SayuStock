@@ -53,8 +53,8 @@ async def get_token() -> object:
         page = await context.new_page()
 
         try:
-            # 导航到目标页面
-            await page.goto("https://xueqiu.com/", wait_until="networkidle", timeout=15000)
+            # 首页只下发 acw_tc，匿名 xq_a_token 改由 /hq 下发
+            await page.goto("https://xueqiu.com/hq", wait_until="networkidle", timeout=15000)
             # 获取所有 Cookie
             cookies = await context.cookies()
             logger.debug(f"[SayuStock] 获取Cookie: {cookies}")

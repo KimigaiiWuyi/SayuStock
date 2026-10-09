@@ -1,9 +1,10 @@
-"""雪球新闻推送：发送失败不推进水位线 / 不记已发送、合并转发禁用时退回纯文本。全部离线。"""
+"""快讯汇总：发送失败不推进水位线 / 不记已发送、合并转发禁用时退回纯文本。全部离线。"""
 
 import asyncio
 from typing import Any, Dict, List, Union, Optional
 
 from SayuStock.stock_news import _DIGEST_BATCH, _send_digest, _digest_payload, _throttled_send
+from SayuStock.utils.news import NewsItem
 from SayuStock.utils.models import ItemType
 
 
@@ -13,7 +14,7 @@ class FakeSubscribe:
     def __init__(self, send_result: Union[int, None] = None) -> None:
         self.group_id = "10001"
         self.bot_id = "bot"
-        self.extra_message = "0"
+        self.extra_message = "eastmoney:0"
         self.send_result = send_result
         self.sent: List[Optional[Union[str, List[str]]]] = []
 
@@ -22,7 +23,17 @@ class FakeSubscribe:
         return self.send_result
 
 
-def _item(news_id: int, created_at: int) -> ItemType:
+def _item(news_id: int, created_at: int) -> NewsItem:
+    return NewsItem(
+        source="eastmoney",
+        id=str(news_id),
+        text=f"新闻{news_id}",
+        published_ms=created_at,
+        important=True,
+    )
+
+
+def _xq_item(news_id: int, created_at: int) -> ItemType:
     return ItemType(
         id=news_id,
         text=f"新闻{news_id}",
@@ -40,12 +51,12 @@ def _item(news_id: int, created_at: int) -> ItemType:
 def _patch(monkeypatch: Any) -> tuple:
     """掐掉 2-5s 节流与落库副作用，返回 (已发送记录, 水位线记录) 两个收集器。"""
     sent: List[tuple] = []
-    watermark: List[int] = []
+    watermark: List[str] = []
 
     async def _instant_sleep(_delay: float) -> None:
         return None
 
-    async def _fake_watermark(_sub: object, value: int) -> None:
+    async def _fake_watermark(_sub: object, value: str) -> None:
         watermark.append(value)
 
     monkeypatch.setattr("SayuStock.stock_news.asyncio.sleep", _instant_sleep)
@@ -91,11 +102,11 @@ def test_digest_success_marks_and_advances(monkeypatch: Any) -> None:
 
     asyncio.run(_send_digest(sub, items, "小时汇总"))  # type: ignore[arg-type]
 
-    assert [nid for _, nid in sent] == [1, 2, 3]
-    assert watermark == [3]
+    assert [nid for _, nid in sent] == ["eastmoney:1", "eastmoney:2", "eastmoney:3"]
+    assert watermark == ["eastmoney:3"]
     # 首条批次带标题，其余不带
     assert isinstance(sub.sent[0], list)
-    assert sub.sent[0][0].startswith("📰 雪球7x24 · 小时汇总")
+    assert sub.sent[0][0].startswith("📰 东财7x24 · 小时汇总")
 
 
 def test_digest_partial_batch_failure_stops_at_failed_batch(monkeypatch: Any) -> None:
@@ -118,15 +129,15 @@ def test_digest_partial_batch_failure_stops_at_failed_batch(monkeypatch: Any) ->
 
     asyncio.run(_send_digest(sub, items, "每日汇总"))  # type: ignore[arg-type]
 
-    assert [nid for _, nid in sent] == list(range(1, _DIGEST_BATCH + 1))
-    assert watermark == [_DIGEST_BATCH]
+    assert [nid for _, nid in sent] == [f"eastmoney:{i}" for i in range(1, _DIGEST_BATCH + 1)]
+    assert watermark == [f"eastmoney:{_DIGEST_BATCH}"]
 
 
 def test_digest_skips_nothing_when_all_fail(monkeypatch: Any) -> None:
     """没有可发条目时不写水位线（避免无谓落库）"""
     _sent, watermark = _patch(monkeypatch)
     sub = FakeSubscribe()
-    sub.extra_message = "99"
+    sub.extra_message = "eastmoney:99"
     items = [_item(i, 1_700_000_000_000 + i * 60_000) for i in range(1, 4)]
 
     asyncio.run(_send_digest(sub, items, "每日汇总"))  # type: ignore[arg-type]
@@ -179,7 +190,7 @@ def test_get_news_light_path_paginates_three_pages(monkeypatch: Any) -> None:
         return {
             "next_max_id": max_id - 1,
             "next_id": max_id,
-            "items": [_item(100 - pages["n"], 1_700_000_000_000 - pages["n"] * 1000)],
+            "items": [_xq_item(100 - pages["n"], 1_700_000_000_000 - pages["n"] * 1000)],
         }
 
     monkeypatch.setattr(req, "get_news_list", _fake_list)
@@ -205,7 +216,7 @@ def test_get_news_cover_ms_backfills_until_window_covered(monkeypatch: Any) -> N
         return {
             "next_max_id": max_id - 1,
             "next_id": max_id,
-            "items": [_item(1000 - pages["n"], now_ms - pages["n"] * step_ms)],
+            "items": [_xq_item(1000 - pages["n"], now_ms - pages["n"] * step_ms)],
         }
 
     monkeypatch.setattr(req, "get_news_list", _fake_list)
@@ -226,7 +237,7 @@ def test_get_news_400016_backs_off_to_cache(monkeypatch: Any) -> None:
     monkeypatch.setattr(
         req,
         "NEWS",
-        {"next_max_id": 0, "items": [_item(7, 1_700_000_000_000)], "next_id": 0},
+        {"next_max_id": 0, "items": [_xq_item(7, 1_700_000_000_000)], "next_id": 0},
     )
 
     async def _limited(max_id: int = 0) -> int:

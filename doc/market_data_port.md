@@ -57,6 +57,13 @@ snap = await market.hotmap()
 
 品种备忘（2026-10-09）：中证2000 `2.932000` 腾讯/新浪/同花顺都没有，前缀 `2` 映射为 None。
 黄金9999 新浪是 `gds_AU9999`（沪金99，仅盘口）。三十债主连新浪是 `nf_TL0`（仅盘口，成交额留空）。
+全天候备用符号与东财 secid 不同名，只锁盘口。新浪：恒生 `rt_hkHSI`、日经 `b_NKY`、富时 `b_UKX`、
+CAC `b_CAC`、DAX `b_DAX`、伦敦金/银 `hf_XAU`/`hf_XAG`（不是沪金99，也不是 `hf_GC`）、
+NYMEX 原油 `hf_CL`、综合铜 `hf_CAD`、螺纹/豆粕/焦煤/生猪 `nf_RB0`/`nf_M0`/`nf_JM0`/`nf_LH0`、
+离岸人民币/瑞郎/日元 `fx_susdcnh`/`fx_susdchf`/`fx_susdjpy`、美元指数 `DINIW`。
+腾讯：恒生 `hkHSI`、伦敦金/银/原油/伦铜 `hf_*`、日元/瑞郎 `fxUSDJPY`/`fxUSDCHF`。
+`100.KOSPI200`、`100.SXXP`、`171.*` 国债收益率没有新鲜盘口。国际市场列表仍只有东财；
+列表失败时全天候按单只报价画其余格子。
 
 ## 行情API 数据源优先级（后台设置「行情API」）
 

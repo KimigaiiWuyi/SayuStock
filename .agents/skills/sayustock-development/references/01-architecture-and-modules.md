@@ -24,7 +24,7 @@ plugins/SayuStock/
 │   ├── __init__.py            # Plugins(name="SayuStock", force_prefix=["a","股票"])
 │   ├── version.py
 │   ├── stock_*/               # 功能子包（命令 / AI / 模拟盘…）
-│   ├── utils/                 # 共享：market / render / indicators / eastmoney / db
+│   ├── utils/                 # 共享：market / news / render / indicators / db
 │   ├── Kronos/                # vendored 预测模型（pyright exclude）
 │   └── tools/                 # 离线脚本（如 gen_A.py）
 ├── test/                      # pytest（从插件根或 monorepo 根跑）
@@ -49,7 +49,7 @@ plugins/SayuStock/
 | `stock_ai/` | Kronos 模型预测出图 |
 | `stock_agent/` | 注册 `stock_agent` 与模拟盘相关 AgentNode |
 | `stock_papertrade/` | 模拟盘命令、DB、撮合、策略、周期 gate |
-| `stock_news/` | 雪球 7x24 新闻订阅（群）；推送分四级：逐条实时（默认）/小时汇总/交易时段(08·12·16·22点)汇总/每日(08点)汇总，后三类群列表在 STOCK_CONFIG 配置 |
+| `stock_news/` | 财经快讯订阅（群，任务名仍是「雪球新闻订阅」）；推送分四级：逐条实时（默认）/小时汇总/交易时段(08·12·16·22点)汇总/每日(08点)汇总。取数走 `get_news_port()`，源顺序见 `news_source_order` |
 | `stock_help/` | 帮助图 + `register_help` |
 | `stock_status/` | 状态相关（若启用） |
 | `stock_config/` | `STOCK_CONFIG` / `CONFIG_DEFAULT` |
@@ -63,6 +63,12 @@ plugins/SayuStock/
 
 ```
 utils/
+├── news/                   # ★ 快讯抽象层（NewsPort + 东财/见闻/新浪/金十）
+│   ├── port.py             # NewsSource / NewsPort
+│   ├── registry.py         # get_news_port() / set_news_port()
+│   ├── fallback.py         # 按 news_source_order 失败或空列表顺延
+│   ├── models.py           # NewsItem / NewsFeed；水位线 source:id
+│   └── adapters/           # 供应商 JSON 只在这里解析
 ├── market/                 # ★ 行情抽象层（Port + adapters + models）
 │   ├── port.py             # MarketDataPort Protocol
 │   ├── facade.py           # build_default_market()

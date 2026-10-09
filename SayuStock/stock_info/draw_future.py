@@ -6,7 +6,14 @@ from gsuid_core.logger import logger
 from gsuid_core.utils.html_render import render_html_to_bytes
 from gsuid_core.ai_core.trigger_bridge import ai_return
 
-from ..utils.market import DisplayItem, from_quote, get_market, is_market_error, pick_display_items
+from ..utils.market import (
+    DisplayItem,
+    from_quote,
+    get_market,
+    is_market_error,
+    pick_display_items,
+    board_rows_to_items,
+)
 from ..utils.constant import bond, whsc, crypto, i_code, commodity
 from ..utils.sparkline import sparkline_from_series
 from ..utils.all_weather_html import (
@@ -22,6 +29,16 @@ ItemMap = dict[str, DisplayItem]
 SparkMap = dict[str, str]
 
 
+async def _quote_item(stock: str, display_name: str) -> DisplayItem | None:
+    q = await get_market().quote(stock)
+    if is_market_error(q):
+        return None
+    item = from_quote(q)
+    if display_name and display_name != item.name:
+        item = replace(item, name=display_name)
+    return item
+
+
 async def __get_item(
     result: ItemMap,
     stock: str,
@@ -29,22 +46,19 @@ async def __get_item(
     sparks: SparkMap | None,
 ) -> None:
     await asyncio.sleep(random.uniform(0.2, 1))
-    market = get_market()
     if sparks is None:
-        q = await market.quote(stock)
-        if is_market_error(q):
-            return
-        item = from_quote(q)
-        if display_name and display_name != item.name:
-            item = replace(item, name=display_name)
-        result[item.name] = item
+        item = await _quote_item(stock, display_name)
+        if item is not None:
+            result[item.name] = item
         return
-    series = await market.intraday(stock)
-    if is_market_error(series):
+    series = await get_market().intraday(stock)
+    if is_market_error(series) or series.quote is None:
+        # 外盘多数源只有盘口。分时失败仍留报价格，只是没有折线。
+        item = await _quote_item(stock, display_name)
+        if item is not None:
+            result[item.name] = item
         return
     q = series.quote
-    if q is None:
-        return
     item = from_quote(q)
     # 链上盖的是序列的 sourceBy，嵌套 quote 可能还是空的。
     if item.provider is None and series.provider:
@@ -99,32 +113,54 @@ async def _fetch_sparks(
     )
 
 
+def _index_queries() -> dict[str, str]:
+    """国际市场板块失败时，按单只 secid 报价。clist 键要去掉 ``i:``。"""
+    out: dict[str, str] = {}
+    for name, code in i_code.items():
+        secid = em_secid(code)
+        if secid:
+            out[name] = secid
+    return out
+
+
 async def draw_future_img() -> str | bytes:
     market = get_market()
     intl = await market.board("国际市场", limit=100, sort_asc=False)
-    if is_market_error(intl):
-        return intl.message
-    from ..utils.market import board_rows_to_items
-
-    data_gz = board_rows_to_items(intl.rows)
     sparks: SparkMap = {}
-    # 国际市场格子来自板块快照，折线另一次分时，两边的 sourceBy 都要进图角。
-    extra_sources: list[str | None] = [intl.provider]
+    # 板块快照与折线可能不是同一个源，图角两边都要收。
+    extra_sources: list[str | None] = []
+    board_message = intl.message if is_market_error(intl) else ""
+
+    async def _tail() -> ItemMap | None:
+        # 国际市场列表只有东财。列表失败改走单只报价，其余分区照常画。
+        if is_market_error(intl):
+            return await _get_items(_index_queries(), sparks)
+        extra_sources.append(intl.provider)
+        await _fetch_sparks(i_code, sparks, extra_sources)
+        return None
 
     results = await asyncio.gather(
         _get_items(commodity, sparks),
         _get_items(bond, sparks),
         _get_items(whsc, sparks),
         _get_items(crypto, sparks),
-        _fetch_sparks(i_code, sparks, extra_sources),
+        _tail(),
         return_exceptions=True,
     )
 
     def safe_map(result: object) -> ItemMap:
-        if isinstance(result, Exception) or not isinstance(result, dict):
+        if isinstance(result, BaseException) or not isinstance(result, dict):
             return {}
-        return result
+        out: ItemMap = {}
+        for key, value in result.items():
+            if isinstance(key, str) and isinstance(value, DisplayItem):
+                out[key] = value
+        return out
 
+    if is_market_error(intl):
+        data_gz = list(safe_map(results[4]).values())
+    else:
+        data_gz = board_rows_to_items(intl.rows)
     data2 = safe_map(results[0])
     data3 = safe_map(results[1])
     data4 = safe_map(results[2])
@@ -137,8 +173,11 @@ async def draw_future_img() -> str | bytes:
         ("外汇市场", pick_display_items(data4, whsc)),
         ("加密货币", pick_display_items(data5, crypto)),
     ]
+    visible = [(title, items) for title, items in sections if items]
+    if not visible:
+        return board_message or "全天候没有可展示的行情"
     _ai_return_all_weather(data_gz, data2, data3, data4, data5)
-    html = build_all_weather_html(sections, sparklines=sparks, sources=tuple(extra_sources))
+    html = build_all_weather_html(visible, sparklines=sparks, sources=tuple(extra_sources))
     _, height = all_weather_canvas_size(sections, sparks)
     try:
         return await render_html_to_bytes(

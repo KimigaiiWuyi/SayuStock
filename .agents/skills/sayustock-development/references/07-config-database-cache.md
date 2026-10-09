@@ -40,9 +40,10 @@ STOCK_CONFIG = StringConfig("SayuStock", CONFIG_PATH, CONFIG_DEFAULT)
 | `market_api_chain_quote` / `_kline` / `_board` / `_market` / `_exclusive` | 五域源链覆盖（盘口/分时、K线、板块/排行/菜单、大盘统计/资金、东财独占）；**默认值同样预填推荐链**（①②＝东财→腾讯→新浪；③④＝东财→新浪；⑤＝东财），清空 = 跟随全局链；`_IFACE_GROUPS` 把 14 接口映射到域，`resolve` 不配。每键 `options` 只列**真正实现了该组接口的源**（④⑤ 组的依据见覆盖面矩阵 §13.9），某组只有一个可选值 = 该组是它独占的 | ①②＝`["东方财富", "腾讯财经", "新浪财经"]`；③④＝`["东方财富", "新浪财经"]`；⑤＝`["东方财富"]` |
 | `ths_api_key` | 同花顺金融数据 API（扶摇 fuyao.aicubes.cn）的 X-api-key | 内置公共 Key |
 | `holdings_analysis_unlimited_users` | 持仓分析免每日限额的 `user_id` 列表；网页控制台改完热生效 | `[]` |
-| `news_push_hourly_groups` | 雪球新闻「小时汇总」群列表（类别2，每小时整点合并推送） | `[]` |
-| `news_push_trading_session_groups` | 雪球新闻「交易时段汇总」群列表（类别3，每日 08/12/16/22 点合并推送：隔夜/午间/收盘/晚间） | `[]` |
-| `news_push_daily_groups` | 雪球新闻「每日汇总」群列表（类别4，每日 08:00 合并推送） | `[]` |
+| `news_source_order` | 财经快讯源顺序。失败或空列表才试下一个；没写进列表的已知源排在后面兜底。可选 `eastmoney` / `wallstreetcn` / `sina` / `jin10` | `["eastmoney", "wallstreetcn", "sina", "jin10"]` |
+| `news_push_hourly_groups` | 财经快讯「小时汇总」群列表（类别2，每小时整点合并推送） | `[]` |
+| `news_push_trading_session_groups` | 财经快讯「交易时段汇总」群列表（类别3，每日 08/12/16/22 点合并推送：隔夜/午间/收盘/晚间） | `[]` |
+| `news_push_daily_groups` | 财经快讯「每日汇总」群列表（类别4，每日 08:00 合并推送） | `[]` |
 
 三个推送分级列表由 `stock_config.py` 的 `SayuStockConfig`（`StringConfig` 子类）覆写 `set_config`：
 保存任一列表后检查群号跨列表重叠并 `logger.warning` 告警（重叠群按 小时 > 交易时段 > 每日 优先遮蔽，

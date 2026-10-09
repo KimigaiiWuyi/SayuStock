@@ -9,7 +9,11 @@ from collections.abc import Sequence
 
 from .parse import (
     parse_qt_line,
+    parse_qt_line_fx,
+    parse_qt_line_hf,
+    parse_qt_line_hk,
     parse_qt_line_us,
+    tencent_quote_only,
     parse_kline_payload,
     parse_minute_payload,
     intraday_from_minute_bars,
@@ -56,9 +60,24 @@ _PERIOD_BARS: dict[KlinePeriod, int] = {
 # 美股：腾讯仅盘口可用；fqkline/mkline/minute 对美股无有效数据（实测
 # 日K只回上市首日+当日两根、分钟K param error、分时仅末点），交给注册表回落
 def _parse_us_or_cn(line: str, *, qt_sym: str, symbol: SymbolRef) -> Quote | MarketError:
+    if qt_sym.startswith("hf_"):
+        return parse_qt_line_hf(line, symbol=symbol)
+    if qt_sym.startswith(("fx", "wh")):
+        return parse_qt_line_fx(line, symbol=symbol)
+    if qt_sym.startswith("hk") and not qt_sym[2:].isdigit():
+        return parse_qt_line_hk(line, symbol=symbol)
     if qt_sym.startswith("us"):
         return parse_qt_line_us(line, symbol=symbol)
     return parse_qt_line(line, symbol=symbol)
+
+
+def _spot_only(symbol: SymbolRef, qt_sym: str, *, kind: str) -> MarketError | None:
+    """外盘/外汇/港股指数只核过盘口，不能送进 A 股 K 线解析。"""
+    if tencent_quote_only(symbol.provider_symbol):
+        return unsupported("腾讯该品种仅有盘口", provider=PROVIDER)
+    if qt_sym.startswith("us"):
+        return unsupported(f"腾讯美股不支持{kind}（仅盘口）", provider=PROVIDER)
+    return None
 
 
 class TencentMarketData(PartialMarketData):
@@ -136,8 +155,9 @@ class TencentMarketData(PartialMarketData):
             return symbol
         qt_sym = tencent_symbol_from_secid(symbol.provider_symbol)
         assert qt_sym is not None
-        if qt_sym.startswith("us"):
-            return unsupported("腾讯美股不支持分时（仅盘口）", provider=PROVIDER)
+        spot = _spot_only(symbol, qt_sym, kind="分时")
+        if spot is not None:
+            return spot
         quote = await self.quote(query)
         payload = await fetch_minute(qt_sym)
         if isinstance(payload, str):
@@ -160,8 +180,9 @@ class TencentMarketData(PartialMarketData):
             return symbol
         qt_sym = tencent_symbol_from_secid(symbol.provider_symbol)
         assert qt_sym is not None
-        if qt_sym.startswith("us"):
-            return unsupported("腾讯美股不支持分时（仅盘口）", provider=PROVIDER)
+        spot = _spot_only(symbol, qt_sym, kind="分时")
+        if spot is not None:
+            return spot
         days = 5 if ndays > 5 else ndays
         payload = await fetch_mkline(qt_sym, "m1", min(2000, days * 240 + 30))
         if isinstance(payload, str):
@@ -201,8 +222,9 @@ class TencentMarketData(PartialMarketData):
             return symbol
         qt_sym = tencent_symbol_from_secid(symbol.provider_symbol)
         assert qt_sym is not None
-        if qt_sym.startswith("us"):
-            return unsupported("腾讯美股不支持K线（仅盘口）", provider=PROVIDER)
+        spot = _spot_only(symbol, qt_sym, kind="K线")
+        if spot is not None:
+            return spot
         datalen = _PERIOD_BARS.get(period, 400)
         if start is not None:
             end_d = end or date.today()

@@ -113,6 +113,7 @@ CI 用 **basedpyright**（钉版本），不要用官方 pyright（见 §10.5.4�
 | 自选 / 全天候 HTML、sparkline | `test_sparkline` / `test_my_stock_html` / `test_all_weather_html` |
 | 本地缓存出 PNG | `test_offline_card_render`（无 `*_single-stock*_data.json` 必须 skip） |
 | `chart_base` 相对 import / 末端标注 | `test_end_label_dodge`（collection 即校验 compat 桩） |
+| 快讯 NewsPort / 汇总水位线 | `test_news_port` + `test_news_digest_retry` |
 | 大范围重构 | 全量 `pytest test/` + `basedpyright --pythonpath <venv>/python` |
 
 ## 8.7 Fixtures 约定

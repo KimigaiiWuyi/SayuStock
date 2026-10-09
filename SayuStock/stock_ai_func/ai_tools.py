@@ -16,6 +16,7 @@ from gsuid_core.ai_core.models import ToolContext
 from gsuid_core.ai_core.register import ai_tools
 from gsuid_core.utils.html_render import render_md_to_bytes
 
+from ..utils.news import source_label, get_news_port, is_news_error
 from ..utils.market import (
     KlinePeriod,
     get_market,
@@ -23,7 +24,6 @@ from ..utils.market import (
     is_market_error,
 )
 from ..utils.get_OKX import get_all_crypto_price
-from ..utils.request import get_news
 from ..utils.stock.request_utils import get_code_id
 
 
@@ -316,7 +316,7 @@ async def get_market_ranking(
 
 @ai_tools(
     covers=[
-        "实时财经新闻快讯：雪球7x24市场动态、宏观/行业/个股要闻、政策与事件驱动",
+        "实时财经新闻快讯：东财/华尔街见闻/新浪/金十，宏观/行业/个股要闻、政策与事件驱动",
     ],
 )
 async def get_latest_news(
@@ -326,7 +326,8 @@ async def get_latest_news(
     """
     获取最新财经新闻
 
-    获取雪球7x24小时最新财经新闻，用于了解市场动态和重要资讯。
+    获取最新财经快讯，用于了解市场动态和重要资讯。
+    走统一新闻口，按配置的源顺序取值，前一个失败才换下一个。
     注意：订阅/取消订阅新闻请使用触发器命令。
 
     Args:
@@ -335,24 +336,15 @@ async def get_latest_news(
     Returns:
         新闻列表文本
     """
-    news = await get_news()
-    if isinstance(news, int):
-        return f"获取新闻失败: {news}"
+    feed = await get_news_port().latest(limit=limit)
+    if is_news_error(feed):
+        return f"获取新闻失败: {feed.code}"
 
-    _, news_data = news
-    items = news_data.get("items", [])
-
-    result = "【财经新闻】\n"
-    for item in items[:limit]:
-        ts = item.get("created_at", 0)
-        if not isinstance(ts, (int, float)):
-            ts = 0
-        dt = datetime.fromtimestamp(ts / 1000).strftime("%m-%d %H:%M") if ts else "??-??"
-        text = item.get("text", "")
-        if not isinstance(text, str):
-            text = str(text)
+    result = f"【财经新闻·{source_label(feed.source)}】\n"
+    for item in feed.items[:limit]:
+        dt = datetime.fromtimestamp(item.published_ms / 1000).strftime("%m-%d %H:%M")
         # 完整摘要（上限 280 字），避免 50 字截断导致代理无法研判
-        body = text if len(text) <= 280 else text[:277] + "..."
+        body = item.text if len(item.text) <= 280 else item.text[:277] + "..."
         result += f"[{dt}] {body}\n"
 
     return result

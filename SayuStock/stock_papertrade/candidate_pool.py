@@ -494,18 +494,16 @@ _KNOWN_NAMES = {
 
 
 async def _from_news_extract_tickers(limit: int = 50) -> List[str]:
-    """从雪球 7x24 新闻文本里提取股票代码/名称 → 6 位代码。"""
+    """从财经快讯文本里提取股票代码/名称 → 6 位代码。"""
     try:
-        from ..utils.request import get_news
+        from ..utils.news import get_news_port, is_news_error
 
-        news = await get_news()
-        if isinstance(news, int):
+        feed = await get_news_port().latest(limit=limit)
+        if is_news_error(feed):
             return []
-        _, news_data = news
-        items = news_data.get("items", [])[:limit]
         found: Set[str] = set()
-        for it in items:
-            text = it.get("text", "") or it.get("desc", "") or ""
+        for it in feed.items[:limit]:
+            text = it.text
             # 1) 提取 6 位数字
             for m in _TICKER_RE.findall(text):
                 found.add(m)

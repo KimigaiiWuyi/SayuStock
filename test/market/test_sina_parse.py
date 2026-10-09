@@ -13,6 +13,8 @@ from SayuStock.utils.market.adapters.sina.parse import (
     parse_hq_line,
     parse_rank_rows,
     sina_quote_only,
+    parse_hq_line_fx,
+    parse_hq_line_hk,
     parse_hq_line_us,
     parse_kline_rows,
     parse_node_board,
@@ -21,10 +23,12 @@ from SayuStock.utils.market.adapters.sina.parse import (
     parse_minline_rows,
     parse_us_mink_rows,
     parse_hq_line_cffex,
+    parse_hq_line_world,
     parse_us_daily_rows,
     parse_industry_summary,
     parse_us_mink_intraday,
     sina_symbol_from_secid,
+    parse_hq_line_commodity,
     sina_us_mink_symbol_from_secid,
 )
 
@@ -103,6 +107,29 @@ def test_sina_symbol_from_secid_maps_bse_to_bj_prefix() -> None:
     assert sina_quote_only("118.AU9999")
     assert sina_quote_only("220.TLM")
     assert not sina_quote_only("1.600519")
+    # 全天候：东财 secid 与新浪符号不同名。伦敦金不是沪金99。
+    assert sina_symbol_from_secid("100.HSI") == "rt_hkHSI"
+    assert sina_symbol_from_secid("100.N225") == "b_NKY"
+    assert sina_symbol_from_secid("100.FTSE") == "b_UKX"
+    assert sina_symbol_from_secid("100.FCHI") == "b_CAC"
+    assert sina_symbol_from_secid("100.GDAXI") == "b_DAX"
+    assert sina_symbol_from_secid("122.XAU") == "hf_XAU"
+    assert sina_symbol_from_secid("122.XAG") == "hf_XAG"
+    assert sina_symbol_from_secid("102.CL00Y") == "hf_CL"
+    assert sina_symbol_from_secid("109.LCPT") == "hf_CAD"
+    assert sina_symbol_from_secid("113.rbm") == "nf_RB0"
+    assert sina_symbol_from_secid("114.mm") == "nf_M0"
+    assert sina_symbol_from_secid("114.jmm") == "nf_JM0"
+    assert sina_symbol_from_secid("114.lhm") == "nf_LH0"
+    assert sina_symbol_from_secid("133.USDCNH") == "fx_susdcnh"
+    assert sina_symbol_from_secid("119.USDJPY") == "fx_susdjpy"
+    assert sina_symbol_from_secid("119.USDCHF") == "fx_susdchf"
+    assert sina_symbol_from_secid("100.UDI") == "DINIW"
+    assert sina_symbol_from_secid("100.KOSPI200") is None
+    assert sina_symbol_from_secid("100.SXXP") is None
+    assert sina_symbol_from_secid("171.CN10Y") is None
+    assert sina_quote_only("122.XAU")
+    assert not sina_quote_only("100.SPX")
 
 
 def test_sina_us_mink_symbol_from_secid() -> None:
@@ -432,6 +459,90 @@ def test_parse_sge_and_cffex_quote_lines() -> None:
     assert parsed.change_pct == 0.197
     assert parsed.as_of == datetime(2026, 10, 9, 13, 11, 3)
     assert is_market_error(parse_hq_line_cffex("1,2,3", symbol=bond))
+
+
+def _ref(secid: str, name: str) -> SymbolRef:
+    return SymbolRef(
+        code=secid.split(".", 1)[-1],
+        name=name,
+        asset_class=AssetClass.INDEX,
+        exchange="",
+        provider_symbol=secid,
+    )
+
+
+def test_parse_all_weather_sina_aliases() -> None:
+    """2026-10-09 全天候备用符号实采。列序按这条样本锁住。"""
+    hk = (
+        "HSI,恒生指数,23941.260,23785.791,24224.050,23941.260,24177.969,392.180,1.650,"
+        "0.000,0.000,156113728.346,8854733813,0.000,0.000,28056.100,22518.000,"
+        "2026/10/09,14:30:54,,,,,,"
+    )
+    hk_q = parse_hq_line_hk(hk, symbol=_ref("100.HSI", "恒生指数"))
+    assert isinstance(hk_q, Quote)
+    assert hk_q.symbol.name == "恒生指数"
+    assert hk_q.price == 24177.969
+    assert hk_q.prev_close == 23785.791
+    assert hk_q.high == 24224.050
+    assert hk_q.change_pct == 1.649
+    assert hk_q.amount is None
+    assert hk_q.as_of == datetime(2026, 10, 9, 14, 30, 54)
+
+    nky = (
+        "日经225指数,69030.8700,-11.24,-0.02,2:12 AM,14:12:00,2026-10-09,14:30:01,"
+        "68648.5000,69042.1100,69143.4500,68150.0200,0"
+    )
+    nky_q = parse_hq_line_world(nky, symbol=_ref("100.N225", "日经225"))
+    assert isinstance(nky_q, Quote)
+    assert nky_q.symbol.name == "日经225指数"
+    assert nky_q.price == 69030.87
+    assert nky_q.prev_close == 69042.11
+    assert nky_q.high == 69143.45
+    assert nky_q.low == 68150.02
+    assert nky_q.change_pct == -0.016
+    assert nky_q.as_of == datetime(2026, 10, 9, 14, 30, 1)
+
+    xau = (
+        "4189.90,4133.460,4189.90,4190.25,4207.46,4130.90,14:30:00,4133.46,4134.26,0,0,0,2026-10-09,伦敦金（现货黄金）"
+    )
+    xau_q = parse_hq_line_sge(xau, symbol=_ref("122.XAU", "XAU"))
+    assert isinstance(xau_q, Quote)
+    assert xau_q.symbol.name == "伦敦金（现货黄金）"
+    assert xau_q.price == 4189.90
+    assert xau_q.prev_close == 4133.46
+    assert xau_q.high == 4207.46
+    assert xau_q.open == 4134.26
+    assert xau_q.change_pct == 1.365
+
+    fx = (
+        "14:30:48,6.697500,6.697700,6.703400,86,6.703200,6.704200,6.695600,6.697500,"
+        "离岸人民币（香港）, -0.090000,-0.005900,0.001283,,6.995700,6.691300,,2026-10-09"
+    )
+    fx_q = parse_hq_line_fx(fx, symbol=_ref("133.USDCNH", "美元兑离岸人民币"))
+    assert isinstance(fx_q, Quote)
+    assert fx_q.symbol.name == "离岸人民币（香港）"
+    assert fx_q.price == 6.6975
+    assert fx_q.prev_close == 6.7034
+    assert fx_q.high == 6.7042
+    assert fx_q.low == 6.6956
+    assert fx_q.change_pct == -0.088
+    assert fx_q.as_of == datetime(2026, 10, 9, 14, 30, 48)
+
+    rb = (
+        "螺纹钢连续,143052,3069.000,3094.000,3065.000,0.000,3085.000,3086.000,3085.000,"
+        "0.000,3080.000,1185,608,1677042.000,758513,沪,螺纹钢,2026-10-09,1"
+    )
+    rb_q = parse_hq_line_commodity(rb, symbol=_ref("113.rbm", "螺纹钢主连"))
+    assert isinstance(rb_q, Quote)
+    assert rb_q.symbol.name == "螺纹钢连续"
+    assert rb_q.price == 3085.0
+    assert rb_q.open == 3069.0
+    assert rb_q.prev_close == 3080.0
+    assert rb_q.volume == 758513
+    assert rb_q.amount is None
+    assert rb_q.change_pct == 0.162
+    assert rb_q.as_of == datetime(2026, 10, 9, 14, 30, 52)
+    assert is_market_error(parse_hq_line_commodity("1,2,3", symbol=_ref("113.rbm", "螺纹钢主连")))
 
 
 # US_MinKService.getMinK?symbol=QQQ&type=5（2026-09-24 采样；时间戳为美东，跨日 bar 采样于头部）

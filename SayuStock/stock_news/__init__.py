@@ -14,8 +14,18 @@ from gsuid_core.subscribe import gs_subscribe
 from gsuid_core.utils.database.models import Subscribe
 from gsuid_core.utils.plugins_config.gs_config import sp_config
 
-from ..utils.models import ItemType
-from ..utils.request import NEWS_RETENTION_MS, get_news, clean_news
+from ..utils.news import (
+    NEWS_RETENTION_MS,
+    NewsFeed,
+    NewsItem,
+    id_newer,
+    source_label,
+    get_news_port,
+    is_news_error,
+    should_rebase,
+    split_watermark,
+)
+from ..utils.request import clean_news
 from ..utils.time_range import now_bjt
 
 sv_stock_subscribe = SV("订阅新闻", pm=2, area="GROUP")
@@ -42,8 +52,7 @@ _DIGEST_BATCH = 50
 # 新闻时间统一按北京时间展示（调度器时区也是 Asia/Shanghai）
 _BJT = ZoneInfo("Asia/Shanghai")
 
-# get_news 会读写全局 NEWS 缓存；多个定时任务并发调用会向缓存重复 append，
-# 用锁串行化所有取数入口
+# 多个定时任务会同时拉快讯。锁住取数，避免并发打同一新闻源
 _FETCH_LOCK = asyncio.Lock()
 
 # 所有新闻出站共用锁：整点多个 job 并发会同秒向多群发消息，QQ 风控对此最敏感
@@ -56,7 +65,7 @@ _SENT_HISTORY: Dict[str, deque] = {}
 _SENT_HISTORY_MAX = 50
 
 
-def _already_sent(group_id: Optional[str], news_id: int) -> bool:
+def _already_sent(group_id: Optional[str], news_id: str) -> bool:
     """检查该群最近是否已发送过这条新闻"""
     if not group_id:
         return False
@@ -66,7 +75,7 @@ def _already_sent(group_id: Optional[str], news_id: int) -> bool:
     return news_id in history
 
 
-def _mark_sent(group_id: Optional[str], news_id: int) -> None:
+def _mark_sent(group_id: Optional[str], news_id: str) -> None:
     """记录该群已发送过这条新闻"""
     if not group_id:
         return
@@ -141,7 +150,51 @@ def _resolve_category(
     return CATEGORY_REALTIME
 
 
-async def _update_watermark(subscribe: Subscribe, value: int) -> None:
+def _advance_mark(current: str, candidate: str) -> str:
+    """水位线只往同一源里更大的 id 走。"""
+    if not current:
+        return candidate
+    cur_id = split_watermark(current)[1]
+    new_id = split_watermark(candidate)[1]
+    if id_newer(new_id, cur_id):
+        return candidate
+    return current
+
+
+def _max_item(feed: NewsFeed) -> NewsItem | None:
+    if not feed.items:
+        return None
+    best = feed.items[0]
+    for item in feed.items[1:]:
+        if id_newer(item.id, best.id):
+            best = item
+    return best
+
+
+def _pending_important(feed: NewsFeed) -> list[NewsItem]:
+    """同一源内、要闻、按时间从旧到新，方便水位线逐条推进。"""
+    return sorted(
+        (item for item in feed.items if item.important),
+        key=lambda item: (item.published_ms, item.id),
+    )
+
+
+async def _rebase_if_needed(subscribe: Subscribe, feed: NewsFeed) -> bool:
+    """换源或旧雪球纯数字水位线不可比时，抬到当前最大 id，不补发历史。"""
+    if not should_rebase(subscribe.extra_message, feed.source):
+        return False
+    newest = _max_item(feed)
+    if newest is None:
+        return True
+    old_source, _old_id = split_watermark(subscribe.extra_message)
+    await _update_watermark(subscribe, newest.watermark())
+    logger.info(
+        f"[SayuStock] 群 {subscribe.group_id} 新闻水位线从 {old_source or '旧雪球'} 重置到 {newest.watermark()}"
+    )
+    return True
+
+
+async def _update_watermark(subscribe: Subscribe, value: str) -> None:
     """更新订阅的水位线（extra_message 存已发送的最大新闻 id）"""
     opt: Dict[str, Union[str, int, None]] = {
         "bot_id": subscribe.bot_id,
@@ -180,22 +233,26 @@ async def _update_watermark(subscribe: Subscribe, value: int) -> None:
 async def send_add_subscribe_info(bot: Bot, ev: Event) -> list[str] | None:
     logger.info("✅ [SayuStock] 开始执行[订阅新闻]")
     async with _FETCH_LOCK:
-        new = await get_news()
-    if isinstance(new, int):
-        logger.error(f"[SayuStock] 订阅新闻失败, 取消发送, 错误码：{new}!")
-        return await bot.send(f"❌ [SayuStock] 订阅新闻失败！错误码：{new}!")
+        feed = await get_news_port().latest()
+    if is_news_error(feed):
+        logger.error(f"[SayuStock] 订阅新闻失败, 取消发送, 错误码：{feed.code}!")
+        return await bot.send(f"❌ [SayuStock] 订阅新闻失败！错误码：{feed.code}!")
+    newest = _max_item(feed)
+    if newest is None:
+        return await bot.send("❌ [SayuStock] 订阅新闻失败！当前没有快讯")
 
     await gs_subscribe.add_subscribe(
         "session",
         TASK_NAME,
         ev,
-        extra_message=str(new[0]),
+        extra_message=newest.watermark(),
     )
     category = _resolve_category(ev.group_id, _load_category_sets())
     await bot.send(
-        "✅ [SayuStock] 订阅雪球新闻成功！\n"
+        "✅ [SayuStock] 订阅财经快讯成功！\n"
+        f"📰 当前源：{source_label(feed.source)}\n"
         f"📢 本群推送模式：{CATEGORY_DESC[category]}\n"
-        "推送分级可在网页控制台 SayuStock 配置中按群调整"
+        "推送分级和新闻源顺序可在网页控制台 SayuStock 配置中调整"
     )
 
 
@@ -224,46 +281,46 @@ async def send_subscribe_info() -> None:
     datas = await gs_subscribe.get_subscribe(TASK_NAME)
     if datas:
         async with _FETCH_LOCK:
-            news = await get_news()
-        if isinstance(news, int):
-            logger.error(f"[SayuStock] 发送订阅新闻失败, 取消发送, 错误码：{news}!")
+            feed = await get_news_port().latest()
+        if is_news_error(feed):
+            logger.error(f"[SayuStock] 发送订阅新闻失败, 取消发送, 错误码：{feed.code}!")
             return
 
         category_sets = _load_category_sets()
+        pending = _pending_important(feed)
 
         for subscribe in datas:
             # 汇总类（2/3/4）的群由各自的定时任务推送，这里跳过，水位线也不动
             if _resolve_category(subscribe.group_id, category_sets) != CATEGORY_REALTIME:
                 continue
+            if await _rebase_if_needed(subscribe, feed):
+                continue
 
-            # 用真正发送出去的最大 ID 作为水位线，
-            # 避免被雪球撤回的新闻卡死导致下一轮重发
-            sent_max_id: int = int(subscribe.extra_message or 0)
+            _source, watermark_id = split_watermark(subscribe.extra_message)
+            sent_mark = subscribe.extra_message or ""
 
-            # 发送
-            for new in reversed(news[1]["items"]):
-                em = subscribe.extra_message
-                if em and new["id"] > int(em) and new["mark"] in [1]:
-                    # 同一群内同一条新闻去重
-                    if _already_sent(subscribe.group_id, new["id"]):
-                        continue
-                    dt_local = _fmt_news_time(new["created_at"], "%Y-%m-%d %H:%M:%S")
-                    sent = await _throttled_send(subscribe, f"【{dt_local}】雪球7x24消息\n{new['text']}")
-                    if not sent:
-                        # 断在这里：水位线停在最后一条真正发出的 id，本条及之后的留待下轮重发
-                        logger.error(
-                            f"[SayuStock] 雪球新闻推送到群 {subscribe.group_id} 失败，"
-                            f"停在 id={sent_max_id}，剩余条目留待下轮重发"
-                        )
-                        break
-                    sent_max_id = max(sent_max_id, new["id"])
-                    _mark_sent(subscribe.group_id, new["id"])
+            for item in pending:
+                if not id_newer(item.id, watermark_id):
+                    continue
+                mark = item.watermark()
+                if _already_sent(subscribe.group_id, mark):
+                    continue
+                dt_local = _fmt_news_time(item.published_ms, "%Y-%m-%d %H:%M:%S")
+                label = source_label(item.source)
+                sent = await _throttled_send(subscribe, f"【{dt_local}】{label}\n{item.text}")
+                if not sent:
+                    logger.error(
+                        f"[SayuStock] 快讯推送到群 {subscribe.group_id} 失败，停在 {sent_mark}，剩余条目留待下轮重发"
+                    )
+                    break
+                sent_mark = _advance_mark(sent_mark, mark)
+                _mark_sent(subscribe.group_id, mark)
 
-            # 更新max_id
-            await _update_watermark(subscribe, sent_max_id)
+            if sent_mark and sent_mark != (subscribe.extra_message or ""):
+                await _update_watermark(subscribe, sent_mark)
 
 
-async def _send_digest(subscribe: Subscribe, items: List[ItemType], label: str) -> None:
+async def _send_digest(subscribe: Subscribe, items: List[NewsItem], label: str) -> None:
     """给单个订阅发送汇总。
 
     多条新闻以 ``List[str]`` 交给 ``subscribe.send``，走核心现成的合并实现
@@ -273,25 +330,29 @@ async def _send_digest(subscribe: Subscribe, items: List[ItemType], label: str) 
     分批发送：只有确认发出去的批次才记 _SENT_HISTORY 并推进水位线，
     某批失败即中断，本批及之后的条目留到下个窗口重发。
     """
-    watermark = int(subscribe.extra_message or 0)
-    sent_max_id = watermark
-    entries: List[Tuple[int, str]] = []
+    _source, watermark_id = split_watermark(subscribe.extra_message)
+    sent_mark = subscribe.extra_message or ""
+    entries: List[Tuple[str, str]] = []
     first_dt = last_dt = ""
+    origin = ""
 
-    for new in items:
-        if new["id"] > watermark and new["mark"] in [1]:
-            if _already_sent(subscribe.group_id, new["id"]):
-                continue
-            dt = _fmt_news_time(new["created_at"])
-            if not entries:
-                first_dt = dt
-            last_dt = dt
-            entries.append((new["id"], f"【{dt}】{new['text']}"))
+    for item in items:
+        if not item.important or not id_newer(item.id, watermark_id):
+            continue
+        mark = item.watermark()
+        if _already_sent(subscribe.group_id, mark):
+            continue
+        dt = _fmt_news_time(item.published_ms)
+        if not entries:
+            first_dt = dt
+            origin = source_label(item.source)
+        last_dt = dt
+        entries.append((mark, f"【{dt}】{item.text}"))
 
     if not entries:
         return
 
-    header = f"📰 雪球7x24 · {label}（共{len(entries)}条 · {first_dt}~{last_dt}）"
+    header = f"📰 {origin} · {label}（共{len(entries)}条 · {first_dt}~{last_dt}）"
     for i in range(0, len(entries), _DIGEST_BATCH):
         batch = entries[i : i + _DIGEST_BATCH]
         texts = [line for _, line in batch]
@@ -300,17 +361,17 @@ async def _send_digest(subscribe: Subscribe, items: List[ItemType], label: str) 
 
         if not await _throttled_send(subscribe, _digest_payload(texts)):
             logger.error(
-                f"[SayuStock] 雪球新闻{label}推送到群 {subscribe.group_id} 失败，"
-                f"停在 id={sent_max_id}，本批及后续留待下个窗口重发"
+                f"[SayuStock] 快讯{label}推送到群 {subscribe.group_id} 失败，"
+                f"停在 {sent_mark}，本批及后续留待下个窗口重发"
             )
             break
 
         for news_id, _ in batch:
             _mark_sent(subscribe.group_id, news_id)
-        sent_max_id = max(sent_max_id, max(news_id for news_id, _ in batch))
+            sent_mark = _advance_mark(sent_mark, news_id)
 
-    if sent_max_id > watermark:
-        await _update_watermark(subscribe, sent_max_id)
+    if sent_mark and sent_mark != (subscribe.extra_message or ""):
+        await _update_watermark(subscribe, sent_mark)
 
 
 async def _push_digest(category: int, label: str) -> None:
@@ -326,19 +387,16 @@ async def _push_digest(category: int, label: str) -> None:
         return
 
     async with _FETCH_LOCK:
-        # 汇总要覆盖隔夜/隔日区间，进程重启后缓存是空的，必须回填到保留窗口
-        news = await get_news(cover_ms=NEWS_RETENTION_MS)
-    if isinstance(news, int):
-        logger.error(f"[SayuStock] 发送雪球新闻{label}失败, 取消发送, 错误码：{news}!")
+        # 汇总要覆盖隔夜/隔日区间，由新闻源自己翻页，不依赖进程内缓存
+        feed = await get_news_port().latest(cover_ms=NEWS_RETENTION_MS)
+    if is_news_error(feed):
+        logger.error(f"[SayuStock] 发送快讯{label}失败, 取消发送, 错误码：{feed.code}!")
         return
 
-    # 缓存内条目按 id 去重（并发取数的安全网），并按时间正序排列
-    unique: Dict[int, ItemType] = {}
-    for new in news[1]["items"]:
-        unique[new["id"]] = new
-    items = sorted(unique.values(), key=lambda x: (x["created_at"], x["id"]))
-
+    items = _pending_important(feed)
     for subscribe in targets:
+        if await _rebase_if_needed(subscribe, feed):
+            continue
         await _send_digest(subscribe, items, label)
 
 

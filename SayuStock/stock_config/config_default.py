@@ -165,29 +165,37 @@ CONFIG_DEFAULT: Dict[str, GSC] = {
         "NeoQuasar/Kronos-mini",
         options=["NeoQuasar/Kronos-mini", "NeoQuasar/Kronos-small", "NeoQuasar/Kronos-base"],
     ),
+    "news_source_order": GsListStrConfig(
+        "新闻源顺序",
+        "快讯按这个顺序尝试，前一个失败或为空才用下一个。"
+        "可选 eastmoney / wallstreetcn / sina / jin10。"
+        "没写进列表的源会排在后面兜底。改完立即生效，无需重启",
+        ["eastmoney", "wallstreetcn", "sina", "jin10"],
+        options=["eastmoney", "wallstreetcn", "sina", "jin10"],
+    ),
     "news_push_divider": GsDivider(
-        "雪球新闻推送分级",
+        "财经快讯推送分级",
         "已订阅「订阅雪球新闻」的群按下面的列表分为四类推送模式；"
         "同一群号出现在多个列表时按 小时 > 交易时段 > 每日 优先；"
         "没有出现在任何列表里的订阅群保持默认的逐条实时推送。列表改动立即生效，无需重启",
-        "雪球7x24新闻推送分级 (默认立即推送)",
+        "财经快讯推送分级 (默认立即推送)",
     ),
     "news_push_hourly_groups": GsListStrConfig(
         "小时汇总推送群",
-        "这些群每小时整点收到一条合并推送，内容为上一小时内的雪球7x24新闻",
+        "这些群每小时整点收到一条合并推送，内容为上一小时内的财经快讯",
         [],
         options=[],
     ),
     "news_push_trading_session_groups": GsListStrConfig(
         "交易时段汇总推送群",
         "这些群在每天 08:00 / 12:00 / 16:00 / 22:00 各收到一条合并推送"
-        "（隔夜/午间/收盘/晚间汇总），内容为自上次推送以来累积的雪球7x24新闻",
+        "（隔夜/午间/收盘/晚间汇总），内容为自上次推送以来累积的财经快讯",
         [],
         options=[],
     ),
     "news_push_daily_groups": GsListStrConfig(
         "每日汇总推送群",
-        "这些群每天 08:00 收到一条合并推送，内容为自昨天以来累积的雪球7x24新闻",
+        "这些群每天 08:00 收到一条合并推送，内容为自昨天以来累积的财经快讯",
         [],
         options=[],
     ),

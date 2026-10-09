@@ -211,6 +211,13 @@ feature 模块不应再直接 `stock_request` 然后读 `f*`。
   这两只只有盘口：`intraday` / `kline` 在拉数前返回 `unsupported`。列序以
   2026-10-09 与东财对齐的采样为准（黄金 14 列、国债期货 50 列；期货成交额单位不明，
   `amount` 留空）。商品连续的 `nf_` 名称在首列，不要走国债期货解析。
+  全天候东财 secid 另有一套新浪符号（同日实采，只锁盘口）：`100.HSI`→`rt_hkHSI`，
+  `100.N225`→`b_NKY`，`100.FTSE`/`FCHI`/`GDAXI`→`b_UKX`/`b_CAC`/`b_DAX`，
+  `122.XAU`/`XAG`→`hf_XAU`/`hf_XAG`（伦敦金/银，不是 `118.AU9999`，也不是 `hf_GC`），
+  `102.CL00Y`→`hf_CL`，`109.LCPT`→`hf_CAD`（伦铜），螺纹/豆粕/焦煤/生猪主连→
+  `nf_RB0`/`nf_M0`/`nf_JM0`/`nf_LH0`，`133.USDCNH`/`119.USDCHF`/`119.USDJPY`→
+  `fx_s*`，`100.UDI`→`DINIW`。`100.KOSPI200`、`100.SXXP`、`171.*` 国债收益率没有
+  新鲜盘口，映射是 None。不要用无时间戳的 `int_*` 或停在 2025-09-26 的 `b_SXXP`。
 - `tencent/client.py` + `parse.py` + `provider.py`：备用权益源。`qt.gtimg.cn` 盘口（GBK，含
   PE/PB/市值/涨跌停）、`fqkline` **前复权**日/周/月K、`mkline` 分钟K、`minute/query` 当日分时
   （累计量额差分）。K 行列序为**开、收、高、低**（与直觉相反）。无板块/排行（unsupported 回落）。
@@ -219,7 +226,10 @@ feature 模块不应再直接 `stock_request` 然后读 `f*`。
   美股 K线（fqkline/usfqkline 只回首末两根）、分钟K（mkline param error）与分时
   （minute/query 仅末点）无有效数据，unsupported 回落东财。
   东财前缀 `2` 同样返回 None（2026-10-09 qt 与检索都没有中证2000）。
-  腾讯没有黄金9999和三十债主连。
+  腾讯没有黄金9999和三十债主连。全天候里腾讯另有符号：`100.HSI`→`hkHSI`，
+  `122.XAU`/`XAG`、`102.CL00Y`、`109.LCPT`→`hf_XAU`/`hf_XAG`/`hf_CL`/`hf_CAD`
+  （盘口带下划线，qt 正则必须能匹配 `_`），`119.USDJPY`/`USDCHF`→`fxUSDJPY`/`fxUSDCHF`。
+  日经、富时、DAX、CAC、美元指数、离岸人民币腾讯这条 qt 没有，交给新浪。这些品种只有盘口。
 
 ## 3.8 薄封装 `utils/stock/request.py`
 

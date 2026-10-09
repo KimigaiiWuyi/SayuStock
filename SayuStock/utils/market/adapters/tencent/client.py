@@ -23,7 +23,8 @@ QUOTE_URL = "https://qt.gtimg.cn/q="
 FQKLINE_URL = "https://web.ifzq.gtimg.cn/appstock/app/fqkline/get"
 MKLINE_URL = "https://ifzq.gtimg.cn/appstock/app/kline/mkline"
 MINUTE_URL = "https://web.ifzq.gtimg.cn/appstock/app/minute/query"
-_QT_RE = re.compile(r'v_(?P<sym>[A-Za-z0-9]+)="(?P<line>[^"]*)"')
+# hf_XAU 这类外盘符号带下划线；只认字母数字会把整行丢掉。
+_QT_RE = re.compile(r'v_(?P<sym>[A-Za-z0-9_]+)="(?P<line>[^"]*)"')
 
 
 async def _get_text(url: str) -> str | MarketError:
