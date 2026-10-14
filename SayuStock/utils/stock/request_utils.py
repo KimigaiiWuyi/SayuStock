@@ -277,10 +277,14 @@ async def _get_code_id_one(code: str, priority: Optional[str] = None) -> Optiona
         return code_id_dict[code], code, ""
 
     # 带 .us/.h/.kr 时不能把 6 位代码当成 A 股，否则 600519.us 会短路成茅台。
+    # 名称表里没有的场内基金、次新：市场能定，名字必须再走搜索。
+    local_unnamed: Optional[Tuple[str, str, str]] = None
     if priority is None or priority == "a":
         local = local_digit_code(code)
         if local is not None:
-            return local
+            if local[1]:
+                return local
+            local_unnamed = local
 
     url = "https://searchapi.eastmoney.com/api/suggest/get"
     params = (
@@ -300,6 +304,20 @@ async def _get_code_id_one(code: str, priority: Optional[str] = None) -> Optiona
                 data = json.loads(text)
                 code_dict: List[Dict] = data["QuotationCodeTable"]["Data"]
                 if code_dict:
+                    # 已有本地 secid 时只补这只的名字，不用搜索首项换成别的标的。
+                    if local_unnamed is not None:
+                        wanted = local_unnamed[0]
+                        for row in code_dict:
+                            name = row["Name"]
+                            sec_type = row["SecurityTypeName"]
+                            if row["QuoteID"] != wanted:
+                                continue
+                            if not isinstance(name, str) or not isinstance(sec_type, str):
+                                continue
+                            stripped = name.strip()
+                            if stripped:
+                                return wanted, stripped, sec_type
+                        return local_unnamed
                     # 排序：SecurityTypeName为"债券"的排到最后
                     if not is_bond:
                         code_dict.sort(key=lambda x: x.get("SecurityTypeName") == "债券")
@@ -325,12 +343,18 @@ async def _get_code_id_one(code: str, priority: Optional[str] = None) -> Optiona
                     # A 股会被当成美股解析出去，下游按错误的 secid 取价。
                     return None
                 else:
-                    # HTTP 200 且无结果：标的确切不存在
-                    return None
+                    # HTTP 200 且无结果：标的确切不存在。本地已认出的代码仍返回。
+                    return local_unnamed
         except ClientConnectionError as error:
+            if local_unnamed is not None:
+                logger.warning(f"[SayuStock] 获取{code}的名称失败，沿用本地代码: {error}")
+                return local_unnamed
             logger.error(f"[SayuStock] 获取{code}的ID失败: {error}")
             raise ResolveLayerError(str(error)) from error
         except Exception as error:
+            if local_unnamed is not None:
+                logger.warning(f"[SayuStock] 获取{code}的名称失败，沿用本地代码: {error}")
+                return local_unnamed
             logger.error(f"[SayuStock] 获取{code}的ID异常: {error}")
             raise ResolveLayerError(str(error)) from error
     return None

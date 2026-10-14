@@ -110,6 +110,106 @@ def test_bare_share_code_does_not_call_searchapi(monkeypatch) -> None:
     assert hit[0] == "1.600519"
 
 
+def _patch_suggest(monkeypatch: pytest.MonkeyPatch, rows_by_input: dict[str, list[dict[str, str]]]) -> list[str]:
+    """替换 suggest 的 ClientSession。返回每次请求的 input。"""
+    import json
+
+    calls: list[str] = []
+
+    class _Resp:
+        status = 200
+
+        def __init__(self, rows: list[dict[str, str]]) -> None:
+            self._rows = rows
+
+        async def text(self) -> str:
+            return json.dumps({"QuotationCodeTable": {"Data": self._rows}})
+
+        async def __aenter__(self) -> "_Resp":
+            return self
+
+        async def __aexit__(self, *_args: object) -> None:
+            return None
+
+    class _Sess:
+        def __init__(self, *_args: object, **_kwargs: object) -> None:
+            pass
+
+        async def __aenter__(self) -> "_Sess":
+            return self
+
+        async def __aexit__(self, *_args: object) -> None:
+            return None
+
+        def get(self, _url: str, params: object = None) -> _Resp:
+            raw = params if isinstance(params, (list, tuple)) else ()
+            key = str(dict(raw).get("input", ""))
+            calls.append(key)
+            return _Resp(rows_by_input.get(key, []))
+
+    monkeypatch.setattr(request_utils, "ClientSession", _Sess)
+    return calls
+
+
+def test_fund_code_missing_from_name_table_uses_search(monkeypatch: pytest.MonkeyPatch) -> None:
+    # 159207 不在 A 股名称表里。本地只能给出 0.159207，名字要靠搜索。
+    # 首项是别的基金时也不能把 secid 换成那一只。
+    calls = _patch_suggest(
+        monkeypatch,
+        {
+            "159207": [
+                {"QuoteID": "1.510300", "Name": "沪深300ETF华泰柏瑞", "SecurityTypeName": "基金"},
+                {"QuoteID": "0.159207", "Name": "高股息ETF广发", "SecurityTypeName": "基金"},
+            ]
+        },
+    )
+    hit = asyncio.run(get_code_id_strict("159207"))
+    assert hit == ("0.159207", "高股息ETF广发", "基金")
+    assert calls == ["159207"]
+
+
+def test_fund_search_miss_keeps_local_secid(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls = _patch_suggest(
+        monkeypatch,
+        {"510300": [{"QuoteID": "1.510310", "Name": "沪深300ETF易方达", "SecurityTypeName": "基金"}]},
+    )
+    hit = asyncio.run(get_code_id_strict("510300"))
+    assert hit == ("1.510300", "", "基金")
+    assert calls == ["510300"]
+
+
+def test_fund_search_outage_keeps_local_secid(monkeypatch: pytest.MonkeyPatch) -> None:
+    from aiohttp import ClientConnectionError
+
+    class _Down:
+        def __init__(self, *_args: object, **_kwargs: object) -> None:
+            pass
+
+        async def __aenter__(self) -> "_Down":
+            return self
+
+        async def __aexit__(self, *_args: object) -> None:
+            return None
+
+        def get(self, *_args: object, **_kwargs: object) -> object:
+            raise ClientConnectionError("down")
+
+    monkeypatch.setattr(request_utils, "ClientSession", _Down)
+    hit = asyncio.run(get_code_id_strict("159207"))
+    assert hit == ("0.159207", "", "基金")
+
+
+def test_share_missing_from_name_table_uses_search(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delitem(request_utils.chinese_stocks, "600519")
+    calls = _patch_suggest(
+        monkeypatch,
+        {"600519": [{"QuoteID": "1.600519", "Name": "贵州茅台", "SecurityTypeName": "沪A"}]},
+    )
+    hit = asyncio.run(get_code_id_strict("600519"))
+    assert hit == ("1.600519", "贵州茅台", "沪A")
+    assert calls == ["600519"]
+
+
 def test_bare_index_code_still_reaches_searchapi(monkeypatch) -> None:
     called = {"n": 0}
 
