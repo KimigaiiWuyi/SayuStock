@@ -6,9 +6,11 @@ import html as html_lib
 from base64 import b64encode
 from pathlib import Path
 from functools import lru_cache
+from collections.abc import Sequence
 
 from .utils import number_to_chinese
 from .market import Quote, DisplayItem
+from .warn_box import WARN_CSS, Failure, failure_lines, warn_box_html, warn_box_height
 from .bottom_chrome import FOOTER_H, FOOTER_W, footer_top, source_top, footer_left, chrome_height, source_band_h
 from .market.display import source_footer
 
@@ -32,14 +34,19 @@ SPARK_W = 210.0 * 0.65
 SPARK_H = 66.0
 SPARK_LEFT = 430.0 + 210.0 - SPARK_W
 SPARK_TOP = 22.0
+# 警告框按行卡片的可见区对齐（素材自带 30px 透明边），别跟卡片错开一条边
+WARN_LEFT = 30
+WARN_RIGHT_PAD = 31
 
 
-def my_stock_canvas_size(n: int) -> tuple[int, int, bool]:
+def my_stock_canvas_size(n: int, failures: Sequence[Failure] = ()) -> tuple[int, int, bool]:
+    """画布尺寸。``failures`` 非空时预留警告框高度（不静默失败）。"""
     two_col = n >= 18
+    warn_h = warn_box_height(len(failure_lines(failures)))
     if two_col:
         rows = ((n - 1) // 2) + 1
-        return 1800, HEAD_H + rows * BAR_H + FOOT_PAD, True
-    return 900, HEAD_H + n * BAR_H + FOOT_PAD, False
+        return 1800, HEAD_H + warn_h + rows * BAR_H + FOOT_PAD, True
+    return 900, HEAD_H + warn_h + n * BAR_H + FOOT_PAD, False
 
 
 def _e(value: object) -> str:
@@ -129,24 +136,40 @@ def build_my_stock_html(
     title_num: str,
     sparklines: dict[str, str] | None = None,
     sources: tuple[str | None, ...] = (),
+    failures: Sequence[Failure] = (),
+    warn_title: str = "",
 ) -> str:
-    """quotes: (Quote, 原始自选字符串)。index_items 已按展示顺序排好。"""
+    """quotes: (Quote, 原始自选字符串)。index_items 已按展示顺序排好。
+
+    ``failures`` 是没拿到行情的条目：画成黄色警告框，不许静默丢卡。
+    """
     n = len(quotes)
-    width, height, two_col = my_stock_canvas_size(n)
+    width, height, two_col = my_stock_canvas_size(n, failures)
     title_x = TITLE_X_DOUBLE if two_col else TITLE_X_SINGLE
     title_uri = _data_uri(str(TEXT_PATH / f"title{title_num}.png"))
     bar5_uri = _data_uri(str(TEXT_PATH / "bar5.png"))
     footer_uri = _data_uri(str(_FOOTER_PATH))
     idx_html = "".join(_idx_html(item, i, two_col) for i, item in enumerate(index_items))
+    fail_lines = failure_lines(failures)
+    warn_h = warn_box_height(len(fail_lines))
+    bars_top = BARS_Y + warn_h
+    warn_html = warn_box_html(
+        title=warn_title or f"⚠ 行情获取失败（{len(failures)} 条）",
+        lines=fail_lines,
+        top=BARS_Y,
+        left=WARN_LEFT,
+        width=width - WARN_LEFT - WARN_RIGHT_PAD,
+        height=warn_h,
+    )
     bars: list[str] = []
     split = ((n - 1) // 2) + 1
     for index, (q, uid) in enumerate(quotes):
         if two_col and index >= split:
             x = 900
-            y = BARS_Y + (index - split) * BAR_H
+            y = bars_top + (index - split) * BAR_H
         else:
             x = 0
-            y = BARS_Y + index * BAR_H
+            y = bars_top + index * BAR_H
         spark = ""
         if sparklines:
             if uid in sparklines:
@@ -232,6 +255,7 @@ body {{
   font-size: {_SRC_FONT}px; color: rgba(210, 210, 210, 0.9);
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }}
+{WARN_CSS}
 </style>
 </head>
 <body>
@@ -239,6 +263,7 @@ body {{
   <img class="title" src="{title_uri}" width="850" height="400" />
   {idx_html}
   <img class="bar5" src="{bar5_uri}" width="850" height="90" />
+  {warn_html}
   {inner_bars}
   <div class="src">{source_text}</div>
   <img class="footer" src="{footer_uri}" width="850" height="40" />

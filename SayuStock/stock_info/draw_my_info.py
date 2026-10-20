@@ -13,9 +13,11 @@ from gsuid_core.ai_core.trigger_bridge import ai_return
 from .draw_info import DIFF_MAP
 from ..utils.utils import convert_list, number_to_chinese
 from ..utils.market import Quote, get_market, is_market_error
+from ..utils.warn_box import Failure
 from ..utils.sparkline import sparkline_from_series
 from ..utils.index_quotes import quote_index_items
 from ..utils.my_stock_html import SPARK_H, SPARK_W, build_my_stock_html, my_stock_canvas_size
+from ..utils.market.display import market_error_text
 from ..utils.database.models import SsBind
 
 TEXT_PATH = Path(__file__).parent / "texture2d"
@@ -85,16 +87,20 @@ async def draw_my_stock_img(ev: Event) -> str | bytes:
     quotes: list[tuple[Quote, str] | None] = [None] * len(uid)
     sparks: dict[str, str] = {}
     series_sources: list[str | None] = []
+    # index → 失败原因。取不到的一律记下来，画黄色警告框，不许静默丢卡。
+    failed: dict[int, str] = {}
 
     async def sg(index: int, u: str) -> None:
         nonlocal all_p
         query = u[4:] if u.startswith("VIX.") else u
         series = await market.intraday(query)
         if is_market_error(series):
+            failed[index] = market_error_text(series)
             return
         series_sources.append(series.provider)
         q = series.quote
         if q is None:
+            failed[index] = "数据源未返回行情"
             return
         all_p += float(q.change_pct) if q.change_pct is not None else 0.0
         stock_details.append(
@@ -115,10 +121,13 @@ async def draw_my_stock_img(ev: Event) -> str | bytes:
 
     await asyncio.gather(*[sg(index, u) for index, u in enumerate(uid)])
     filled = [row for row in quotes if row is not None]
-    if not filled:
-        return "暂无自选行情"
+    failures = [Failure(label=uid[i], reason=failed[i]) for i in sorted(failed)]
+    if failures:
+        logger.warning(f"[SayuStock] 我的自选 {len(failures)}/{len(uid)} 只行情获取失败: {failed}")
 
-    avg_p = all_p / len(uid)
+    # 平均涨跌只算拿到数据的那些：失败的不当 0 稀释均值（失败另有警告框说明）。
+    ok_n = len(filled)
+    avg_p = all_p / ok_n if ok_n else 0.0
     title_num = "11"
     for i in DIFF_MAP:
         if avg_p >= i:
@@ -131,9 +140,11 @@ async def draw_my_stock_img(ev: Event) -> str | bytes:
         title_num=title_num,
         sparklines=sparks,
         sources=tuple(series_sources),
+        failures=failures,
+        warn_title=f"⚠ {len(failures)}/{len(uid)} 只自选股行情获取失败",
     )
-    width, height, _ = my_stock_canvas_size(len(filled))
-    _ai_return_my_stock(uid, all_p, stock_details)
+    width, height, _ = my_stock_canvas_size(len(filled), failures)
+    _ai_return_my_stock(uid, all_p, stock_details, failures, ok_n)
     try:
         return await render_html_to_bytes(
             html,
@@ -155,11 +166,19 @@ def _ai_return_my_stock(
     uid_list: list[str],
     all_p: float,
     stock_details: list[dict[str, object]] | None = None,
+    failures: list[Failure] | None = None,
+    ok_n: int = 0,
 ) -> None:
     """从自选股语义数据提取文本，经 ai_return 给 AI。"""
     try:
-        avg_p = all_p / len(uid_list) if uid_list else 0
-        result = f"【我的自选】共 {len(uid_list)} 只，平均涨跌幅: {avg_p:+.2f}%\n"
+        total = len(uid_list)
+        ok = ok_n if ok_n else total
+        avg_p = all_p / ok if ok else 0
+        result = f"【我的自选】共 {total} 只，平均涨跌幅: {avg_p:+.2f}%\n"
+
+        if failures:
+            detail = "、".join(f.label for f in failures)
+            result += f"⚠ {len(failures)} 只行情获取失败（未计入平均值）：{detail}\n"
 
         if stock_details:
             sorted_details = sorted(

@@ -41,7 +41,7 @@ plugins/SayuStock/
 |------|------|
 | `stock_cloudmap/` | **大盘/行业/概念云图**（plotly + playwright 截图）；定时清缓存 |
 | `stock_stockinfo/` | **个股分时 / K 线 / 对比 / mpl 云图入口**（matplotlib + mplchart） |
-| `stock_info/` | 大盘概览、我的自选列表图、基金（PIL）；**全天候**走 pytakumi HTML |
+| `stock_info/` | 大盘概览、我的自选、基金持仓（均走 pytakumi HTML）；**全天候**同走 pytakumi HTML |
 | `stock_user/` | 添加/删除自选（`SsBind`） |
 | `stock_sina/` | 市盈/市净/股息等估值对比图 |
 | `stock_analysis/` | 技术分析、股票卡片、自动选股、组合体检 |

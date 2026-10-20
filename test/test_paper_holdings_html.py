@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import re
+from dataclasses import replace
 
+from SayuStock.utils.warn_box import Failure
 from SayuStock.utils.market.display import DisplayItem
 from SayuStock.utils.paper_holdings_html import (
     FOOT_PAD,
@@ -141,3 +143,47 @@ def test_html_injects_sparkline_and_empty_state() -> None:
     assert "当前无持仓" in empty
     assert "100万" in empty
     assert 'class="spark"' not in empty
+
+
+def test_missing_day_change_shows_warning_not_dash() -> None:
+    """今日涨跌拿不到 → 黄色警告文字，不许只画一个破折号。"""
+    row = _row("512880", "证券ETF国泰", day=None)
+    html = build_paper_holdings_html(
+        account_name="默认模拟盘",
+        strategy_id="multi_factor",
+        enabled=True,
+        cash=1_000_000.0,
+        initial_cash=1_000_000.0,
+        holdings=[row],
+        index_items=[],
+        title_num="5",
+    )
+    assert "今⚠未获取" in html
+    assert "今 —" not in html
+    assert 'class="day warn"' in html
+
+
+def test_quote_failures_render_warning_box() -> None:
+    row = _row("512880", "证券ETF国泰", day=None)
+    row = replace(row, quote_error="东方财富网络异常")
+    failures = [Failure(label="证券ETF国泰(512880)", reason="东方财富网络异常")]
+    html = build_paper_holdings_html(
+        account_name="默认模拟盘",
+        strategy_id="multi_factor",
+        enabled=True,
+        cash=1_000_000.0,
+        initial_cash=1_000_000.0,
+        holdings=[row],
+        index_items=[],
+        title_num="5",
+        failures=failures,
+        warn_title="⚠ 1/1 只持仓今日行情获取失败",
+    )
+    assert 'class="warn"' in html
+    assert "1/1 只持仓今日行情获取失败" in html
+    assert "东方财富网络异常：证券ETF国泰(512880)" in html
+
+    base_w, base_h = paper_holdings_canvas_size(1)
+    fail_w, fail_h = paper_holdings_canvas_size(1, failures)
+    assert fail_w == base_w
+    assert fail_h > base_h

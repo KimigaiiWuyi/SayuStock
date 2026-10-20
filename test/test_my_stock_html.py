@@ -5,6 +5,7 @@ from __future__ import annotations
 import re
 from datetime import datetime
 
+from SayuStock.utils.warn_box import Failure, warn_box_height
 from SayuStock.utils.market.enums import AssetClass
 from SayuStock.utils.market.models import Quote, SymbolRef
 from SayuStock.utils.my_stock_html import BAR_H, HEAD_H, FOOT_PAD, build_my_stock_html, my_stock_canvas_size
@@ -106,3 +107,51 @@ def test_source_sits_above_footer() -> None:
     assert src_top + src_h <= foot_top
     assert foot_top + foot_h <= height
     assert "数据来源：" in html
+
+
+def test_failed_stocks_render_warning_box_not_silent() -> None:
+    """取不到的自选股必须画黄色警告，不许悄悄少一张卡。"""
+    q = _quote("512880", "证券ETF国泰", 1.105, 0.64)
+    failures = [
+        Failure(label="600519", reason="东方财富网络异常"),
+        Failure(label="000858", reason="东方财富网络异常"),
+        Failure(label="300750", reason="未找到标的"),
+    ]
+    html = build_my_stock_html(
+        quotes=[(q, "512880")],
+        index_items=[],
+        title_num="5",
+        failures=failures,
+        warn_title="⚠ 3/4 只自选股行情获取失败",
+    )
+    assert 'class="warn"' in html
+    assert "3/4 只自选股行情获取失败" in html
+    assert "东方财富网络异常：600519、000858" in html
+    assert "未找到标的：300750" in html
+    # 成功的卡照常画
+    assert 'class="bar"' in html
+    assert "证券ETF国泰" in html
+
+
+def test_canvas_grows_with_warning_box() -> None:
+    failures = [Failure(label="600519", reason="东方财富网络异常")]
+    _, base_h, _ = my_stock_canvas_size(1)
+    _, fail_h, _ = my_stock_canvas_size(1, failures)
+    assert fail_h > base_h
+    assert fail_h - base_h == warn_box_height(1)
+
+
+def test_all_failed_page_has_warning_and_no_bars() -> None:
+    """全失败也要出图（警告框），不许回一句「暂无自选行情」就完事。"""
+    failures = [Failure(label="600519", reason="东方财富网络异常")]
+    html = build_my_stock_html(
+        quotes=[],
+        index_items=[],
+        title_num="5",
+        failures=failures,
+        warn_title="⚠ 1/1 只自选股行情获取失败",
+    )
+    assert 'class="warn"' in html
+    assert 'class="bar"' not in html
+    _, height, _ = my_stock_canvas_size(0, failures)
+    assert height > HEAD_H

@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import TypeVar, cast
 from dataclasses import replace, dataclass
 
+from .errors import MarketError
 from .models import (
     Quote,
     BoardRow,
@@ -90,6 +91,27 @@ def source_footer(*providers: str | None, note: str = "") -> str:
     """
     extra = f" {note}" if note else ""
     return f"数据来源：{source_label(*providers)} | SayuStock{extra}"
+
+
+# 行情错误码 → 给人看的短语。分组用同一套短语，图上才是「同一原因一行」。
+_ERROR_TEXT: dict[str, str] = {
+    "not_found": "未找到标的",
+    "network": "数据源网络异常",
+    "parse": "数据源返回异常",
+    "empty": "数据源返回为空",
+    "unsupported": "数据源不支持",
+}
+
+
+def market_error_text(err: MarketError) -> str:
+    """行情错误 → 一句人话（带来源名）。
+
+    图上/文字里都用它说明「为什么这条没数据」，不许只丢一个破折号。
+    """
+    label = _ERROR_TEXT.get(err.code, "数据源异常")
+    if not err.provider:
+        return label
+    return f"{source_label(err.provider)}{label}"
 
 
 @dataclass(frozen=True, slots=True)

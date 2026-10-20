@@ -44,7 +44,7 @@
 |------|------|
 | `stock_cloudmap/` | 大盘/行业/概念云图（plotly + playwright） |
 | `stock_stockinfo/` | 个股分时 / K 线 / 对比 / mpl |
-| `stock_info/` | 大盘概览、自选列表、基金（PIL）；全天候 pytakumi |
+| `stock_info/` | 大盘概览、自选列表、基金持仓（全走 pytakumi HTML）；全天候 pytakumi |
 | `stock_user/` | 自选增删（`SsBind`） |
 | `stock_sina/` | PB/PE/PS |
 | `stock_analysis/` | 技术分析、卡片、选股、组合 |
@@ -107,6 +107,7 @@ basedpyright --pythonpath <Core venv>/python
 - 禁止读东财 `f*`；解析只在 `utils/market/adapters/**`。
 - 禁止依赖 `utils/market/compat.py`（仅测试）。
 - `ai_return` / `_emit_ai_text` 在缓存命中 return **之前**。
+- 取数失败不许静默：HTML 页（我的自选 / 基金持仓 / 模拟盘自选）用 `utils/warn_box.py` 的黄色警告框标出每一条失败，并写进 `ai_return` 文字。
 - 指标单源 `utils/indicators.py`；渲染计算单源 `utils/render_data.py`。
 - 快讯只走 `get_news_port()`；供应商字段只在 `utils/news/adapters/`。
 - 模拟盘只写 SQLModel，禁止 `record_*` / `state_set` 第二套账本。

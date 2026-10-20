@@ -16,8 +16,10 @@ from gsuid_core.ai_core.trigger_bridge import ai_return
 from . import db
 from ..utils.image import get_footer
 from ..utils.market import DisplayItem, get_market, is_market_error
+from ..utils.warn_box import Failure
 from ..utils.sparkline import sparkline_from_series
 from ..utils.index_quotes import quote_index_items
+from ..utils.market.display import market_error_text
 from ..utils.paper_holdings_html import (
     SPARK_H,
     SPARK_W,
@@ -215,6 +217,7 @@ async def _fetch_holding_row(position: SayuPaperPosition) -> tuple[HoldingBarRow
     spark = ""
     live: float | None = None
     source_id: str | None = None
+    quote_error = ""
     query = position.secid or position.stock_code
     if query:
         series = await get_market().intraday(query)
@@ -232,6 +235,14 @@ async def _fetch_holding_row(position: SayuPaperPosition) -> tuple[HoldingBarRow
             svg = sparkline_from_series(series, width=SPARK_W, height=SPARK_H)
             if svg:
                 spark = svg
+        else:
+            # 取不到就是取不到：记下原因，图上写出来，不许用一个破折号糊弄
+            quote_error = market_error_text(series)
+    elif position.stock_code:
+        quote_error = "持仓缺少行情代码"
+    if day_chg is None and not quote_error:
+        # 分时拿到了但没给今日涨跌幅：也算没取到，页面上要写明
+        quote_error = "数据源未返回今日涨跌幅"
     cost = float(position.avg_cost or 0.0)
     qty = int(position.qty)
     mv = price * qty
@@ -248,6 +259,7 @@ async def _fetch_holding_row(position: SayuPaperPosition) -> tuple[HoldingBarRow
         unrealized_pnl_pct=round(unreal_pct, 4),
         market_value=round(mv, 2),
         provider=source_id,
+        quote_error=quote_error,
     )
     return row, spark, live
 
@@ -272,7 +284,7 @@ def _ai_return_holdings(
         ]
         ranked = sorted(holdings, key=lambda h: h.unrealized_pnl_pct, reverse=True)
         for row in ranked:
-            day = "—" if row.day_change_pct is None else f"{row.day_change_pct:+.2f}%"
+            day = "未获取" if row.day_change_pct is None else f"{row.day_change_pct:+.2f}%"
             lines.append(
                 f"  {row.name}({row.code}) {row.qty}股 成本 {row.avg_cost:.2f} "
                 f"现价 {row.current_price:.2f} 今{day} 持{row.unrealized_pnl_pct:+.2f}%"
@@ -322,6 +334,7 @@ async def build_holdings_snapshot_image(account_id: int) -> bytes | str:
 
     day_vals = [h.day_change_pct for h in rows if h.day_change_pct is not None]
     avg_day = sum(day_vals) / len(day_vals) if day_vals else 0.0
+    failures = [Failure(label=f"{h.name}({h.code})", reason=h.quote_error) for h in rows if h.quote_error]
     _ai_return_holdings(acc.name, float(acc.cash), float(acc.initial_cash), rows)
     html = build_paper_holdings_html(
         account_name=acc.name,
@@ -333,8 +346,10 @@ async def build_holdings_snapshot_image(account_id: int) -> bytes | str:
         index_items=index_items,
         title_num=_title_num_for_avg(avg_day),
         sparklines=sparks,
+        failures=failures,
+        warn_title=f"⚠ {len(failures)}/{len(rows)} 只持仓今日行情获取失败",
     )
-    width, height = paper_holdings_canvas_size(len(rows))
+    width, height = paper_holdings_canvas_size(len(rows), failures)
     try:
         return await render_html_to_bytes(
             html,

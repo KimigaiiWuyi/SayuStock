@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from collections.abc import Sequence
 
 from .render_data import _session_rows_from_intraday
@@ -15,11 +16,36 @@ _DOWN_FILL = "rgba(62,227,106,0.28)"
 _BASE_STROKE = "#8b95a8"
 
 
+@dataclass(frozen=True, slots=True)
+class SparkStyle:
+    """分时线配色。
+
+    默认红涨绿跌；整页单色的页面（比如基金持仓那张金页）传 ``GOLD_SPARK``，
+    涨跌方向改由折线形状和数字前面的 ▲▼ 表示。
+    """
+
+    up_stroke: str = _UP_STROKE
+    up_fill: str = _UP_FILL
+    down_stroke: str = _DOWN_STROKE
+    down_fill: str = _DOWN_FILL
+    base_stroke: str = _BASE_STROKE
+
+
+GOLD_SPARK = SparkStyle(
+    up_stroke="#ffd278",
+    up_fill="rgba(255,210,120,0.22)",
+    down_stroke="#ffd278",
+    down_fill="rgba(255,210,120,0.22)",
+    base_stroke="rgba(255,210,120,0.45)",
+)
+
+
 def sparkline_from_series(
     series: IntradaySeries,
     *,
     width: float = 160.0,
     height: float = 36.0,
+    style: SparkStyle | None = None,
 ) -> str:
     """``IntradaySeries`` → 内联 SVG。点不足时返回空串。"""
     if not series.points:
@@ -36,7 +62,7 @@ def sparkline_from_series(
         prices = [p.price for p in series.points]
     prev = _ref_close(series)
     up = _is_up(series, prices, prev)
-    return build_sparkline_svg(prices, prev, up=up, width=width, height=height)
+    return build_sparkline_svg(prices, prev, up=up, width=width, height=height, style=style)
 
 
 def build_sparkline_svg(
@@ -46,6 +72,7 @@ def build_sparkline_svg(
     up: bool,
     width: float = 160.0,
     height: float = 36.0,
+    style: SparkStyle | None = None,
 ) -> str:
     """把已对齐的价列画成面积图；``None`` 为轴上占位（午休等），线段在此断开。"""
     seq = _compress(list(prices), _MAX_POINTS)
@@ -70,8 +97,9 @@ def build_sparkline_svg(
     def y_at(price: float) -> float:
         return height - (price - y_min) / span * height
 
-    stroke = _UP_STROKE if up else _DOWN_STROKE
-    fill = _UP_FILL if up else _DOWN_FILL
+    palette = style or SparkStyle()
+    stroke = palette.up_stroke if up else palette.down_stroke
+    fill = palette.up_fill if up else palette.down_fill
     parts: list[str] = [
         f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {width:.1f} {height:.1f}" '
         f'width="100%" height="100%" preserveAspectRatio="none">'
@@ -79,7 +107,7 @@ def build_sparkline_svg(
     base_y = y_at(ref)
     parts.append(
         f'<line x1="0" y1="{base_y:.2f}" x2="{width:.1f}" y2="{base_y:.2f}" '
-        f'stroke="{_BASE_STROKE}" stroke-width="1" stroke-dasharray="3 2" opacity="0.75"/>'
+        f'stroke="{palette.base_stroke}" stroke-width="1" stroke-dasharray="3 2" opacity="0.75"/>'
     )
     for seg in _segments(seq):
         if len(seg) < 2:

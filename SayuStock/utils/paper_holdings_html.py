@@ -7,8 +7,10 @@ from base64 import b64encode
 from pathlib import Path
 from functools import lru_cache
 from dataclasses import dataclass
+from collections.abc import Sequence
 
 from .market import DisplayItem
+from .warn_box import WARN_CSS, Failure, failure_lines, warn_box_html, warn_box_height
 from .bottom_chrome import FOOTER_H, FOOTER_W, footer_top, source_top, footer_left, chrome_height, source_band_h
 from .market.display import source_footer
 
@@ -33,6 +35,9 @@ SPARK_W = 120.0
 SPARK_H = 52.0
 SPARK_LEFT = 400.0
 SPARK_TOP = 28.0
+# 警告框按行卡片的可见区对齐（素材自带 30px 透明边）
+WARN_LEFT = 30
+WARN_RIGHT_PAD = 31
 
 
 @dataclass(frozen=True)
@@ -49,13 +54,16 @@ class HoldingBarRow:
     unrealized_pnl_pct: float
     market_value: float
     provider: str | None = None
+    # 今日涨跌拿不到时的原因（空 = 拿到了）。图上要写出来，不许只留一个破折号。
+    quote_error: str = ""
 
 
-def paper_holdings_canvas_size(n: int) -> tuple[int, int]:
+def paper_holdings_canvas_size(n: int, failures: Sequence[Failure] = ()) -> tuple[int, int]:
     rows = max(n, 1)
+    warn_h = warn_box_height(len(failure_lines(failures)))
     legend_y = SUM_Y + SUM_H + LEGEND_GAP
     bar5_y = legend_y + LEGEND_H + BAR5_GAP
-    bars_y = bar5_y + BAR5_H + BARS_GAP
+    bars_y = bar5_y + BAR5_H + BARS_GAP + warn_h
     return 900, bars_y + rows * BAR_H + FOOT_PAD
 
 
@@ -180,8 +188,9 @@ def _bar_html(row: HoldingBarRow, y: int, spark_svg: str, equity: float) -> str:
     title = (row.name or row.code).split(" (")[0]
     sub = f"({row.code}) {row.qty}股  成本 {_fmt_px(row.avg_cost)}  现价 {_fmt_px(row.current_price)}  占{weight:.1f}%"
     if row.day_change_pct is None:
-        day_label = "今 —"
-        day_tone = "eq"
+        # 没拿到今日涨跌就写明「未获取」，不许只画一个破折号当没事发生
+        day_label = "今⚠未获取"
+        day_tone = "warn"
     else:
         day_label = f"今{_pct(row.day_change_pct)}"
         day_tone = _tone(row.day_change_pct)
@@ -210,9 +219,11 @@ def build_paper_holdings_html(
     index_items: list[DisplayItem],
     title_num: str,
     sparklines: dict[str, str] | None = None,
+    failures: Sequence[Failure] = (),
+    warn_title: str = "",
 ) -> str:
     n = len(holdings)
-    width, height = paper_holdings_canvas_size(n)
+    width, height = paper_holdings_canvas_size(n, failures)
     pos_value = sum(h.market_value for h in holdings)
     total_equity = cash + pos_value
     total_unreal = sum(h.unrealized_pnl for h in holdings)
@@ -230,7 +241,17 @@ def build_paper_holdings_html(
 
     legend_y = SUM_Y + SUM_H + LEGEND_GAP
     bar5_y = legend_y + LEGEND_H + BAR5_GAP
-    bars_y = bar5_y + BAR5_H + BARS_GAP
+    fail_lines = failure_lines(failures)
+    warn_h = warn_box_height(len(fail_lines))
+    bars_y = bar5_y + BAR5_H + BARS_GAP + warn_h
+    warn_html = warn_box_html(
+        title=warn_title or f"⚠ 行情获取失败（{len(failures)} 条）",
+        lines=fail_lines,
+        top=bars_y - warn_h,
+        left=WARN_LEFT,
+        width=width - WARN_LEFT - WARN_RIGHT_PAD,
+        height=warn_h,
+    )
 
     status = "运行中" if enabled else "已停用"
     status_cls = "on" if enabled else "off"
@@ -298,8 +319,8 @@ body {{
   font-size: 22px; font-weight: 630; color: #ffffff; white-space: nowrap;
 }}
 .sum {{
-  position: absolute; left: 25px; top: {SUM_Y}px;
-  width: 850px; height: {SUM_H}px;
+  position: absolute; left: {WARN_LEFT}px; top: {SUM_Y}px;
+  width: {width - WARN_LEFT - WARN_RIGHT_PAD}px; height: {SUM_H}px;
   padding: 14px 16px 12px;
   background: linear-gradient(180deg, rgba(28,34,62,0.96), rgba(16,20,40,0.96));
   border: 1px solid rgba(212,160,23,0.28);
@@ -360,8 +381,8 @@ body {{
 .alloc-pos {{ height: 8px; background: linear-gradient(90deg, #c9a227, #e6c25a); }}
 .alloc-cap {{ font-size: 12px; color: #9aa3b5; white-space: nowrap; }}
 .legend {{
-  position: absolute; left: 25px; top: {legend_y}px;
-  width: 850px; height: {LEGEND_H}px;
+  position: absolute; left: {WARN_LEFT}px; top: {legend_y}px;
+  width: {width - WARN_LEFT - WARN_RIGHT_PAD}px; height: {LEGEND_H}px;
   display: flex; align-items: center; gap: 16px;
   padding: 0 16px;
   background: rgba(20, 24, 48, 0.86);
@@ -372,9 +393,10 @@ body {{
   display: inline-block; min-width: 28px; padding: 1px 6px; border-radius: 6px;
   font-size: 12px; font-weight: 700; text-align: center;
 }}
-.chip.day {{ background: rgba(226, 90, 90, 0.22); color: #f0b4b4; }}
-.chip.hold {{ background: rgba(255, 255, 255, 0.08); color: #e8eaf2; }}
-.chip.spark {{ background: rgba(212, 160, 23, 0.16); color: #ffd278; }}
+/* 图例小标签用独立类名：.day/.hold 是持仓条的绝对定位类，同名会把图例挤到别处 */
+.chip.c-day {{ background: rgba(226, 90, 90, 0.22); color: #f0b4b4; }}
+.chip.c-hold {{ background: rgba(255, 255, 255, 0.08); color: #e8eaf2; }}
+.chip.c-spark {{ background: rgba(212, 160, 23, 0.16); color: #ffd278; }}
 .bar5 {{
   position: absolute; left: 25px; top: {bar5_y}px;
   width: 850px; height: 90px;
@@ -408,8 +430,9 @@ body {{
 }}
 .hold.up {{ color: #f3b0b0; }}
 .hold.down {{ color: #b8e8b4; }}
+.day.warn {{ color: #ffd278; }}
 .empty {{
-  position: absolute; left: 25px; width: 850px; height: 90px;
+  position: absolute; left: {WARN_LEFT}px; width: {width - WARN_LEFT - WARN_RIGHT_PAD}px; height: 90px;
   display: flex; align-items: center; justify-content: center;
   background: rgba(20, 24, 48, 0.8); border-radius: 10px;
   color: #9aa3b5; font-size: 24px;
@@ -424,6 +447,7 @@ body {{
   font-size: {_SRC_FONT}px; color: rgba(210, 210, 210, 0.9);
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }}
+{WARN_CSS}
 </style>
 </head>
 <body>
@@ -456,11 +480,12 @@ body {{
   </div>
   <div class="legend">
     <b>图例</b>
-    <span><span class="chip day">今</span> 今日涨跌（相对昨收）</span>
-    <span><span class="chip hold">持</span> 持仓收益（相对成本）</span>
-    <span><span class="chip spark">折线</span> 当日分时</span>
+    <span><span class="chip c-day">今</span> 今日涨跌（相对昨收）</span>
+    <span><span class="chip c-hold">持</span> 持仓收益（相对成本）</span>
+    <span><span class="chip c-spark">折线</span> 当日分时</span>
   </div>
   <img class="bar5" src="{bar5_uri}" width="850" height="90" />
+  {warn_html}
   {inner_bars}
   <div class="src">{source_text}</div>
   <img class="footer" src="{footer_uri}" width="850" height="40" />

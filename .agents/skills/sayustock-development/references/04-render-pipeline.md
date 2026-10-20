@@ -11,6 +11,35 @@
 | 大盘/行业/概念云图（主路径） | `stock_cloudmap/` | plotly → HTML → playwright | HTML + PNG/bytes |
 | 个股分时 / K 线 / 对比 / 备用云图 | `stock_stockinfo/` | matplotlib + mplchart | PNG |
 | 全天候板块 | `stock_info/draw_future.py` | pytakumi `render_html_to_bytes`（`utils/all_weather_html.py`） | PNG bytes |
+| 我的自选 | `stock_info/draw_my_info.py` | pytakumi（`utils/my_stock_html.py`） | PNG bytes |
+| 基金持仓 | `stock_info/draw_fund_info.py` | pytakumi（`utils/fund_holdings_html.py`） | PNG bytes |
+| 模拟盘自选 | `stock_papertrade/render.py` | pytakumi（`utils/paper_holdings_html.py`） | PNG bytes |
+
+**取数失败不许静默**：我的自选 / 模拟盘自选用 `utils/warn_box.py` 的黄色警告框
+（`Failure` → `failure_lines` → `warn_box_html`），失败的每一条都要在图上写出来，
+并进 `ai_return` 文字。CSS 类名注意别和持仓条的绝对定位类撞名
+（`.day` / `.hold` / `.wt` / `.st`），图例小标签要用 `.chip.c-*`、分隔线用 `.sep-*`。
+
+**基金页不挂失败横幅**：它每行就是一只重仓股，失败了就该没有涨跌幅——
+在**原本涨跌幅那一格写「失败」**，原因写在同一行折线的位置即可。
+（自选页不一样：失败的票压根没有行可画，只能靠横幅点名。）
+
+**行底素材不要直接复用自选页的红/绿条**：基金页有自己的金色素材
+`stock_info/texture2d/myup_gold.png`，由 `tools/gen_fund_bar_asset.py`
+从 `myup.png` **只转色相**（饱和度/明度/alpha 不动）生成，
+所以渐变、左侧色条、右侧药丸、圆角跟原素材逐像素对齐。
+改了 `myup.png` 就要重跑一次生成脚本。金色药丸上白字只有 3:1 对比度，
+基金页的涨跌幅文字一律走**深色**。
+
+**基金页是「单色页」**：整页只有金 + 深色字，**不出现红绿**——
+涨跌靠数字前的 ▲▼ 和折线形状表达（`utils/sparkline.py` 的 `GOLD_SPARK`）。
+标题素材顶上那两条红绿行情条，在渲染时把饱和像素染成金（`_gold_title_uri`），
+不另外生成 11 份素材。
+
+**一列网格**：行卡片素材自带 30px 透明边，可见区是 **30..869**。
+全页卡片（指数条 / 信息条 / 图例 / 分隔线）都按这一列对齐，
+`CONTENT_L` / `CONTENT_W` 是唯一真相。警告框高度跟持仓条一致
+（`warn_box.WARN_MIN_H`），别让两行卡片之间夹成一条细缝。
 
 两者 **共享**：
 
