@@ -109,10 +109,18 @@ def _e(value: object) -> str:
 
 @lru_cache(maxsize=16)
 def _data_uri(path: str) -> str:
-    return _image_uri(Image.open(path))
+    """磁盘素材 → data URI。**直接读原始字节**，不要用 PIL 重新编码：
+    不同 Pillow 版本的 PNG 编码器输出不一样，重新编码会让同一份素材在不同
+    机器上生成不同的字节（CI 上按字节比对就会假失败）。"""
+    file = Path(path)
+    raw = file.read_bytes()
+    suffix = file.suffix.lower()
+    mime = "image/jpeg" if suffix in {".jpg", ".jpeg"} else "image/png"
+    return f"data:{mime};base64,{b64encode(raw).decode('ascii')}"
 
 
 def _image_uri(img: Image.Image) -> str:
+    """内存里的图 → data URI（只给需要现场处理的图用，比如染金标题）。"""
     buf = BytesIO()
     img.save(buf, format="PNG")
     return f"data:image/png;base64,{b64encode(buf.getvalue()).decode('ascii')}"

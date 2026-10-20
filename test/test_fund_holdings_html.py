@@ -147,15 +147,20 @@ def test_index_cards_share_the_content_column() -> None:
 
 def test_rows_use_gold_asset_not_watchlist_asset() -> None:
     """基金页有自己的金色行底图，不能再直接用自选页的红/绿素材。"""
-    from SayuStock.utils.my_stock_html import _data_uri
+    from base64 import b64encode
+
     from SayuStock.utils.fund_holdings_html import BAR_ASSET, TEXT_PATH
 
-    gold_uri = _data_uri(str(TEXT_PATH / BAR_ASSET))
-    original_uri = _data_uri(str(TEXT_PATH / "myup.png"))
+    def _uri(name: str) -> str:
+        """按磁盘原始字节算 data URI。别用 PIL 重新编码再比——
+        不同 Pillow 版本的 PNG 编码器输出不一样，会假失败。"""
+        raw = (TEXT_PATH / name).read_bytes()
+        return "data:image/png;base64," + b64encode(raw).decode("ascii")
+
     assert BAR_ASSET == "myup_gold.png"
     html = _build([_row()])
-    assert gold_uri in html
-    assert original_uri not in html
+    assert _uri(BAR_ASSET) in html
+    assert _uri("myup.png") not in html
 
 
 def test_gold_asset_keeps_source_alpha_structure() -> None:
@@ -167,7 +172,8 @@ def test_gold_asset_keeps_source_alpha_structure() -> None:
     src = Image.open(TEXT_PATH / "myup.png").convert("RGBA")
     gold = Image.open(TEXT_PATH / BAR_ASSET).convert("RGBA")
     assert gold.size == src.size
-    assert list(gold.getchannel("A").getdata()) == list(src.getchannel("A").getdata())
+    # getdata() 在 Pillow 14 会移除，比对字节用 tobytes()
+    assert gold.getchannel("A").tobytes() == src.getchannel("A").tobytes()
     r, g, b, _a = gold.getpixel((762, 55))
     assert r > g > b, "药丸应是金色系（红 > 绿 > 蓝）"
     assert 150 < r < 220, f"药丸亮度应贴近原素材，实际 {r}"
