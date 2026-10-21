@@ -8,7 +8,7 @@ from gsuid_core.ai_core.trigger_bridge import ai_return
 from .draw_info import DIFF_MAP
 from ..utils.market import MarketDataPort, get_market, is_market_error
 from ..utils.warn_box import Failure
-from ..utils.sparkline import GOLD_SPARK, sparkline_from_series
+from ..utils.sparkline import sparkline_from_series
 from ..utils.index_quotes import quote_index_items
 from ..utils.market.display import market_error_text
 from ..utils.fund_holdings_html import (
@@ -84,7 +84,7 @@ async def _fetch_row(market: MarketDataPort, raw: dict[str, object]) -> tuple[Fu
                 "",
                 "数据源未返回行情",
             )
-        svg = sparkline_from_series(series, width=SPARK_W, height=SPARK_H, style=GOLD_SPARK)
+        svg = sparkline_from_series(series, width=SPARK_W, height=SPARK_H)
         return (
             FundHoldingRow(
                 code=q.symbol.code or share_code,

@@ -128,16 +128,6 @@ def test_all_cards_share_one_content_column() -> None:
         assert _css_px(html, selector, "width") == CONTENT_W, selector
 
 
-def test_page_has_no_red_green_up_down_colors() -> None:
-    """整页金色皮肤：涨跌不再用红绿，方向靠 ▲▼ 和折线形状。"""
-    html = _build([_row(change=1.23), _row(code="300750", name="宁德时代", change=-2.04)])
-    assert "▲+1.23%" in html
-    assert "▼-2.04%" in html
-    # 旧的涨跌配色（自选页那套红/绿）不能出现在基金页
-    for old in ("#7A0F0F", "#08491F", "rgb(213,102,102)", "rgb(175,231,170)", "#ff5c5c", "#3ee36a"):
-        assert old not in html, old
-
-
 def test_index_cards_share_the_content_column() -> None:
     html = _build([_row()])
     assert _css_px(html, ".idx", "width") == 200
@@ -145,11 +135,15 @@ def test_index_cards_share_the_content_column() -> None:
     assert 4 * 200 + 3 * 13 == CONTENT_W
 
 
-def test_rows_use_gold_asset_not_watchlist_asset() -> None:
-    """基金页有自己的金色行底图，不能再直接用自选页的红/绿素材。"""
+def test_rows_use_gold_asset_only_for_failed_row() -> None:
+    """正常行用红/绿/灰条（和「我的自选」同一套），金色条只给取数失败的行。"""
     from base64 import b64encode
 
-    from SayuStock.utils.fund_holdings_html import BAR_ASSET, TEXT_PATH
+    from SayuStock.utils.fund_holdings_html import (
+        TEXT_PATH,
+        BAR_ASSET_UP,
+        BAR_ASSET_FAILED,
+    )
 
     def _uri(name: str) -> str:
         """按磁盘原始字节算 data URI。别用 PIL 重新编码再比——
@@ -157,20 +151,33 @@ def test_rows_use_gold_asset_not_watchlist_asset() -> None:
         raw = (TEXT_PATH / name).read_bytes()
         return "data:image/png;base64," + b64encode(raw).decode("ascii")
 
-    assert BAR_ASSET == "myup_gold.png"
-    html = _build([_row()])
-    assert _uri(BAR_ASSET) in html
-    assert _uri("myup.png") not in html
+    up_html = _build([_row(change=1.23)])
+    assert _uri(BAR_ASSET_UP) in up_html
+    assert _uri(BAR_ASSET_FAILED) not in up_html
+
+    fail_html = _build([_row(failed=True, reason="东方财富网络异常")])
+    assert _uri(BAR_ASSET_FAILED) in fail_html
+    assert _uri(BAR_ASSET_UP) not in fail_html
+
+
+def test_up_down_rows_keep_red_green_semantics() -> None:
+    """涨跌靠红/绿，不靠别的颜色：金底只属于失败行。"""
+    html = _build([_row(change=1.23), _row(code="300750", name="宁德时代", change=-2.04)])
+    assert "+1.23%" in html
+    assert "-2.04%" in html
+    # 副标题跟着涨跌染色（与「我的自选」一致）
+    assert "rgb(213,102,102)" in html
+    assert "rgb(175,231,170)" in html
 
 
 def test_gold_asset_keeps_source_alpha_structure() -> None:
     """金色素材是 myup 转色相来的：alpha 结构必须逐点一致。"""
     from PIL import Image
 
-    from SayuStock.utils.fund_holdings_html import BAR_ASSET, TEXT_PATH
+    from SayuStock.utils.fund_holdings_html import TEXT_PATH, BAR_ASSET_FAILED
 
     src = Image.open(TEXT_PATH / "myup.png").convert("RGBA")
-    gold = Image.open(TEXT_PATH / BAR_ASSET).convert("RGBA")
+    gold = Image.open(TEXT_PATH / BAR_ASSET_FAILED).convert("RGBA")
     assert gold.size == src.size
     # getdata() 在 Pillow 14 会移除，比对字节用 tobytes()
     assert gold.getchannel("A").tobytes() == src.getchannel("A").tobytes()
