@@ -151,11 +151,12 @@ def kdj(
     K = (RSV + 2K') / 3，D = (K + 2D') / 3（K/D 初值取中性 50），J = 3K - 2D。
     K/D 常态 0~100（>80 超买 <20 超卖），J 可越界。
     """
-    low_min = low.rolling(window=n, min_periods=1).min()
-    high_max = high.rolling(window=n, min_periods=1).max()
-    span = (high_max - low_min).to_numpy(dtype=float)
+    low_min = cast(pd.Series, low.rolling(window=n, min_periods=1).min())
+    high_max = cast(pd.Series, high.rolling(window=n, min_periods=1).max())
     close_arr = close.to_numpy(dtype=float)
     low_arr = low_min.to_numpy(dtype=float)
+    high_arr = high_max.to_numpy(dtype=float)
+    span = high_arr - low_arr
     with np.errstate(invalid="ignore", divide="ignore"):
         rsv = np.where(span > 0, (close_arr - low_arr) / span * 100.0, np.nan)
 
@@ -235,9 +236,10 @@ def cmf(
     """
     rng = (high - low).replace(0, np.nan)
     mfv = (((close - low) - (high - close)) / rng * volume).fillna(0.0)
-    vol_sum = volume.rolling(window=period).sum()
-    out = mfv.rolling(window=period).sum() / vol_sum
-    return out.where(vol_sum != 0, 0.0)
+    vol_sum = cast(pd.Series, volume.rolling(window=period).sum())
+    mfv_sum = cast(pd.Series, mfv.rolling(window=period).sum())
+    out = cast(pd.Series, mfv_sum / vol_sum)
+    return cast(pd.Series, out.where(vol_sum != 0, 0.0))
 
 
 # ============================================================

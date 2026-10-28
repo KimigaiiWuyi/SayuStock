@@ -237,6 +237,18 @@ class EastMoneyMarketData:
                 if trends is not None:
                     return parse_intraday_from_trends_list(trends, symbol, quote, ndays=1)
 
+        if days == 1 and quote is None:
+            # 单日分时必须附带盘口报价。当 get_single_stock 失败（如 -400016 断开/限流）
+            # 时不能降级为只有点列而无 quote 的半成品：否则调度器误判东财已交付，阻断
+            # 顺延至腾讯/新浪（后续源均能同时交付完整分时与盘口报价）。
+            if isinstance(raw, str):
+                return (
+                    not_found(raw, provider=PROVIDER)
+                    if "找不到" in raw or "未" in raw
+                    else network_error(raw, provider=PROVIDER)
+                )
+            return empty_error("东财单日分时缺少盘口行情", provider=PROVIDER)
+
         trends_only = await EASTMONEY_REQUESTER.get_stock_trends(secid, ndays=days)
         series = parse_intraday_from_trends_list(trends_only, symbol, quote, ndays=days)
         if days > 1 and isinstance(series, IntradaySeries) and series.points:
