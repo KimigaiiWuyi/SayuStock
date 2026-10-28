@@ -1,6 +1,7 @@
 import asyncio
 from typing import Optional
 from pathlib import Path
+from dataclasses import replace
 
 from PIL import Image, ImageDraw
 
@@ -94,14 +95,23 @@ async def draw_my_stock_img(ev: Event) -> str | bytes:
         nonlocal all_p
         query = u[4:] if u.startswith("VIX.") else u
         series = await market.intraday(query)
-        if is_market_error(series):
-            failed[index] = market_error_text(series)
-            return
-        series_sources.append(series.provider)
-        q = series.quote
+        q: Quote | None = None
+        if not is_market_error(series):
+            series_sources.append(series.provider)
+            q = series.quote
+
+        # 若分时未带盘口（例如分时仅有点列），或分时完全失败，向行情链请求 quote 兜底
         if q is None:
-            failed[index] = "数据源未返回行情"
+            q_res = await market.quote(query)
+            if not is_market_error(q_res):
+                q = q_res
+                if not is_market_error(series):
+                    series = replace(series, quote=q)
+
+        if q is None:
+            failed[index] = market_error_text(series) if is_market_error(series) else "数据源未返回行情"
             return
+
         all_p += float(q.change_pct) if q.change_pct is not None else 0.0
         stock_details.append(
             {
@@ -114,10 +124,11 @@ async def draw_my_stock_img(ev: Event) -> str | bytes:
             }
         )
         quotes[index] = (q, u)
-        svg = sparkline_from_series(series, width=SPARK_W, height=SPARK_H)
-        if svg:
-            sparks[u] = svg
-            sparks[q.symbol.code] = svg
+        if not is_market_error(series):
+            svg = sparkline_from_series(series, width=SPARK_W, height=SPARK_H)
+            if svg:
+                sparks[u] = svg
+                sparks[q.symbol.code] = svg
 
     await asyncio.gather(*[sg(index, u) for index, u in enumerate(uid)])
     filled = [row for row in quotes if row is not None]

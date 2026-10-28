@@ -16,6 +16,7 @@ MACD / CMF，AI 一个都拿不到，等于让它裸看 K 线数字瞎猜。对�
 新增图表元素时，请同步在这里补上对应文字，并在 ``test/test_render_text.py`` 加断言。
 """
 
+from typing import Any, cast
 from datetime import date
 
 import pandas as pd
@@ -226,8 +227,8 @@ def compare_text(series_list: list[KlineSeries]) -> str:
         close = pd.Series(df["close"], dtype="float64")
         pct = normalize_pct(close) * 100
         runup, drawdown = swing_stats(pct)
-        hi_loc = int(pct.idxmax())
-        lo_loc = int(pct.idxmin())
+        hi_loc = int(cast(Any, pct.idxmax()))
+        lo_loc = int(cast(Any, pct.idxmin()))
         blocks.append(
             f"{name}: 末点累计 {pct.iloc[-1]:+.2f}%  收盘 {close.iloc[-1]:.2f}\n"
             f"  最高点 {pct.max():+.2f}% ({df['date'].iloc[hi_loc]})  "
