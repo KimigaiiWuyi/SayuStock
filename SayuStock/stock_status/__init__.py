@@ -1,8 +1,8 @@
 from gsuid_core.subscribe import gs_subscribe
 from gsuid_core.status.plugin_status import register_status
 
+from ..stock_news import TASK_NAME
 from ..utils.image import get_ICON
-from ..stock_news.__init__ import TASK_NAME
 from ..utils.database.models import SsBind
 
 
