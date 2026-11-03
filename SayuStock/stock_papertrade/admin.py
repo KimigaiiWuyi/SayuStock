@@ -91,8 +91,13 @@ async def send_heal_holiday(bot: Bot, ev: Event) -> list[str] | None:
         lines.append(f"⚠️ {summary['unparsed_trades']} 笔流水时间戳无法解析，回放不完整，本次不动账。")
         return await bot.send("\n".join(lines))
 
-    # 持仓对账与脏成交是两件事，各自独立汇报。
+    # 归档还原与持仓对账、脏成交是三件事，各自独立汇报。
     # 「卖出播报了、钱少了、库里没流水」是持仓被别处删掉——没有脏流水也照样要修。
+    if summary["restored_trades"]:
+        verb = "将还原" if summary["dry_run"] else "已还原"
+        days_str = "、".join(summary["restored_days"])
+        lines.append(f"♻️ {verb}归档流水 {summary['restored_trades']} 笔（成交日已证实开市：{days_str}）")
+
     pos = summary["positions"]
     if pos:
         made = sum(1 for p in pos if p["created"])
@@ -126,12 +131,23 @@ async def send_heal_holiday(bot: Bot, ev: Event) -> list[str] | None:
     else:
         lines.append("✅ 持仓与流水自洽，无需修复。")
 
+    for fix in summary["cash_fixed"]:
+        lines.append(
+            f"  · 盘#{fix['account_id']} {fix['account_name']} "
+            f"现金 {fix['old_cash']:,.2f} → {fix['new_cash']:,.2f}；"
+            f"本金 {fix['old_principal']:,.2f} → {fix['new_principal']:,.2f}"
+        )
+
     if not summary["dirty_days"]:
         lines.append("✅ 没有落在非交易日的成交，账本无需还原。")
-        if summary["dry_run"] and pos:
+        if summary["dry_run"] and (pos or summary["cash_fixed"]):
             lines.append("")
             lines.append("以上为预演，账本未改动。确认无误后发「模拟盘假期还原 执行」。")
         return await bot.send("\n".join(lines))
+
+    days = summary["dirty_days"]
+    lines.append(f"脏数据日期：{days[0]} ~ {days[-1]}（共 {len(days)} 天）")
+    lines.append(f"{'将删除' if summary['dry_run'] else '已删除'}流水 {summary['deleted_trades']} 笔")
 
     days = summary["dirty_days"]
     lines.append(f"脏数据日期：{days[0]} ~ {days[-1]}（共 {len(days)} 天）")

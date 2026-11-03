@@ -432,31 +432,183 @@ def test_reconcile_is_not_gated_on_dirty_trades():
     """对账绝不能挂在"有没有脏成交"这个条件后面。
 
     回归：原实现在没有脏成交时直接 return，持仓重建根本走不到。
+    现金/本金对账同理——误删的流水被补回后，账也必须无条件对平。
     用 AST 判定语句顺序——不能靠 ``str.index``：注释里同样会出现
     ``if not dirty`` 字面量，先命中的会是注释而不是真代码。
     """
     tree = ast.parse(textwrap.dedent(inspect.getsource(heal.heal_holiday_trades)))
     plan_line = None
+    cash_line = None
     guard_line = None
     for node in ast.walk(tree):
-        if isinstance(node, ast.Assign) and plan_line is None:
-            if any(isinstance(t, ast.Name) and t.id == "pos_fixes" for t in node.targets):
+        if isinstance(node, ast.Assign):
+            ids = [n.id for t in node.targets for n in ast.walk(t) if isinstance(n, ast.Name)]
+            if plan_line is None and "pos_fixes" in ids:
                 plan_line = node.lineno
+            if cash_line is None and "cash_fixes" in ids:
+                cash_line = node.lineno
         elif isinstance(node, ast.If) and guard_line is None:
-            test = node.test
-            if (
-                isinstance(test, ast.UnaryOp)
-                and isinstance(test.op, ast.Not)
-                and isinstance(test.operand, ast.Name)
-                and test.operand.id == "dirty"
+            # ``if not dirty`` 可能裹在 ``and``/``or`` 里（如 and not restored_applied），
+            # 在 test 子树里找 not dirty 而不是只看顶层节点
+            if any(
+                isinstance(sub, ast.UnaryOp)
+                and isinstance(sub.op, ast.Not)
+                and isinstance(sub.operand, ast.Name)
+                and sub.operand.id == "dirty"
+                for sub in ast.walk(node.test)
             ):
                 guard_line = node.lineno
     assert plan_line is not None, "源码里找不到 pos_fixes 的结果赋值"
+    assert cash_line is not None, "源码里找不到 cash_fixes 的结果赋值"
     assert guard_line is not None, "源码里找不到 not dirty 早退分支"
     assert plan_line < guard_line, (
         f"持仓对账在第 {plan_line} 行、早退在第 {guard_line} 行：没有脏流水时永远不会重建缺失的持仓"
     )
-    print(f"[OK] 持仓对账（第 {plan_line} 行）排在 not dirty 早退（第 {guard_line} 行）之前")
+    assert cash_line < guard_line, (
+        f"现金对账在第 {cash_line} 行、早退在第 {guard_line} 行：没有脏流水时永远不会对平现金/本金"
+    )
+    print(f"[OK] 持仓/现金对账（第 {plan_line}/{cash_line} 行）都排在 not dirty 早退（第 {guard_line} 行）之前")
+
+
+def test_restore_archived_revives_only_proven_trading_days():
+    """**回归 2026-11-02**：归档行成交日有上证 bar → 自动复活，幂等。
+
+    归档不是只进不出的垃圾桶：被误删的流水（10-30 卖 1000、11-02 卖 500）
+    靠「day ∈ 上证日 K 交易日集合」这条硬证据复活。真休市日与库里现存的
+    行都不能复活——前者删除本来就对，后者复活就是双记。
+    """
+    import json as _json
+    import asyncio
+
+    from sqlalchemy import text as sa_text
+    from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+
+    tmp_dir = Path(__file__).resolve().parent / "_restore_probe"
+    tmp_dir.mkdir(exist_ok=True)
+    db_file = tmp_dir / "probe.db"
+    archive = tmp_dir / "papertrade_holiday_archive_20261102-165755.json"
+    if db_file.exists():
+        db_file.unlink()
+
+    def _archived(tid: int, side: str, price: float, qty: int, day: str, pnl: float = 0.0) -> dict[str, object]:
+        return {
+            "id": tid,
+            "account_id": 1,
+            "stock_code": "600028",
+            "stock_name": "中国石化",
+            "secid": "1.600028",
+            "side": side,
+            "price": price,
+            "qty": qty,
+            "amount": price * qty,
+            "fee": 10.0,
+            "realized_pnl": pnl,
+            "decided_at": f"{day}T10:00:00.123456",
+        }
+
+    archive.write_text(
+        _json.dumps(
+            {
+                "archived_at": "2026-11-02T16:57:55",
+                "dirty_days": ["2026-11-02"],
+                "count": 3,
+                "trades": [
+                    _archived(49, "sell", 5.87, 500, "2026-11-02", pnl=178.0),
+                    _archived(40, "buy", 5.8, 100, "2026-10-01"),
+                    _archived(41, "buy", 5.5, 9000, "2026-10-16"),
+                ],
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    async def _fake_trading():
+        return frozenset({"2026-10-16", "2026-10-30", "2026-11-02"}), "test"
+
+    async def run() -> tuple[int, list[str], list[tuple], int]:
+        engine = create_async_engine(f"sqlite+aiosqlite:///{db_file.as_posix()}")
+        maker = async_sessionmaker(engine, expire_on_commit=False)
+        async with engine.begin() as conn:
+            await conn.execute(
+                sa_text("CREATE TABLE sayupaperaccount (id INTEGER PRIMARY KEY, group_id TEXT, bot_id TEXT, mode TEXT)")
+            )
+            await conn.execute(
+                sa_text(
+                    "CREATE TABLE sayupapertrade (id INTEGER PRIMARY KEY AUTOINCREMENT, "
+                    "account_id INTEGER, group_id TEXT, bot_id TEXT, stock_code TEXT, "
+                    "stock_name TEXT, secid TEXT, side TEXT, price REAL, qty INTEGER, "
+                    "amount REAL, fee REAL, realized_pnl REAL, reason TEXT, snapshot TEXT, "
+                    "decided_at DATETIME, executed_at DATETIME, mode TEXT)"
+                )
+            )
+            await conn.execute(sa_text("INSERT INTO sayupaperaccount VALUES (1, 'g1', 'b1', 'balanced')"))
+            # 库里已有一笔 10-16 买入：与归档里那笔同键，必须靠去重跳过而不是双记
+            await conn.execute(
+                sa_text(
+                    "INSERT INTO sayupapertrade (account_id, stock_code, stock_name, secid, side, "
+                    "price, qty, amount, fee, realized_pnl, reason, snapshot, decided_at, executed_at, mode) "
+                    "VALUES (1, '600028', '中国石化', '1.600028', 'buy', 5.5, 9000, 49500.0, 25.0, 0.0, "
+                    "'', '', '2026-10-16 10:00:00.123456', '2026-10-16 10:00:00.123456', 'balanced')"
+                )
+            )
+        async with maker() as s:
+            existing, _ = await heal._load_trades(s)
+            n, days = await heal._restore_archived(s, existing, dry_run=False)
+            await s.commit()
+        # 独立连接复查：同一个 session 会命中未提交事务，骗过自己
+        async with maker() as s:
+            rows = (
+                await s.execute(
+                    sa_text(
+                        "SELECT account_id, stock_code, side, qty, price, reason, group_id, bot_id, mode "
+                        "FROM sayupapertrade ORDER BY id"
+                    )
+                )
+            ).all()
+            # 幂等：复跑时复活行已在库里，靠 _load_trades 的键去重
+            existing2, _ = await heal._load_trades(s)
+            n2, _ = await heal._restore_archived(s, existing2, dry_run=False)
+        await engine.dispose()
+        return n, days, [tuple(r) for r in rows], n2
+
+    old_rtd, old_dp = heal.resolve_trading_days, heal.DATA_PATH
+    setattr(heal, "resolve_trading_days", _fake_trading)
+    setattr(heal, "DATA_PATH", tmp_dir)
+    try:
+        n, days, rows, n2 = asyncio.run(run())
+    finally:
+        heal.resolve_trading_days, heal.DATA_PATH = old_rtd, old_dp
+        archive.unlink(missing_ok=True)
+        db_file.unlink(missing_ok=True)
+        tmp_dir.rmdir()
+
+    assert n == 1, n
+    assert days == ["2026-11-02"], days
+    assert len(rows) == 2, rows
+    aid, code, side, qty, price, reason, gid, bid, mode = rows[1]
+    assert (aid, code, side, qty, price) == (1, "600028", "sell", 500, 5.87), rows[1]
+    assert reason == "归档还原" and gid == "g1" and bid == "b1" and mode == "balanced", rows[1]
+    assert n2 == 0, "复活行已入库，复跑必须幂等"
+    print(f"[OK] 归档还原：交易日行复活 {n} 笔（{days}），休市日/已存在行跳过，复跑 {n2} 笔")
+
+
+def test_same_day_trades_are_never_dirty():
+    """**回归 2026-11-02**：当天成交永不判脏。
+
+    收盘后自愈跑起来时，当日日 K 往往还没入库——早盘生成的 24h K 线缓存
+    （``get_stock_kline`` TTL=1440min）就没有当天 bar，当天被判休市后
+    09:35 卖 500 股 / 10-30 卖 1000 股两次真实成交被误删。当天能落库
+    就说明过了盘中实时闸，宁可等次日证实再清。
+    """
+    today = date(2026, 11, 2)
+    closed = frozenset({"2026-11-02", "2026-10-30", "2026-10-01"})
+    same_day = _trade(90, "sell", 5.87, 500, "2026-11-02")
+    past_closed = _trade(89, "sell", 5.8, 1000, "2026-10-30")
+    open_day = _trade(88, "buy", 5.5, 1000, "2026-10-16")
+    dirty = heal._dirty_trades([same_day, past_closed, open_day], closed, today)
+    assert [t.id for t in dirty] == [89], [t.id for t in dirty]
+    print("[OK] 当天命中休市表也不删；已证实的历史休市日成交仍清")
 
 
 if __name__ == "__main__":
@@ -479,4 +631,6 @@ if __name__ == "__main__":
     test_no_dirty_path_commits_position_reconcile()
     test_async_session_does_not_autocommit()
     test_reconcile_is_not_gated_on_dirty_trades()
+    test_restore_archived_revives_only_proven_trading_days()
+    test_same_day_trades_are_never_dirty()
     print("\n[SUCCESS] holiday_heal 全部测试通过！")

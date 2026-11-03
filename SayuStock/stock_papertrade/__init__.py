@@ -159,6 +159,7 @@ async def _papertrade_holiday_boot() -> None:
         summary = await heal_holiday_trades()
         logger.info(
             "[SayuStock][PaperTrade] 启动自愈结束："
+            f"还原流水 {summary['restored_trades']} 笔 / "
             f"删除流水 {summary['deleted_trades']} 笔 / 决策 {summary['deleted_decisions']} 条，"
             f"跳过原因={summary['skipped'] or '无'}"
         )

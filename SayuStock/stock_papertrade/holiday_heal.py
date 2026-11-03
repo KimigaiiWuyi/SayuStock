@@ -11,6 +11,8 @@
 删除成交违反 ``SayuPaperTrade`` 的 append-only 约定，所以：
   * 只在 master 命令 / 启动钩子里跑，绝不进心跳路径
   * 删前把整行落到 ``DATA_PATH/papertrade_holiday_archive_*.json`` 留档
+  * 留档是**双向**的：归档行若能被上证日 K 证明成交在开市日，启动时自动
+    复活（误删回滚）——归档因此是可逆的，而不是只进不出的垃圾桶
   * ``dry_run=True`` 时只出计划不落库
   * 幂等：没有脏成交就是空操作
 
@@ -32,7 +34,7 @@ from gsuid_core.logger import logger
 from gsuid_core.utils.database.base_models import async_maker
 
 from .matcher import apply_fill_qty_cost, cash_delta_for_fill
-from .trading_calendar import _INDEX_SECID, _DAILY_LOOKBACK_DAYS, resolve_closed_days
+from .trading_calendar import _INDEX_SECID, _DAILY_LOOKBACK_DAYS, resolve_closed_days, resolve_trading_days
 from ..utils.resource_path import DATA_PATH
 from ..utils.database.papertrade_migration import _row_date, _has_table, _has_column
 
@@ -82,6 +84,8 @@ class HolidayHealResult(TypedDict):
     unparsed_trades: int
     traded_span: str
     dirty_days: List[str]
+    restored_trades: int
+    restored_days: List[str]
     deleted_trades: int
     deleted_decisions: int
     positions_changed: int
@@ -130,6 +134,8 @@ def _empty_result(source: str, dry_run: bool, skipped: Optional[str] = None) -> 
         unparsed_trades=0,
         traded_span="",
         dirty_days=[],
+        restored_trades=0,
+        restored_days=[],
         deleted_trades=0,
         deleted_decisions=0,
         positions_changed=0,
@@ -339,6 +345,14 @@ async def _load_positions(session: AsyncSession) -> Dict[Tuple[int, str], Tuple[
     return out
 
 
+def _dirty_trades(trades: List[_Trade], closed: FrozenSet[str], today: date) -> List[_Trade]:
+    """命中权威休市表的成交。当天成交**永不**判脏：能落库说明已过盘中
+    实时闸，且收盘后当日日 K 往往还没入库（早盘生成的 24h K 线缓存就
+    没有当天 bar）——"无 bar"分不清休市与数据滞后。10-30 / 11-02 两次
+    把当天卖出误删就是这条链，等次日刷新证实后再清不迟。"""
+    return [t for t in trades if t.decided_at.date() != today and t.decided_at.date().isoformat() in closed]
+
+
 def _plan_positions(
     keep: List[_Trade],
     old_positions: Dict[Tuple[int, str], Tuple[int, float, float]],
@@ -463,6 +477,117 @@ async def _archive(trades: List[_Trade], days: List[str]) -> str:
     }
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
     return str(path)
+
+
+# ============================================================
+# 归档还原：把「成交日已被证实开市」的归档流水复活
+# ============================================================
+def _archived_trade_key(t: _Trade) -> Tuple[int, str, str, int, float, datetime]:
+    """与归档行对齐的去重键：decided_at 精确到微秒，撞键概率可忽略。"""
+    return (t.account_id, t.code, t.side, t.qty, round(t.price, 4), t.decided_at)
+
+
+async def _restore_archived(session: AsyncSession, existing: List[_Trade], *, dry_run: bool) -> Tuple[int, List[str]]:
+    """归档流水的反向还原：成交日 ∈ 上证日 K 交易日集合 → 复活。
+
+    这是「休市日成交 → 归档删除」的另一半：归档里的行若能被上证日 K 证明
+    成交在开市日，那次删除本身就是错的——流水复活后由后面的对账把
+    持仓 / 现金 / 净值快照一并重建。证据门槛故意从严：只有 day ∈ bar
+    集合才复活，真休市与"未证实"（最后一根 bar 之后的尾巴）一律留档。
+    """
+    paths = sorted(DATA_PATH.glob("papertrade_holiday_archive_*.json"))
+    if not paths:
+        return 0, []
+    trading, tsource = await resolve_trading_days()
+    if trading is None:
+        logger.warning(f"{_LOG} 交易日集合拿不到（{tsource}），跳过归档还原")
+        return 0, []
+
+    existing_keys = {_archived_trade_key(t) for t in existing}
+    origin_cache: Dict[int, Tuple[str, str, str]] = {}
+    restored = 0
+    restored_days: set[str] = set()
+    for path in paths:
+        try:
+            raw: object = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as e:
+            logger.warning(f"{_LOG} 归档文件损坏，跳过 {path.name}: {e}")
+            continue
+        if not isinstance(raw, dict):
+            continue
+        items = raw.get("trades")
+        if not isinstance(items, list):
+            continue
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            decided = _as_datetime(item.get("decided_at"))
+            if decided is None:
+                continue
+            day = decided.date().isoformat()
+            # 门槛：成交日必须有上证 bar 作证。真休市与数据未入库的尾巴都不复活
+            if day not in trading:
+                continue
+            try:
+                aid = int(item["account_id"])
+                code = str(item["stock_code"])
+                side = str(item["side"])
+                qty = int(item["qty"])
+                price = float(item["price"])
+                amount = float(item["amount"])
+                fee = float(item["fee"])
+                pnl = float(item["realized_pnl"])
+                name = str(item.get("stock_name") or "")
+                secid = str(item.get("secid") or "")
+            except (KeyError, TypeError, ValueError) as e:
+                logger.warning(f"{_LOG} 归档行缺字段，跳过 {path.name}: {e}")
+                continue
+            key = (aid, code, side, qty, round(price, 4), decided)
+            if key in existing_keys:
+                continue
+            existing_keys.add(key)
+            if not dry_run:
+                if aid not in origin_cache:
+                    origin_cache[aid] = await _account_origin(session, aid)
+                group_id, bot_id, mode = origin_cache[aid]
+                await session.execute(
+                    text(
+                        "INSERT INTO sayupapertrade "
+                        "(account_id, group_id, bot_id, stock_code, stock_name, secid, side, "
+                        "price, qty, amount, fee, realized_pnl, reason, snapshot, "
+                        "decided_at, executed_at, mode) "
+                        "VALUES (:aid, :gid, :bid, :code, :name, :secid, :side, "
+                        ":price, :qty, :amount, :fee, :pnl, :reason, :snapshot, "
+                        ":decided, :executed, :mode)"
+                    ),
+                    {
+                        "aid": aid,
+                        "gid": group_id,
+                        "bid": bot_id,
+                        "code": code,
+                        "name": name,
+                        "secid": secid,
+                        "side": side,
+                        "price": price,
+                        "qty": qty,
+                        "amount": amount,
+                        "fee": fee,
+                        "pnl": pnl,
+                        "reason": "归档还原",
+                        "snapshot": "",
+                        "decided": decided,
+                        "executed": decided,
+                        "mode": mode,
+                    },
+                )
+            restored += 1
+            restored_days.add(day)
+    if restored:
+        logger.info(
+            f"{_LOG} 归档还原：{restored} 笔流水成交日在已证实交易日"
+            f"（{sorted(restored_days)}），{'预演将复活' if dry_run else '已复活入库'}"
+        )
+    return restored, sorted(restored_days)
 
 
 async def _rewrite_snapshots(
@@ -620,7 +745,7 @@ async def _apply_positions(session: AsyncSession, keep: List[_Trade], fixes: Lis
     has_bot = await _has_column(session, "sayupaperposition", "bot_id")
     now = datetime.now()
     created = changed = removed = 0
-    origin_cache: Dict[int, Tuple[str, str]] = {}
+    origin_cache: Dict[int, Tuple[str, str, str]] = {}
 
     for fix in fixes:
         if fix["cost_only"]:
@@ -666,7 +791,7 @@ async def _apply_positions(session: AsyncSession, keep: List[_Trade], fixes: Lis
             if has_group or has_bot:
                 if aid not in origin_cache:
                     origin_cache[aid] = await _account_origin(session, aid)
-                group_id, bot_id = origin_cache[aid]
+                group_id, bot_id, _ = origin_cache[aid]
             if has_group:
                 params["group_id"] = group_id
                 cols.append("group_id")
@@ -698,14 +823,14 @@ async def _apply_positions(session: AsyncSession, keep: List[_Trade], fixes: Lis
     return created, changed, removed
 
 
-async def _account_origin(session: AsyncSession, aid: int) -> Tuple[str, str]:
-    """建持仓行时补上建仓群 / 平台，仅用于排障。"""
+async def _account_origin(session: AsyncSession, aid: int) -> Tuple[str, str, str]:
+    """建行/还原流水时补盘的原群 / 平台 / 风控模式，仅用于排障与还原。"""
     row = (
-        await session.execute(text("SELECT group_id, bot_id FROM sayupaperaccount WHERE id = :id"), {"id": aid})
+        await session.execute(text("SELECT group_id, bot_id, mode FROM sayupaperaccount WHERE id = :id"), {"id": aid})
     ).first()
     if row is None:
-        return "", ""
-    return str(row[0] or ""), str(row[1] or "")
+        return "", "", "balanced"
+    return str(row[0] or ""), str(row[1] or ""), str(row[2] or "balanced")
 
 
 async def diagnose_holiday_heal(limit: int = 20) -> str:
@@ -822,11 +947,13 @@ async def diagnose_holiday_heal(limit: int = 20) -> str:
 async def heal_holiday_trades(*, dry_run: bool = False) -> HolidayHealResult:
     """清掉落在非交易日的成交，并把现金 / 本金 / 持仓 / 净值快照重建回自洽。
 
-    两件事，优先级不同：
-      1. **持仓 ↔ 流水双向对账**，无条件执行、幂等。它不依赖休市表——
+    三件事，优先级不同：
+      1. **持仓 ↔ 流水 + 现金/本金对账**，无条件执行、幂等。它不依赖休市表——
          "持仓行被别处删掉而流水没写"（卖出播报了、钱少了、库无流水）与
          节假日毫无关系，挂在 `if not dirty` 后面就永远修不了。
-      2. **清非交易日成交**，需要权威休市集合；拿不到就整轮放弃。
+      2. **归档流水还原**：归档行若能被上证日 K 证明成交在开市日，复活之——
+         那次删除本身就是错的。跑在脏判定之前，复活的行参与回放。
+      3. **清非交易日成交**，需要权威休市集合；拿不到就整轮放弃。
 
     ``dry_run=True`` 时只算计划不落库。
     """
@@ -856,7 +983,6 @@ async def heal_holiday_trades(*, dry_run: bool = False) -> HolidayHealResult:
             return _empty_result(source, dry_run, skipped="无 sayupaperaccount 表")
 
         trades, unparsed = await _load_trades(session)
-        dirty = [t for t in trades if t.decided_at.date().isoformat() in closed]
         # 每条出口都留痕：否则"没跑"和"跑了但没找到脏数据"在日志里长得一模一样
         result["scanned_trades"] = len(trades)
         result["unparsed_trades"] = unparsed
@@ -866,7 +992,6 @@ async def heal_holiday_trades(*, dry_run: bool = False) -> HolidayHealResult:
             result["traded_span"] = f"{lo} ~ {hi}"
         else:
             result["traded_span"] = "(账本无成交)"
-        logger.info(f"{_LOG} 扫描 {len(trades)} 笔流水（{result['traded_span']}），命中 {len(dirty)} 笔非交易日成交")
         # 时间戳解析不了的行已经从回放里消失：拿残缺的回放去重算持仓，会把
         # 真实持仓算成 0 然后删掉。宁可不做，也绝不能在这一步动账。
         if unparsed:
@@ -877,6 +1002,16 @@ async def heal_holiday_trades(*, dry_run: bool = False) -> HolidayHealResult:
         accounts = await _load_accounts(session)
         has_pos_table = await _has_table(session, "sayupaperposition")
         old_positions = await _load_positions(session) if has_pos_table else {}
+
+        # 归档还原跑在脏判定之前：复活的行要进回放，现金/持仓/净值才一起对平
+        restored, restored_days = await _restore_archived(session, trades, dry_run=dry_run)
+        result["restored_trades"] = restored
+        result["restored_days"] = restored_days
+        if restored and not dry_run:
+            trades, _ = await _load_trades(session)
+
+        dirty = _dirty_trades(trades, closed, date.today())
+        logger.info(f"{_LOG} 扫描 {len(trades)} 笔流水（{result['traded_span']}），命中 {len(dirty)} 笔非交易日成交")
         dirty_ids = {t.id for t in dirty}
         keep = [t for t in trades if t.id not in dirty_ids]
 
@@ -910,14 +1045,18 @@ async def heal_holiday_trades(*, dry_run: bool = False) -> HolidayHealResult:
         # 以前这一步挂在 `if not dirty: return` 后面，于是"流水有、持仓缺"
         # 这种形状永远没人修：没有脏流水 → 直接返回 → 持仓重建根本走不到。
         # 美的 10-01 就是这个形状（买入流水 id=12 还在，持仓行没了）。
-        pos_fixes = _plan_positions(keep, old_positions, frozenset(accounts))
+        # 现金/本金同理：cash 没有第三方写入口径（唯一写入是成交流水），
+        # 与留存流水对不平就必然是账本漂移，不该等"有脏成交"才对平。
+        cash_fixes, pos_fixes = _plan_accounts(accounts, keep, old_positions)
         result["positions"] = pos_fixes
-        if pos_fixes:
+        result["cash_fixed"] = cash_fixes
+        if pos_fixes or cash_fixes:
             logger.warning(
                 f"{_LOG} 账本对账发现 {len(pos_fixes)} 处持仓与流水不一致"
                 f"（新建 {sum(1 for f in pos_fixes if f['created'])}、"
                 f"改 {sum(1 for f in pos_fixes if not f['created'] and not f['removed'])}、"
-                f"删 {sum(1 for f in pos_fixes if f['removed'])}）；{'预演' if dry_run else '准备修复'}"
+                f"删 {sum(1 for f in pos_fixes if f['removed'])}），"
+                f"{len(cash_fixes)} 个盘现金/本金待对平；{'预演' if dry_run else '准备修复'}"
             )
         else:
             logger.info(f"{_LOG} 账本对账：持仓与流水一致，无需修复")
@@ -927,66 +1066,69 @@ async def heal_holiday_trades(*, dry_run: bool = False) -> HolidayHealResult:
             result["positions_created"] = made
             result["positions_changed"] = changed
             result["positions_removed"] = removed
+        if not dry_run and cash_fixes:
+            for fix in cash_fixes:
+                await session.execute(
+                    text("UPDATE sayupaperaccount SET cash = :cash, principal = :p WHERE id = :id"),
+                    {"cash": fix["new_cash"], "p": fix["new_principal"], "id": fix["account_id"]},
+                )
 
-        if not dirty:
+        # dry_run 下归档还原只算计划不落库，后面"有还原"的分支都用它判真写过
+        restored_applied = bool(restored and not dry_run)
+
+        if not dirty and not restored_applied:
             tail = sorted(closed)[-5:] if closed else []
             # 必须在这里就 commit：``async_maker()`` 是普通 AsyncSession，
             # 退出 with 不自动提交（实测：不 commit 写了也等于没写）。
-            # 不 commit 的话，"无脏成交"这条最常见的路径会把刚建好的持仓丢掉，
+            # 不 commit 的话，"无脏成交"这条最常见的路径会把对账结果丢掉，
             # 而日志还写着"已执行持仓对账"——看起来成功，实际没落库。
-            if not dry_run and result["positions_created"]:
+            wrote = (
+                result["positions_created"] or result["positions_changed"] or result["positions_removed"] or cash_fixes
+            )
+            if not dry_run and wrote:
                 await session.commit()
                 logger.info(
-                    f"{_LOG} 已提交持仓对账：新建 {result['positions_created']} 行"
-                    f"（10-01 这类流水有、持仓缺就是靠这一步自动补回）"
+                    f"{_LOG} 已提交账本对账：持仓 +{result['positions_created']}"
+                    f"/~{result['positions_changed']}/-{result['positions_removed']}，"
+                    f"现金对平 {len(cash_fixes)} 个盘"
                 )
             logger.info(
                 f"{_LOG} 无脏成交可清：流水时间跨度 {result['traded_span']}，"
-                f"休市表最近几个休市日 {tail}" + ("；已提交持仓对账" if result["positions_created"] else "；持仓已自洽")
+                f"休市表最近几个休市日 {tail}" + ("；已提交账本对账" if wrote else "；账本已自洽")
             )
             return result
 
         days = sorted({t.decided_at.date().isoformat() for t in dirty})
-        first_dirty = min(t.decided_at.date() for t in dirty)
         result["dirty_days"] = days
 
-        cash_fixes, _ = _plan_accounts(accounts, keep, old_positions)
-        result["cash_fixed"] = cash_fixes
-
-        logger.warning(
-            f"{_LOG} 发现 {len(dirty)} 笔非交易日成交（{days[0]} ~ {days[-1]}，共 {len(days)} 天，"
-            f"来源 {source}）；{'预演' if dry_run else '准备清理'}"
-        )
+        if dirty:
+            logger.warning(
+                f"{_LOG} 发现 {len(dirty)} 笔非交易日成交（{days[0]} ~ {days[-1]}，共 {len(days)} 天，"
+                f"来源 {source}）；{'预演' if dry_run else '准备清理'}"
+            )
         if dry_run:
             result["deleted_trades"] = len(dirty)
             return result
 
-        archive_path = await _archive(dirty, days)
-        result["archive_path"] = archive_path
+        if dirty:
+            archive_path = await _archive(dirty, days)
+            result["archive_path"] = archive_path
 
-        ids = ",".join(str(i) for i in sorted(dirty_ids))
-        await session.execute(text(f"DELETE FROM sayupapertrade WHERE id IN ({ids})"))
-        result["deleted_trades"] = len(dirty)
+            ids = ",".join(str(i) for i in sorted(dirty_ids))
+            await session.execute(text(f"DELETE FROM sayupapertrade WHERE id IN ({ids})"))
+            result["deleted_trades"] = len(dirty)
 
-        for fix in cash_fixes:
-            await session.execute(
-                text("UPDATE sayupaperaccount SET cash = :cash, principal = :p WHERE id = :id"),
-                {"cash": fix["new_cash"], "p": fix["new_principal"], "id": fix["account_id"]},
-            )
-
-        if pos_fixes and has_pos_table:
-            logger.info(
-                f"{_LOG} 持仓对账已在上一步落库：新建 {result['positions_created']} / "
-                f"改 {result['positions_changed']} / 删 {result['positions_removed']}"
-            )
+        # 净值重写的起点：最早一笔被删 / 被还原的流水日，之后的快照链全要重算
+        change_days = [t.decided_at.date() for t in dirty] + [date.fromisoformat(d) for d in restored_days]
+        first_change = min(change_days)
 
         if await _has_table(session, "sayupapersnapshot"):
-            updated, dropped, failed = await _rewrite_snapshots(session, keep, first_dirty, closed)
+            updated, dropped, failed = await _rewrite_snapshots(session, keep, first_change, closed)
             result["snapshots_updated"] = updated
             result["snapshots_deleted"] = dropped
             result["price_fallback_codes"] = failed
 
-        if await _has_table(session, "sayupaperdecision"):
+        if dirty and await _has_table(session, "sayupaperdecision"):
             dec_ids: List[int] = []
             for day in days:
                 found = (
@@ -1007,8 +1149,8 @@ async def heal_holiday_trades(*, dry_run: bool = False) -> HolidayHealResult:
         await session.commit()
 
     logger.warning(
-        f"{_LOG} 完成：删流水 {result['deleted_trades']} 笔、决策 {result['deleted_decisions']} 条，"
-        f"持仓改 {result['positions_changed']} / 删 {result['positions_removed']}，"
-        f"快照 {result['snapshots_updated']} 行；留档 {result['archive_path']}"
+        f"{_LOG} 完成：还原流水 {result['restored_trades']} 笔、删流水 {result['deleted_trades']} 笔、"
+        f"决策 {result['deleted_decisions']} 条，持仓改 {result['positions_changed']} / "
+        f"删 {result['positions_removed']}，快照 {result['snapshots_updated']} 行；留档 {result['archive_path']}"
     )
     return result

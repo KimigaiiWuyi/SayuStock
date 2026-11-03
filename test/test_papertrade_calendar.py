@@ -306,6 +306,64 @@ def test_density_guard_thresholds_are_sane():
     print(f"[OK] 密度阈值 {cal._MIN_BAR_DENSITY:.0%} / 休市上限 {cal._MAX_CLOSED_RATIO:.0%}")
 
 
+def test_refresh_daily_calendar_skips_unconfirmed_tail():
+    """**回归 2026-11-02**：最后一根 bar 之后的日子绝不判休市。
+
+    ``get_stock_kline`` 的 24h 文件缓存按 ``start-end`` 取键：早盘重启生成的
+    730 天区间响应没有当天 bar，收盘后重启同区间命中缓存 → 当天被判休市 →
+    启动自愈把当天刚成交的流水删掉（10-30 卖 1000 / 11-02 卖 500 两次实机
+    误删都是这条链）。只有「后面还有更晚 bar 作证」的缺 K 工作日才算休市。
+    """
+    import asyncio
+    from types import SimpleNamespace
+    from datetime import date as _date
+
+    class _FixedDate(_date):
+        @classmethod
+        def today(cls):
+            return cls(2026, 11, 2)
+
+    class _Market:
+        def __init__(self, days):
+            self._days = days
+
+        async def kline(self, secid, period, *, start=None, end=None):
+            return SimpleNamespace(
+                bars=[SimpleNamespace(ts=datetime.fromisoformat(d + "T15:00:00"), close=1.0) for d in self._days]
+            )
+
+    def _refresh(days: list[str], lookback: int):
+        setattr(cal, "get_market", lambda: _Market(days))
+        return asyncio.run(cal.refresh_daily_calendar(lookback_days=lookback))
+
+    old_market, old_date = cal.get_market, cal.date
+    old_load, old_save = cal.load_calendar_cache, cal.save_calendar_cache
+    setattr(cal, "date", _FixedDate)
+    setattr(cal, "load_calendar_cache", lambda: None)
+    setattr(cal, "save_calendar_cache", lambda cache: None)
+    try:
+        # 场景 A（复现 11-02 事故）：10-28 缺 bar 且后面有 bar → 证实休市；
+        # 11-02 当天缺 bar 但没有更晚 bar → 未证实，不判
+        closed = _refresh(["2026-10-27", "2026-10-29", "2026-10-30"], 6)
+        assert closed is not None
+        assert "2026-10-28" in closed, sorted(closed)
+        assert "2026-11-02" not in closed, sorted(closed)
+
+        # 场景 B：最后一根 bar 是 10-29 → 10-30 与 11-02 都属未证实尾巴，都不判
+        closed = _refresh(["2026-10-27", "2026-10-28", "2026-10-29"], 6)
+        assert closed is not None
+        assert "2026-10-30" not in closed, sorted(closed)
+        assert "2026-11-02" not in closed, sorted(closed)
+
+        # 场景 C：当天 bar 已到 → 只回看清真休市，行为与旧逻辑一致
+        closed = _refresh(["2026-10-27", "2026-10-28", "2026-10-29", "2026-10-30", "2026-11-02"], 6)
+        assert closed == frozenset(), sorted(closed or [])
+    finally:
+        cal.get_market, cal.date = old_market, old_date
+        cal.load_calendar_cache, cal.save_calendar_cache = old_load, old_save
+    print("[OK] 未证实尾巴（当天及之后）不判休市；有后证的真休市仍判")
+
+
 if __name__ == "__main__":
     test_weekday_is_trading_day()
     test_weekend_is_not_trading_day()

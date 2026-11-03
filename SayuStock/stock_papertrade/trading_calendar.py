@@ -3,9 +3,11 @@
 判定链（自上而下，先命中先返回）：
 
 1. **周末** → 非交易日
-2. **权威休市表** → 非交易日。上证指数 ``1.000001`` 日 K 在扫描窗口内
-   没有 bar 的工作日即休市日，由 ``refresh_daily_calendar`` 落盘到
-   ``papertrade_trading_calendar.json`` 的 ``closed_days``
+2. **权威休市表** → 非交易日。上证指数 ``1.000001`` 日 K 里「最后一根
+   bar 之前没有 bar 的工作日」即休市日；最后一根 bar 之后的尾巴（含
+   当天）分不清休市还是数据未入库，不判、留给下一轮刷新，由
+   ``refresh_daily_calendar`` 落盘到 ``papertrade_trading_calendar.json``
+   的 ``closed_days``
 3. **分时自证** → 非交易日。交易时段开始满 :data:`_SESSION_GRACE` 分钟后，
    缓存里的上证分时最后一点仍停在更早的日子，说明交易所压根没开市
 4. **内置表兜底** → 仅当上面都没有缓存可用时（首次启动 / 网络不可达）
@@ -30,7 +32,7 @@ from datetime import date, time, datetime, timedelta
 
 from gsuid_core.logger import logger
 
-from ..utils.market import KlinePeriod, get_market, is_market_error
+from ..utils.market import KlinePeriod, KlineSeries, get_market, is_market_error
 from ..utils.resource_path import DATA_PATH
 
 _CALENDAR_CACHE_PATH = DATA_PATH / "papertrade_trading_calendar.json"
@@ -307,6 +309,39 @@ async def refresh_intraday() -> Optional[str]:
     return last
 
 
+async def _fetch_index_bars(start: date, end: date) -> Optional[KlineSeries]:
+    """拉上证日 K；东财限流（-400016）退避重试一次。不可达 / 空响应返回 None。"""
+    series = await get_market().kline(_INDEX_SECID, KlinePeriod.D1, start=start, end=end)
+    # 东财对同一 IP 的高频请求会回 -400016（实测连续调用即触发）。限流是瞬时的，
+    # 退避重试一次通常就恢复；不重试的话，一次限流会让整个休市表拿不到，
+    # 连带自愈整体放弃——那正是最需要它的时刻。
+    if is_market_error(series) and "400016" in series.message:
+        await asyncio.sleep(_RATE_LIMIT_BACKOFF_SECONDS)
+        logger.warning(f"{_LOG} 命中东财限流，{_RATE_LIMIT_BACKOFF_SECONDS}s 后重试一次")
+        series = await get_market().kline(_INDEX_SECID, KlinePeriod.D1, start=start, end=end)
+    if is_market_error(series):
+        logger.warning(f"{_LOG} 上证日 K 不可达: {series.message}")
+        return None
+    if not series.bars:
+        logger.warning(f"{_LOG} 上证日 K 为空")
+        return None
+    return series
+
+
+async def resolve_trading_days(lookback_days: int = _DAILY_LOOKBACK_DAYS) -> Tuple[Optional[frozenset[str]], str]:
+    """上证日 K 的交易日集合（bar 日期），附来源说明。
+
+    与 :func:`resolve_closed_days` 互补：归档还原只凭「day ∈ 本集合」
+    这条硬证据复活流水，未证实与真休市的一律留档。同参数请求命中
+    ``get_stock_kline`` 的当日文件缓存，跟在刷新后面跑近似免费。
+    """
+    end = date.today()
+    series = await _fetch_index_bars(end - timedelta(days=lookback_days), end)
+    if series is None:
+        return None, "行情不可达"
+    return frozenset(bar.ts.date().isoformat() for bar in series.bars), "上证日K(实时)"
+
+
 async def refresh_daily_calendar(lookback_days: int = _DAILY_LOOKBACK_DAYS) -> Optional[frozenset[str]]:
     """扫上证日 K，把窗口内"工作日但无 K 线"的日子落盘为权威休市表。
 
@@ -320,21 +355,10 @@ async def refresh_daily_calendar(lookback_days: int = _DAILY_LOOKBACK_DAYS) -> O
     """
     end = date.today()
     start = end - timedelta(days=lookback_days)
-    series = await get_market().kline(_INDEX_SECID, KlinePeriod.D1, start=start, end=end)
-    # 东财对同一 IP 的高频请求会回 -400016（实测连续调用即触发）。限流是瞬时的，
-    # 退避重试一次通常就恢复；不重试的话，一次限流会让整个休市表拿不到，
-    # 连带自愈整体放弃——那正是最需要它的时刻。
-    if is_market_error(series) and "400016" in series.message:
-        await asyncio.sleep(_RATE_LIMIT_BACKOFF_SECONDS)
-        logger.warning(f"{_LOG} 命中东财限流，{_RATE_LIMIT_BACKOFF_SECONDS}s 后重试一次")
-        series = await get_market().kline(_INDEX_SECID, KlinePeriod.D1, start=start, end=end)
-    if is_market_error(series):
-        logger.warning(f"{_LOG} 上证日 K 不可达: {series.message}")
+    series = await _fetch_index_bars(start, end)
+    if series is None:
         return None
     trading: set[str] = {bar.ts.date().isoformat() for bar in series.bars}
-    if not trading:
-        logger.warning(f"{_LOG} 上证日 K 为空，无法生成权威休市表")
-        return None
 
     weekdays = sum(1 for i in range((end - start).days + 1) if (start + timedelta(days=i)).weekday() < 5)
     if weekdays > 0:
@@ -346,9 +370,13 @@ async def refresh_daily_calendar(lookback_days: int = _DAILY_LOOKBACK_DAYS) -> O
             )
             return None
 
+    # 只把「最后一根 bar 之前」的工作日判成休市：其后的日子分不清是真休市
+    # 还是数据未入库——早盘生成的 24h K 线缓存就没有当天 bar，收盘后重启自愈
+    # 时若把当天算进休市表，当天刚成交的真实流水会被当成脏数据删掉
+    last_bar = date.fromisoformat(max(trading))
     closed: list[str] = []
     cursor = start
-    while cursor <= end:
+    while cursor < last_bar:
         if cursor.weekday() < 5 and cursor.isoformat() not in trading:
             closed.append(cursor.isoformat())
         cursor += timedelta(days=1)
