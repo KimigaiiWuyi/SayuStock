@@ -12,12 +12,12 @@ from aiohttp import ClientError, ClientSession, ClientTimeout
 
 from gsuid_core.logger import logger
 
+from ....constant import DESKTOP_UA
 from ....stock.utils import get_file
 
 PROVIDER = "aastocks"
-_UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36"
 _HEADERS = {
-    "User-Agent": _UA,
+    "User-Agent": DESKTOP_UA,
     "Accept": "text/html,application/xhtml+xml,*/*;q=0.8",
     "Accept-Language": "zh-TW,zh;q=0.9,en;q=0.8",
 }

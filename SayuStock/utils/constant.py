@@ -15,8 +15,15 @@ chinese_stocks_path = Path(__file__).parent / "chinese_stocks.json"
 with open(chinese_stocks_path, "r", encoding="utf-8") as f:
     chinese_stocks: dict[str, StockInfo] = json.load(f)
 
+DESKTOP_UA = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36"
+)
+MOBILE_UA = (
+    "Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Mobile Safari/537.36"
+)
+
+
 AL = "zh-CN,zh;q=0.8,zh-TW;q=0.7,zh-HK;q=0.5,en-US;q=0.3,en;q=0.2"
-UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36"
 
 PREFIX_DATA = {
     "0": "深A",
@@ -94,29 +101,15 @@ header_simple = {
     "Sec-Fetch-Site": "none",
     "Sec-Fetch-User": "?1",
     "Upgrade-Insecure-Requests": "1",
-    "User-Agent": UA,
-    "sec-ch-ua": '"Chromium";v="142", "Google Chrome";v="142", "Not_A Brand";v="99"',
     "sec-ch-ua-mobile": "?0",
     "sec-ch-ua-platform": '"Windows"',
 }
 
-DC_COOKIES = {
-    "qgqp_b_id": "a4ad5101a1218975271d02d73aacf03a",
-    "st_nvi": "MaWBmK2ref7oCBA_DkWhW1ede",
-    "nid": "077407b960092c0310185ecdc5f8c00b",
-    "nid_create_time": "1756794328056",
-    "gvi": "HfIZExkHZlE5FTRjZeVKca89c",
-    "gvi_create_time": "1756794328056",
-}
-
 request_header = {
-    "User-Agent": UA,
     "Accept": "*/*",
     "Accept-Language": AL,
-    "Cookie": "qgqp_b_id=229f77509a638e072d07e4bdd080365e; st_nvi=q3QPHkjC_LDf4RiYeIWUW54ac; st_si=06313790339453; st_asi=delete; nid18=00620625750c0d61de6dd27ce794c681; nid18_create_time=1776748551813; gviem=otwB4g1cC1zjYc6TqadlO5403; gviem_create_time=1776748551813; st_pvi=80092537355939; st_sp=2026-04-21%2013%3A15%3A51; st_inirUrl=https%3A%2F%2Fwww.eastmoney.com%2F; st_sn=2; st_psi=20260421131554736-113200301324-4658149161; fullscreengg=1; fullscreengg2=1",  # noqa: E501
     "Dnt": "1",
     # "Host": "push2his.eastmoney.com",
-    "sec-ch-ua": '''"Chromium";v="142", "Google Chrome";v="142", "Not_A Brand";v="99"''',
     "upgrade-insecure-requests": "1",
     "sec-fetch-user": "?1",
 }

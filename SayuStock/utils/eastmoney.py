@@ -1,3 +1,4 @@
+import re
 import json
 import random
 import asyncio
@@ -18,7 +19,7 @@ from aiohttp import (
 from gsuid_core.logger import logger
 
 from .constant import (
-    DC_COOKIES,
+    DESKTOP_UA,
     SINGLE_LINE_FIELDS1,
     SINGLE_LINE_FIELDS2,
     SINGLE_STOCK_FIELDS,
@@ -31,6 +32,21 @@ from .constant import (
 )
 from .stock.utils import async_file_cache
 from ..stock_config.stock_config import STOCK_CONFIG
+
+
+def eastmoney_headers(headers: dict[str, str]) -> dict[str, str]:
+    """在接口请求头选定后叠加东财 UA 和 Cookie。"""
+    merged = dict(headers)
+    ua = STOCK_CONFIG.get_config("eastmoney_user_agent").data.strip() or DESKTOP_UA
+    merged["User-Agent"] = ua
+    cookie = STOCK_CONFIG.get_config("eastmoney_cookie").data.strip()
+    if cookie:
+        merged["Cookie"] = cookie
+    if chrome := re.search(r"Chrome/(\d+)", ua):
+        version = chrome[1]
+        merged["sec-ch-ua"] = f'"Chromium";v="{version}", "Google Chrome";v="{version}", "Not_A Brand";v="99"'
+    return merged
+
 
 EastMoneyResponse = Union[Dict[str, Any], int]
 EastMoneyParams = Union[Dict[str, Any], List[Tuple[str, Any]], Tuple[Tuple[str, Any], ...], None]
@@ -146,11 +162,6 @@ class EastMoneyRequester:
         logger.debug(f"[SayuStock][EM] Params: {params}")
 
         request_headers = dict(header)
-        cookies = STOCK_CONFIG.get_config("eastmoney_cookie").data
-        if cookies:
-            logger.debug("[SayuStock][EM] 使用配置中的 Cookie")
-            request_headers["Cookie"] = cookies
-
         if url.startswith(
             (
                 "https://quote.eastmoney.com/center/api/sidemenu_new.json",
@@ -159,6 +170,8 @@ class EastMoneyRequester:
             )
         ):
             request_headers = dict(header_simple)
+
+        request_headers = eastmoney_headers(request_headers)
 
         urls = [url]
         if "push2.eastmoney.com" in url:
@@ -171,7 +184,6 @@ class EastMoneyRequester:
         async with ClientSession(
             connector=TCPConnector(verify_ssl=True),
             headers=request_headers,
-            cookies=DC_COOKIES,
         ) as client:
             for req_url in urls:
                 final_url = str(URL(req_url).with_query(params or {}))

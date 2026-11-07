@@ -9,12 +9,12 @@ from aiohttp import ClientError, ClientSession, ClientTimeout
 from gsuid_core.logger import logger
 
 from ...errors import MarketError, empty_error, parse_error, network_error
+from ....constant import DESKTOP_UA
 from ....stock.utils import async_file_cache
 
 PROVIDER = "tiantian"
-_UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36"
 _HEADERS = {
-    "User-Agent": _UA,
+    "User-Agent": DESKTOP_UA,
     "Accept": "application/json,text/javascript,*/*;q=0.8",
     "Referer": "https://fund.eastmoney.com/",
 }

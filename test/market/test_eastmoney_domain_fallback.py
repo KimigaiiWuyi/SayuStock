@@ -13,6 +13,8 @@ import asyncio
 import pytest
 
 from SayuStock.utils import eastmoney as em
+from SayuStock.stock_config.stock_config import STOCK_CONFIG
+from gsuid_core.utils.plugins_config.models import GsStrConfig
 
 
 class _FakeResp:
@@ -48,9 +50,10 @@ class _FakeSession:
 
     attempts: list[str] = []
     timeout_hosts: set[str] = set()
+    headers: dict[str, str] = {}
 
-    def __init__(self, *args: object, **kwargs: object) -> None:
-        pass
+    def __init__(self, *args: object, headers: dict[str, str], **kwargs: object) -> None:
+        _FakeSession.headers = headers
 
     async def __aenter__(self) -> "_FakeSession":
         return self
@@ -70,7 +73,7 @@ def _prepare(monkeypatch: pytest.MonkeyPatch, timeout_hosts: set[str]) -> em.Eas
     _FakeSession.attempts = []
     _FakeSession.timeout_hosts = timeout_hosts
     monkeypatch.setattr(em, "ClientSession", _FakeSession)
-    monkeypatch.setattr(em.STOCK_CONFIG, "get_config", lambda key: type("_C", (), {"data": None})())
+    monkeypatch.setattr(STOCK_CONFIG, "get_config", lambda key: GsStrConfig(key, key, ""))
     return em.EastMoneyRequester()
 
 
@@ -116,3 +119,21 @@ def test_non_push2_url_has_no_backup_domain(monkeypatch: pytest.MonkeyPatch) -> 
         assert len(_FakeSession.attempts) == 1
 
     asyncio.run(_run())
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "https://push2.eastmoney.com/api/qt/stock/get",
+        "https://quote.eastmoney.com/center/api/sidemenu_new.json",
+        "https://quote.eastmoney.com/stockhotmap/api/getquotedata",
+        "https://quotederivates.eastmoney.com/datacenter/list",
+    ],
+)
+def test_cookie_survives_header_selection(monkeypatch: pytest.MonkeyPatch, url: str) -> None:
+    requester = _prepare(monkeypatch, set())
+    values = {"eastmoney_cookie": "test_session=configured", "eastmoney_user_agent": "test-UA"}
+    monkeypatch.setattr(STOCK_CONFIG, "get_config", lambda key: GsStrConfig(key, key, values[key]))
+    asyncio.run(requester.stock_request(url))
+    assert _FakeSession.headers["Cookie"] == "test_session=configured"
+    assert _FakeSession.headers["User-Agent"] == "test-UA"

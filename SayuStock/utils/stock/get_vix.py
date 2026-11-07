@@ -7,7 +7,7 @@ import aiohttp
 
 from gsuid_core.logger import logger
 
-from ..constant import ErroText
+from ..constant import DESKTOP_UA, ErroText
 
 URL = "https://1.optbbs.com/d/csv/d/{}.csv"
 
@@ -30,7 +30,7 @@ class VixTrendRow(TypedDict):
 
 async def get_vix_data(vix_name: str) -> List[VixTrendRow] | str:
     url = URL.format(vix_name)
-    async with aiohttp.ClientSession() as session:
+    async with aiohttp.ClientSession(headers={"User-Agent": DESKTOP_UA}) as session:
         try:
             async with session.get(url, ssl=_VIX_SSL_CTX) as response:
                 response.raise_for_status()

@@ -18,6 +18,8 @@ class EastmoneyNews:
     name = "eastmoney"
 
     async def fetch(self, *, limit: int, cover_ms: int) -> NewsFeed | NewsError:
+        from ...eastmoney import eastmoney_headers
+
         items: list[NewsItem] = []
         seen: set[str] = set()
         cursor = ""
@@ -35,7 +37,7 @@ class EastmoneyNews:
                     "pageSize": str(page_size),
                     "req_trace": str(now_ms),
                 },
-                headers=_HEADERS,
+                headers=eastmoney_headers(_HEADERS),
                 provider=self.name,
             )
             if is_news_error(payload):

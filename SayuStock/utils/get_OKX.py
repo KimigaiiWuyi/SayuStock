@@ -5,6 +5,8 @@ import httpx
 
 from gsuid_core.logger import logger
 
+from .constant import DESKTOP_UA
+
 FREQ_MAP = {
     # 日线
     "101": "1D",
@@ -234,7 +236,7 @@ async def get_price_and_change_simple(
 
     try:
         logger.info(f"正在异步查询 {crypto} 指数行情...")
-        response = await client.get(url, params=params)
+        response = await client.get(url, params=params, headers={"User-Agent": DESKTOP_UA})
         response.raise_for_status()
         data = response.json()
 

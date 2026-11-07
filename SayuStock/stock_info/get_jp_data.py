@@ -6,6 +6,8 @@ from bs4 import Tag, BeautifulSoup
 
 from gsuid_core.logger import logger
 
+from ..utils.constant import DESKTOP_UA
+
 
 async def get_live_pch_by_symbol(soup: BeautifulSoup | Tag, symbol: str) -> tuple[float, float] | None:
     table = soup.select_one("table.table.table-hover.sortable-theme-minimal")
@@ -52,10 +54,7 @@ async def get_jpy() -> dict[str, dict[str, Any]] | None:
     symbol_to_find1 = "GJGB30Y:IND"
     symbol_to_find2 = "GJGB10:IND"
 
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit"
-        "/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
-    }
+    headers = {"User-Agent": DESKTOP_UA}
 
     async with httpx.AsyncClient() as client:
         response = await client.get(url, headers=headers, follow_redirects=True, timeout=15.0)

@@ -14,12 +14,10 @@ from playwright.async_api import async_playwright
 from gsuid_core.logger import logger
 
 from .models import XueQiu7x24
-
-UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"  # noqa: E501
-
+from .constant import DESKTOP_UA
+from ..stock_config.stock_config import STOCK_CONFIG
 
 _HEADER: Dict[str, str] = {
-    "User-Agent": UA,
     "Referer": "https://xueqiu.com/",
 }
 
@@ -47,7 +45,7 @@ async def get_token() -> object:
 
         # 创建上下文和页面
         context = await browser.new_context(
-            user_agent=UA,
+            user_agent=STOCK_CONFIG.get_config("xueqiu_user_agent").data.strip() or DESKTOP_UA,
             viewport={"width": 1366, "height": 768},
         )
         page = await context.new_page()
@@ -57,11 +55,9 @@ async def get_token() -> object:
             await page.goto("https://xueqiu.com/hq", wait_until="networkidle", timeout=15000)
             # 获取所有 Cookie
             cookies = await context.cookies()
-            logger.debug(f"[SayuStock] 获取Cookie: {cookies}")
             cl = [f"{cookie['name']}={cookie['value']}" for cookie in cookies if "name" in cookie and "value" in cookie]
             XUEQIU_TOKEN = ";".join(cl)
-            _HEADER["Cookie"] = XUEQIU_TOKEN
-            logger.debug(f"[SayuStock] 设置Cookie: {XUEQIU_TOKEN}")
+            logger.debug("[SayuStock] 已更新雪球自动 Cookie")
             return XUEQIU_TOKEN
         finally:
             await browser.close()
@@ -183,10 +179,15 @@ async def stock_request(
 ) -> Union[Dict, int]:
     async with ClientSession(connector=TCPConnector(verify_ssl=True)) as client:
         for _ in range(2):
+            request_headers = dict(header)
+            request_headers["User-Agent"] = STOCK_CONFIG.get_config("xueqiu_user_agent").data.strip() or DESKTOP_UA
+            manual_cookie = STOCK_CONFIG.get_config("xueqiu_cookie").data.strip()
+            if cookie := manual_cookie or XUEQIU_TOKEN:
+                request_headers["Cookie"] = cookie
             async with client.request(
                 method,
                 url=url,
-                headers=header,
+                headers=request_headers,
                 params=params,
                 json=_json,
                 data=data,
@@ -199,6 +200,8 @@ async def stock_request(
                     raw_data = {"code": -999, "data": _raw_data}
                 logger.debug(raw_data)
                 if "error_code" in raw_data and raw_data["error_code"] == "400016":
+                    if manual_cookie:
+                        return -400016
                     await get_token()
                     continue
 
