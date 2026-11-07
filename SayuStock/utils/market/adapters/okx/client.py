@@ -12,6 +12,7 @@ from gsuid_core.logger import logger
 from ...enums import KlinePeriod
 from ...errors import MarketError, empty_error, network_error
 from ....get_OKX import FREQ_MAP, CRYPTO_MAP, FREQ_TO_SECONDS, analyze_market_target
+from ....constant import DESKTOP_UA
 
 PROVIDER = "okx"
 _TZ_UTC8 = timezone(timedelta(hours=8))
@@ -43,7 +44,7 @@ async def fetch_today_1m_candles(inst_id: str) -> list[object] | MarketError:
     all_candles: list[object] = []
     after = ""
     try:
-        async with httpx.AsyncClient(timeout=15.0) as client:
+        async with httpx.AsyncClient(headers={"User-Agent": DESKTOP_UA}, timeout=15.0) as client:
             for _ in range(20):
                 params: dict[str, str] = {"instId": inst_id, "bar": "1m", "limit": "100"}
                 if after:
@@ -101,7 +102,7 @@ async def fetch_history_candles(
     all_candles: list[object] = []
     after = ""
     try:
-        async with httpx.AsyncClient(timeout=20.0) as client:
+        async with httpx.AsyncClient(headers={"User-Agent": DESKTOP_UA}, timeout=20.0) as client:
             max_loops = (count // 100) + 2
             for _ in range(max_loops):
                 params: dict[str, str] = {"instId": inst_id, "bar": bar, "limit": "100"}
@@ -136,7 +137,7 @@ async def fetch_history_candles(
 async def fetch_index_ticker(inst_id: str) -> dict[str, float] | MarketError:
     url = "https://www.okx.com/api/v5/market/index-tickers"
     try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
+        async with httpx.AsyncClient(headers={"User-Agent": DESKTOP_UA}, timeout=10.0) as client:
             response = await client.get(url, params={"instId": inst_id})
             response.raise_for_status()
             body = response.json()

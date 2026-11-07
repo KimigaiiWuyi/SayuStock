@@ -57,6 +57,13 @@ minutes = int(STOCK_CONFIG.get_config("mapcloud_refresh_minutes").data)
 
 新增配置：在 `CONFIG_DEFAULT` 加 `Gs*Config`，消费侧「每次用时读」即可热更新（与 GsCore 插件配置习惯一致）。
 
+请求鉴权仅开放 `eastmoney_cookie` / `eastmoney_user_agent`、
+`xueqiu_cookie` / `xueqiu_user_agent` 与原有 `ths_api_key`，每次请求读取，保存后生效。
+东财 Cookie 留空不发送；雪球手动 Cookie 优先，留空自动获取；UA 留空使用内置 Desktop UA。
+公有渠道直接使用 `utils/constant.py` 的 Desktop / Mobile UA 常量，不生成 WebUI 配置项。
+Referer、Accept、语言由各接口保留；东财 `sec-ch-ua` 根据 UA 的 Chrome 主版本自动生成。
+金十客户端号与版本、天天基金 deviceid 留在各自请求模块内部，不作为用户配置。
+
 ## 7.3 数据库
 
 ### 自选 `SsBind`

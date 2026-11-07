@@ -8,8 +8,7 @@ from typing import Mapping
 from aiohttp import ClientError, ClientSession, ClientTimeout, ContentTypeError
 
 from .errors import NewsError, parse_error, network_error
-
-_UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
+from ..constant import DESKTOP_UA
 
 
 async def fetch_json(
@@ -19,7 +18,7 @@ async def fetch_json(
     headers: dict[str, str],
     provider: str,
 ) -> Mapping[str, object] | NewsError:
-    merged = {"User-Agent": _UA, **headers}
+    merged = {"User-Agent": DESKTOP_UA, **headers}
     try:
         async with ClientSession(timeout=ClientTimeout(total=15)) as client:
             async with client.get(url, params=params, headers=merged) as resp:

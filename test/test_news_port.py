@@ -3,6 +3,7 @@
 import asyncio
 from datetime import datetime
 from zoneinfo import ZoneInfo
+from unittest.mock import AsyncMock, MagicMock
 
 from pytest import MonkeyPatch
 
@@ -256,3 +257,26 @@ def test_eastmoney_keeps_first_page_when_next_fails(monkeypatch: MonkeyPatch) ->
     assert isinstance(result, NewsFeed)
     assert [item.id for item in result.items] == ["11"]
     assert pages["n"] == 2
+
+
+def test_xueqiu_manual_cookie_can_be_cleared(monkeypatch: MonkeyPatch) -> None:
+    from SayuStock.utils import request as xueqiu
+    from gsuid_core.utils.plugins_config.models import GsStrConfig
+
+    values = {"xueqiu_cookie": "test_session=manual", "xueqiu_user_agent": ""}
+    monkeypatch.setattr(xueqiu.STOCK_CONFIG, "get_config", lambda key: GsStrConfig(key, key, values[key]))
+    monkeypatch.setattr(xueqiu, "XUEQIU_TOKEN", "test_session=automatic")
+    response = MagicMock(status=200)
+    response.json = AsyncMock(return_value={"items": []})
+    session = MagicMock()
+    session.request.return_value.__aenter__.return_value = response
+    factory = MagicMock()
+    factory.return_value.__aenter__.return_value = session
+    monkeypatch.setattr(xueqiu, "ClientSession", factory)
+
+    asyncio.run(xueqiu.stock_request(xueqiu.NEWS_API))
+    values["xueqiu_cookie"] = ""
+    asyncio.run(xueqiu.stock_request(xueqiu.NEWS_API))
+    first, second = session.request.call_args_list
+    assert first.kwargs["headers"]["Cookie"] == "test_session=manual"
+    assert second.kwargs["headers"]["Cookie"] == "test_session=automatic"

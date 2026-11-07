@@ -10,15 +10,13 @@ from aiohttp import ClientSession, ClientTimeout, ClientConnectionError
 from gsuid_core.logger import logger
 
 from .utils import get_file
-from ..constant import PREFIX_DATA, code_id_dict, chinese_stocks, code_query_overrides
+from ..constant import DESKTOP_UA, PREFIX_DATA, code_id_dict, chinese_stocks, code_query_overrides
+from ..eastmoney import eastmoney_headers
 from ...stock_config.stock_config import STOCK_CONFIG
 
+_FUND_DEVICE_ID = "1234567.py.service"
+
 SEARCHAPI_HEADERS = {
-    "User-Agent": (
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-        "AppleWebKit/537.36 (KHTML, like Gecko) "
-        "Chrome/148.0.0.0 Safari/537.36"
-    ),
     "Accept": (
         "text/html,application/xhtml+xml,application/xml;q=0.9,"
         "image/avif,image/webp,image/apng,*/*;q=0.8,"
@@ -28,7 +26,6 @@ SEARCHAPI_HEADERS = {
     "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8,zh-TW;q=0.7",
     "Cache-Control": "max-age=0",
     "Dnt": "1",
-    "Sec-Ch-Ua": '"Chromium";v="148", "Google Chrome";v="148", "Not/A)Brand";v="99"',
     "Sec-Ch-Ua-Mobile": "?0",
     "Sec-Ch-Ua-Platform": '"Windows"',
     "Sec-Fetch-Dest": "document",
@@ -41,11 +38,7 @@ SEARCHAPI_HEADERS = {
 
 def _get_searchapi_headers() -> Dict[str, str]:
     """构建 searchapi 请求头，注入配置中的 Cookie。"""
-    headers = dict(SEARCHAPI_HEADERS)
-    cookies = STOCK_CONFIG.get_config("eastmoney_cookie").data
-    if cookies:
-        headers["Cookie"] = cookies
-    return headers
+    return eastmoney_headers(SEARCHAPI_HEADERS)
 
 
 async def get_fund_pos_list(fcode: Union[str, int]) -> Optional[Dict[str, object]]:
@@ -53,13 +46,13 @@ async def get_fund_pos_list(fcode: Union[str, int]) -> Optional[Dict[str, object
     params = {
         "pageIndex": "1",
         "pageSize": "10",
-        "deviceid": "1234567.py.service",
+        "deviceid": _FUND_DEVICE_ID,
         "version": "4.3.0",
         "product": "Eastmoney",
         "plat": "Web",
         "FCODE": str(fcode),
     }
-    async with ClientSession() as sess:
+    async with ClientSession(headers={"User-Agent": DESKTOP_UA}) as sess:
         try:
             async with sess.get(_api, params=params) as res:
                 if res.status == 200:
@@ -382,7 +375,7 @@ async def get_image_from_em(
             except UnidentifiedImageError:
                 logger.warning(f"[SayuStock]{name}已存在文件读取失败, 尝试重新下载...")
 
-    async with ClientSession() as sess:
+    async with ClientSession(headers=eastmoney_headers({})) as sess:
         try:
             logger.info(f"[SayuStock]开始下载: {name} | 地址: {url}")
             async with sess.get(url) as res:

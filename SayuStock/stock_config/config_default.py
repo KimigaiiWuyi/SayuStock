@@ -126,24 +126,17 @@ CONFIG_DEFAULT: Dict[str, GSC] = {
         options=["东方财富", "纳斯达克"],
     ),
     "eastmoney_cookie": GsStrConfig(
-        "东财Cookie",
-        "东财Cookie",
-        "qgqp_b_id=659a53f35cc91d08833fd26098e9ce34; st_nvi=DXIDHc92MckKhvIssg8zda85c;"
-        " nid=0ff5d2da99cd123247ff24b723a17e3c; "
-        "nid_create_time=1762029542554; gvi=VIzYcS_d6R9H3UQkE2C7078a4; gvi_create_time=1762029542554; "
-        "websitepoptg_api_time=1762781584093; fullscreengg=1; fullscreengg2=1",
-        options=[
-            "qgqp_b_id=659a53f35cc91d08833fd26098e9ce34; st_nvi=DXIDHc92MckKhvIssg8zda85c;"
-            " nid=0ff5d2da99cd123247ff24b723a17e3c; "
-            "nid_create_time=1762029542554; gvi=VIzYcS_d6R9H3UQkE2C7078a4; gvi_create_time=1762029542554; "
-            "websitepoptg_api_time=1762781584093; fullscreengg=1; fullscreengg2=1"
-        ],
+        "东方财富 Cookie", "遇到风控时手动填写；留空不发送 Cookie，保存后下次请求生效", "", secret=True
     ),
+    "eastmoney_user_agent": GsStrConfig("东方财富 User-Agent", "可选；留空使用内置 Desktop UA", ""),
+    "xueqiu_cookie": GsStrConfig("雪球 Cookie", "手动 Cookie 优先；留空自动获取", "", secret=True),
+    "xueqiu_user_agent": GsStrConfig("雪球 User-Agent", "可选；留空使用内置 Desktop UA", ""),
     "ths_api_key": GsStrConfig(
         "同花顺API密钥",
         "同花顺金融数据API（扶摇 fuyao.aicubes.cn）的 API Key，请求头 X-api-key 携带；"
         "默认内置公共 Key，失效可到该站「API Key 管理」页（/admin）用同花顺账号签发自己的",
         "sk-fuyao-ORe_1l_p-CogNpfJpfU90yzO7LjLkMOE",
+        secret=True,
     ),
     "kronos_divider": GsDivider(
         "AI模型预测",
