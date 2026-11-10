@@ -972,41 +972,43 @@ def build_cloudmap_render_data(
     if not isinstance(snap, BoardSnapshot):
         return ErroText["notData"]
 
-    all_stocks: list[dict[str, Any]] = []
+    unique_by_code: dict[str, dict[str, Any]] = {}
     for row in snap.rows:
         if row.market_cap is None or row.change_pct is None or not row.name:
             continue
         category_name = row.industry or "-"
         if row.name.startswith(("ST", "*ST")):
             category_name = "ST"
-        all_stocks.append(
-            {
-                "category": category_name,
-                "name": row.name,
-                "value": float(row.market_cap),
-                "diff_val": float(row.change_pct),
-                "code": row.code,
-                "sector": sector,
-            }
-        )
+        stock_dict: dict[str, Any] = {
+            "category": category_name,
+            "name": row.name,
+            "value": float(row.market_cap),
+            "diff_val": float(row.change_pct),
+            "code": row.code,
+            "sector": sector,
+        }
+        # 同代码跨页并发抖动去重；无代码时退化按 (分类, 名称) 去重
+        key = row.code if row.code else f"{category_name}_{row.name}"
+        if key not in unique_by_code or float(row.market_cap) > float(unique_by_code[key]["value"]):
+            unique_by_code[key] = stock_dict
 
-    if not all_stocks:
+    if not unique_by_code:
         return ErroText["notData"]
 
     grouped_by_category: dict[str, list[dict[str, Any]]] = defaultdict(list)
-    for stock in all_stocks:
+    for stock in unique_by_code.values():
         grouped_by_category[str(stock["category"])].append(stock)
 
     # 行业/概念快照已是目标板块成分；hotmap 才按 L1 名过滤，这里不能再筛
+    categories_to_process: list[str] = []
     if market in {"大盘云图", "概念云图", "行业云图"}:
         categories_to_process = list(grouped_by_category.keys())
     elif sector is not None and sector in grouped_by_category:
         categories_to_process = [sector]
     else:
-        categories_to_process = []
-        for item in grouped_by_category.keys():
-            if sector and sector in item:
-                categories_to_process = [item]
+        for cat_key in grouped_by_category.keys():
+            if sector and sector in cat_key:
+                categories_to_process = [cat_key]
                 break
         if not categories_to_process:
             return ErroText["notData"]
@@ -1014,7 +1016,18 @@ def build_cloudmap_render_data(
     final_stock_list: list[dict[str, Any]] = []
     for cat_name in categories_to_process:
         stock_items = grouped_by_category[cat_name]
-        num_items = len(stock_items)
+        sorted_stocks = sorted(stock_items, key=lambda x: float(x["value"]), reverse=True)
+        # 同一分类内按 name 去重，避免同名不同代码（如正股与衍生份额）导致 Plotly 叶子节点聚合冲突
+        seen_names: set[str] = set()
+        deduped_stocks: list[dict[str, Any]] = []
+        for s in sorted_stocks:
+            stock_name = str(s["name"])
+            if stock_name in seen_names:
+                continue
+            seen_names.add(stock_name)
+            deduped_stocks.append(s)
+
+        num_items = len(deduped_stocks)
         if layer == 1:
             num_to_extract = num_items
         else:
@@ -1029,8 +1042,7 @@ def build_cloudmap_render_data(
             ideal_count = math.ceil(num_items * fit)
             clamped_count = max(3, min(ideal_count, 15))
             num_to_extract = min(clamped_count, num_items)
-        sorted_stocks = sorted(stock_items, key=lambda x: float(x["value"]), reverse=True)
-        final_stock_list.extend(sorted_stocks[:num_to_extract])
+        final_stock_list.extend(deduped_stocks[:num_to_extract])
 
     if not final_stock_list:
         return ErroText["notData"]
