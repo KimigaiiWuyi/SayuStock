@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-import pytest
+import asyncio
+
 from plotly.graph_objects import Figure
 
 from SayuStock.utils.render_data import CloudmapRenderData, build_cloudmap_render_data
@@ -60,8 +61,7 @@ def test_cloudmap_dedup_same_category_same_name_diff_code() -> None:
     assert float(nee_rows.iloc[0]["value"]) == 1.100e11
 
 
-@pytest.mark.asyncio
-async def test_cloudmap_to_fig_no_question_mark_in_leaf_nodes() -> None:
+def test_cloudmap_to_fig_no_question_mark_in_leaf_nodes() -> None:
     """测试存在重复候选时，最终 Plotly Figure 的叶子节点绝不包含 (?)。"""
     rows = (
         _make_row("AMD", "超威半导体", "信息技术", 8.539e11, 2.38),
@@ -72,7 +72,7 @@ async def test_cloudmap_to_fig_no_question_mark_in_leaf_nodes() -> None:
         _make_row("GS", "高盛", "金融", 2.614e11, 0.05),
     )
     snap = BoardSnapshot(kind=BoardKind.CUSTOM, title="美股", rows=rows)
-    fig = await to_fig(snap, "大盘云图", "美股", layer=2)
+    fig = asyncio.run(to_fig(snap, "大盘云图", "美股", layer=2))
     assert isinstance(fig, Figure)
     trace_data = fig.to_dict()["data"][0]
     labels: list[str] = trace_data["labels"]

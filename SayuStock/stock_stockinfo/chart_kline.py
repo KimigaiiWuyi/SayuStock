@@ -17,14 +17,14 @@ from .chart_base import (
     FONT_W_BOLD,
     FONT_W_LIGHT,
     FONT_W_SEMIBOLD,
+    Bars,
+    Line,
     Pane,
     Bands,
     Chart,
     HLine,
     Figure,
     Volume,
-    BarPlot,
-    LinePlot,
     Indicator,
     Rectangle,
     DrawResult,
@@ -176,31 +176,31 @@ def draw_single_kline_chart(series: KlineSeries, sp: str | None = None) -> DrawR
         SMA(20),
         boll60_2,
         boll60_3,
-        LinePlot(lambda frame: frame["bbi"], label="BBI", color="#ffd700", width=2.2),
+        Line(lambda frame: frame["bbi"], label="BBI", color="#ffd700", width=2.2),
         Pane("below", height_ratio=0.22),
         HLine(0, color=GRID_COLOR, linestyle="--"),
-        LinePlot(lambda frame: frame["turnover"], label="换手率", color="#d77cff", width=1.5),
-        LinePlot(lambda frame: frame["cmf20"], label="CMF(20)", color="#2ecc71", width=1.5),
+        Line(lambda frame: frame["turnover"], label="换手率", color="#d77cff", width=1.5),
+        Line(lambda frame: frame["cmf20"], label="CMF(20)", color="#2ecc71", width=1.5),
         Pane("below", height_ratio=0.15),
         # RSI 取 6/12/24（国内口径，与 AI 读数一致），而非西方默认的 RSI(14)。
         # 80/20 超买超卖线在下面的 axhspan/axhline 里画，这里不要重复加 HLine。
-        LinePlot(lambda frame: frame["rsi6"], label="RSI6", color="#4aa3ff", width=1.6),
-        LinePlot(lambda frame: frame["rsi12"], label="RSI12", color="#f5b301", width=1.3),
-        LinePlot(lambda frame: frame["rsi24"], label="RSI24", color="#ff5da2", width=1.3),
+        Line(lambda frame: frame["rsi6"], label="RSI6", color="#4aa3ff", width=1.6),
+        Line(lambda frame: frame["rsi12"], label="RSI12", color="#f5b301", width=1.3),
+        Line(lambda frame: frame["rsi24"], label="RSI24", color="#ff5da2", width=1.3),
         Pane("below", height_ratio=0.15),
-        LinePlot(lambda frame: frame["kdj_k"], label="K", color="#f5b301", width=1.5),
-        LinePlot(lambda frame: frame["kdj_d"], label="D", color="#2e9bff", width=1.5),
-        LinePlot(lambda frame: frame["kdj_j"], label="J", color="#ff5da2", width=1.4),
+        Line(lambda frame: frame["kdj_k"], label="K", color="#f5b301", width=1.5),
+        Line(lambda frame: frame["kdj_d"], label="D", color="#2e9bff", width=1.5),
+        Line(lambda frame: frame["kdj_j"], label="J", color="#ff5da2", width=1.4),
         Pane("below", height_ratio=0.18),
-        # MACD 柱按正负分红绿两条画 —— BarPlot 只接受单色，靠 where() 掩掉另一半
-        BarPlot(
+        # MACD 柱按正负分红绿两条画 —— Bars 只接受单色，靠 where() 掩掉另一半
+        Bars(
             lambda frame: frame["macd_bar"].where(frame["macd_bar"] >= 0),
             color=UP_COLOR,
             alpha=0.75,
             width=0.76,
             label="MACD柱",
         ),
-        BarPlot(
+        Bars(
             lambda frame: frame["macd_bar"].where(frame["macd_bar"] < 0),
             color=DOWN_COLOR,
             alpha=0.75,
@@ -209,8 +209,8 @@ def draw_single_kline_chart(series: KlineSeries, sp: str | None = None) -> DrawR
             # 跳过它，否则 mplchart 会拿 lambda 的 repr 当图例名
             label="_nolegend_",
         ),
-        LinePlot(lambda frame: frame["macd_dif"], label="DIF", color="#f1c40f", width=1.6),
-        LinePlot(lambda frame: frame["macd_dea"], label="DEA", color="#4aa3ff", width=1.6),
+        Line(lambda frame: frame["macd_dif"], label="DIF", color="#f1c40f", width=1.6),
+        Line(lambda frame: frame["macd_dea"], label="DEA", color="#4aa3ff", width=1.6),
     )
     chart.add_legends()
 

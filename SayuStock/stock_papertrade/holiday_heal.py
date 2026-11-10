@@ -575,8 +575,8 @@ async def _restore_archived(session: AsyncSession, existing: List[_Trade], *, dr
                         "pnl": pnl,
                         "reason": "归档还原",
                         "snapshot": "",
-                        "decided": decided,
-                        "executed": decided,
+                        "decided": decided.strftime("%Y-%m-%d %H:%M:%S.%f"),
+                        "executed": decided.strftime("%Y-%m-%d %H:%M:%S.%f"),
                         "mode": mode,
                     },
                 )
@@ -768,7 +768,7 @@ async def _apply_positions(session: AsyncSession, keep: List[_Trade], fixes: Lis
         params: Dict[str, object] = {
             "qty": state.qty,
             "avg_cost": round(state.avg, 4),
-            "updated_at": now,
+            "updated_at": now.strftime("%Y-%m-%d %H:%M:%S.%f"),
             "account_id": aid,
             "stock_code": code,
         }
@@ -777,7 +777,9 @@ async def _apply_positions(session: AsyncSession, keep: List[_Trade], fixes: Lis
         if has_secid and state.secid:
             params["secid"] = state.secid
         if has_opened and state.opened_on is not None:
-            params["opened_at"] = datetime.combine(state.opened_on, datetime.min.time())
+            params["opened_at"] = datetime.combine(state.opened_on, datetime.min.time()).strftime(
+                "%Y-%m-%d %H:%M:%S.%f"
+            )
         # 报价留空而不是填成本价：填了会让"最新价=成本"看起来像真实行情。
         # 下游 `quote_source='cost'` 本来就会用 avg_cost 兜底显示。
         if fix["created"]:

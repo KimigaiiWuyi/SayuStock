@@ -116,11 +116,11 @@ class CloudmapRenderData:
 
 
 def _sort_df(df: pd.DataFrame, by: str, *, ascending: bool = True) -> pd.DataFrame:
-    return df.sort_values(by=by, ascending=ascending, inplace=False)
+    return df.sort_values(by=by, ascending=ascending)
 
 
 def _sort_series(series: pd.Series, *, ascending: bool = True) -> pd.Series:
-    return series.sort_values(ascending=ascending, inplace=False)
+    return series.sort_values(ascending=ascending)
 
 
 def _reset_df(df: pd.DataFrame, *, drop: bool = True) -> pd.DataFrame:

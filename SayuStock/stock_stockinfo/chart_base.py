@@ -44,6 +44,8 @@ from gsuid_core.utils.fonts.fonts import FONT_ORIGIN_PATH
 # 统一经兼容层导入：同时支持旧版（含 Price）与新版（Price 已移除）mplchart
 from ..utils.mplchart_compat import (  # noqa: E402
     SMA,
+    Bars,
+    Line,
     Pane,
     Bands,
     Chart,
@@ -63,6 +65,7 @@ __all__ = [
     "Axes",
     "Bands",
     "BarPlot",
+    "Bars",
     "Candlesticks",
     "Chart",
     "chart_series_xy",
@@ -72,6 +75,7 @@ __all__ = [
     "HLine",
     "HPacker",
     "Image",
+    "Line",
     "LinePlot",
     "NDArray",
     "Pane",

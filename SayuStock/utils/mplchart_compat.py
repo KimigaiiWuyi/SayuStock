@@ -24,25 +24,38 @@ from mplchart.primitives import (
     Pane,
     HLine,
     Volume,
-    BarPlot,
-    LinePlot,
     Candlesticks,
 )
 
 # 新版才有 Bands；旧版靠 autoplot + color_scheme
 Bands = cast("type[Any] | None", getattr(_mpl_primitives, "Bands", None))
 
+# 新版 mplchart 用 Bars / Line 替代了 BarPlot / LinePlot；旧版（如 0.0.37）只有 BarPlot / LinePlot
+_NativeBars = cast("type[Any] | None", getattr(_mpl_primitives, "Bars", None))
+_NativeLine = cast("type[Any] | None", getattr(_mpl_primitives, "Line", None))
+_MplBarPlot = cast("type[Any]", getattr(_mpl_primitives, "BarPlot"))
+_MplLinePlot = cast("type[Any]", getattr(_mpl_primitives, "LinePlot"))
+
+Bars: type[Any] = _NativeBars if _NativeBars is not None else _MplBarPlot
+Line: type[Any] = _NativeLine if _NativeLine is not None else _MplLinePlot
+
+# 统一别名：在新版下指向 Bars / Line 避免使用 BarPlot / LinePlot 时触发 DeprecationWarning
+BarPlot: type[Any] = Bars
+LinePlot: type[Any] = Line
+
 # getattr：新版 stubs/包里可能没有 Price，避免 reportAttributeAccessIssue
-_NativePrice = cast("type[LinePlot] | None", getattr(_mpl_primitives, "Price", None))
+_NativePrice = cast("type[Any] | None", getattr(_mpl_primitives, "Price", None))
 
 
 __all__ = [
     "Bands",
     "BarPlot",
+    "Bars",
     "Candlesticks",
     "Chart",
     "HLine",
     "Indicator",
+    "Line",
     "LinePlot",
     "Pane",
     "Price",
@@ -53,8 +66,8 @@ __all__ = [
 ]
 
 
-class _PriceCompat(LinePlot):
-    """新版 mplchart 无 Price 时的兼容实现：等价于画指定价格列的 LinePlot。"""
+class _PriceCompat(Line):
+    """新版 mplchart 无 Price 时的兼容实现：等价于画指定价格列的 Line。"""
 
     def __init__(
         self,
@@ -69,7 +82,7 @@ class _PriceCompat(LinePlot):
 
 
 # 统一导出名 Price：有原生类用原生，否则用兼容实现（避免 class 重定义触发 no-redef）
-Price: type[LinePlot] = _NativePrice if _NativePrice is not None else _PriceCompat
+Price: type[Any] = _NativePrice if _NativePrice is not None else _PriceCompat
 
 
 _CHART_INIT_PARAMS = inspect.signature(_MplChart.__init__).parameters
