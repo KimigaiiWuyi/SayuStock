@@ -26,6 +26,11 @@ _GSU_ROOT = _PLUGIN_ROOT.parents[2]
 if (_GSU_ROOT / "gsuid_core").is_dir() and str(_GSU_ROOT) not in sys.path:
     sys.path.insert(0, str(_GSU_ROOT))
 
+try:
+    import gsuid_core.ai_core.mcp.server  # noqa: F401  # break circular import in core bot/mcp
+except Exception:
+    pass
+
 
 def _ensure_pkg_shell(name: str, path: Path) -> None:
     """注册包壳但不执行 ``__init__.py``（避免 Plugins 注册链）。"""
@@ -43,4 +48,5 @@ _PKG = _PLUGIN_ROOT / "SayuStock"
 _ensure_pkg_shell("SayuStock", _PKG)
 _ensure_pkg_shell("SayuStock.utils", _PKG / "utils")
 _ensure_pkg_shell("SayuStock.stock_stockinfo", _PKG / "stock_stockinfo")
+_ensure_pkg_shell("SayuStock.stock_info", _PKG / "stock_info")
 _ensure_pkg_shell("SayuStock.stock_analysis", _PKG / "stock_analysis")
