@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<style>
+{% include "theme.css" %}
+.chart-page { width: {{ width }}px; padding: 28px; }
+.chart-kicker { font-size: 13px; color: {{ BLUE }}; font-weight: 650; letter-spacing: 1px; }
+.chart-title { margin-top: 6px; font-size: 34px; line-height: 1.2; font-weight: 750; color: {{ TEXT }}; }
+.chart-subtitle { margin-top: 8px; font-size: 15px; line-height: 1.35; color: {{ MUTED }}; }
+.chart-legend { display: flex; flex-wrap: wrap; flex-direction: row; gap: 6px; margin-top: 14px; }
+.chart-card { display: flex; flex-direction: column; flex-grow: 1; min-width: 170px; max-width: 283px; border: 1px solid {{ BORDER }}; border-radius: 7px; padding: 8px 12px; background: {{ SURFACE }}; }
+.chart-card-label { font-size: 13px; font-weight: 650; }
+.chart-card-value { font-size: 20px; font-weight: 700; margin-top: 3px; color: {{ TEXT }}; font-variant-numeric: tabular-nums; }
+.chart-card-detail { margin-top: 4px; font-size: 13px; line-height: 1.35; color: {{ MUTED }}; }
+.chart-panel { width: {{ plot_width }}px; margin-top: 10px; border-radius: 8px; overflow: hidden; background: {{ PAGE }}; border: 1px solid {{ BORDER }}; }
+.chart-panel-head { display: flex; flex-direction: row; align-items: center; gap: 14px; min-height: 29px; padding: 5px 12px; background: {{ SURFACE }}; }
+.chart-panel-title { font-size: 14px; font-weight: 700; color: {{ TEXT }}; }
+.chart-key { font-size: 12px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.chart-plot { position: relative; width: {{ plot_width }}px; }
+.chart-label { position: absolute; font-size: 12px; color: {{ MUTED }}; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.chart-note { margin-top: 8px; padding: 7px 11px; border-left: 2px solid {{ AMBER }}; font-size: 13px; color: {{ TEXT_SOFT }}; }
+.chart-source { margin-top: 12px; font-size: 13px; color: {{ MUTED }}; }
+</style>
+</head>
+<body>
+<main class="page chart-page">
+  <div class="chart-kicker">{{ page.eyebrow }}</div>
+  <div class="chart-title">{{ page.title }}</div>
+  {% if page.subtitle %}<div class="chart-subtitle">{{ page.subtitle }}</div>{% endif %}
+  {% if page.legend %}
+  <div class="chart-legend">
+    {% for item in page.legend %}
+    <div class="chart-card">
+      <span class="chart-card-label" style="color: {{ item.color }}">{{ item.label }}</span>
+      {% if item.value %}<b class="chart-card-value">{{ item.value }}</b>{% endif %}
+      {% if item.detail %}<span class="chart-card-detail">{{ item.detail }}</span>{% endif %}
+    </div>
+    {% endfor %}
+  </div>
+  {% endif %}
+  {% for panel in page.panels %}
+  <section class="chart-panel">
+    <div class="chart-panel-head">
+      <span class="chart-panel-title">{{ panel.label }}</span>
+      {% for item in panel.legend %}<span class="chart-key" style="color: {{ item.color }}">{{ item.label }} {{ item.value }}</span>{% endfor %}
+    </div>
+    <div class="chart-plot" style="height: {{ panel.height }}px">
+      <svg width="{{ plot_width }}" height="{{ panel.height }}" viewBox="0 0 {{ plot_width }} {{ panel.height }}">
+        {% for r in panel.backdrop %}<rect x="{{ r.x }}" y="{{ r.y }}" width="{{ r.width }}" height="{{ r.height }}" fill="{{ r.color }}" opacity="{{ r.opacity }}"/>{% endfor %}
+        {% for tick in panel.axis %}<line x1="{{ left }}" x2="{{ right }}" y1="{{ tick.pos }}" y2="{{ tick.pos }}" stroke="{{ GRID }}" stroke-width="1"/>{% endfor %}
+        {% for tick in panel.x_ticks %}<line x1="{{ tick.pos }}" x2="{{ tick.pos }}" y1="{{ panel.bottom }}" y2="{{ panel.bottom + 4 }}" stroke="{{ DIVIDER }}" stroke-width="1"/>{% endfor %}
+        <line x1="{{ left }}" x2="{{ right }}" y1="{{ panel.bottom }}" y2="{{ panel.bottom }}" stroke="{{ BORDER }}" stroke-width="1"/>
+        {% for f in panel.fills %}<path d="{{ f.path }}" fill="{{ f.color }}" opacity="{{ f.opacity }}"/>{% endfor %}
+        {% for r in panel.rects %}<rect x="{{ r.x }}" y="{{ r.y }}" width="{{ r.width }}" height="{{ r.height }}" fill="{{ r.color }}" opacity="{{ r.opacity }}"/>{% endfor %}
+        {% for r in panel.rules %}<line x1="{{ r.x1 }}" x2="{{ r.x2 }}" y1="{{ r.y1 }}" y2="{{ r.y2 }}" stroke="{{ r.color }}" stroke-dasharray="{{ r.dash }}" opacity="{{ r.opacity }}"/>{% endfor %}
+        {% for s in panel.series %}<path d="{{ s.path }}" fill="none" stroke="{{ s.color }}" stroke-width="{{ s.width }}" {% if s.dash %}stroke-dasharray="{{ s.dash }}"{% endif %} opacity="{{ s.opacity }}" stroke-linejoin="round" stroke-linecap="round"/>{% endfor %}
+        {% for dot in panel.dots %}<circle cx="{{ dot.x }}" cy="{{ dot.y }}" r="{{ dot.radius }}" fill="{{ dot.color }}" stroke="{{ PAGE }}" stroke-width="1"/>{% endfor %}
+        {% for mark in panel.marks %}<text x="{{ mark.x }}" y="{{ mark.y }}" fill="{{ mark.color }}" text-anchor="{{ mark.anchor }}" font-size="12" font-weight="650">{{ mark.label }}</text>{% endfor %}
+      </svg>
+      {% for tick in panel.axis %}<span class="chart-label" style="left: 4px; top: {{ tick.pos - 7 }}px; width: {{ left - 11 }}px; text-align: right">{{ tick.label }}</span>{% endfor %}
+      {% for tick in panel.right_axis %}<span class="chart-label" style="left: {{ right + 8 }}px; top: {{ tick.pos - 7 }}px">{{ tick.label }}</span>{% endfor %}
+      {% for tick in panel.x_ticks %}
+      <span class="chart-label" style="left: {{ tick.pos - 60 }}px; width: 120px; text-align: center; top: {{ panel.bottom + 8 }}px">{{ tick.label }}</span>
+      {% if tick.note %}<span class="chart-label" style="left: {{ tick.pos - 60 }}px; width: 120px; text-align: center; top: {{ panel.bottom + 25 }}px">{{ tick.note }}</span>{% endif %}
+      {% endfor %}
+      {% if panel.empty %}<span class="chart-label" style="left: {{ left + 18 }}px; top: 24px">{{ panel.empty }}</span>{% endif %}
+    </div>
+  </section>
+  {% endfor %}
+  {% for note in page.notes %}<div class="chart-note">{{ note }}</div>{% endfor %}
+  {% if page.footer %}<div class="chart-source">{{ page.footer }}</div>{% endif %}
+</main>
+</body>
+</html>
+

@@ -33,6 +33,7 @@ class CloudMapDataResult:
     raw_datas: List[IntradaySeries | KlineSeries]
     sector: Optional[str]
     special_cache_key: Optional[str]
+    failures: tuple[str, ...] = ()
 
 
 class CloudMapDataService:
@@ -48,6 +49,7 @@ class CloudMapDataService:
         resolved_sector = self.resolve_sector(market, sector)
         raw_datas: List[IntradaySeries | KlineSeries] = []
         special_cache_key: Optional[str] = None
+        failures: list[str] = []
         port = get_market()
 
         if market == "大盘云图":
@@ -82,13 +84,15 @@ class CloudMapDataService:
             ndays = intraday_ndays_from_sector(resolved_sector)
             if ndays is None:
                 ndays = 1
-            raw_data, single_datas = await self.fetch_single_stock_group(market, start_time, end_time, ndays=ndays)
+            raw_data, single_datas = await self.fetch_single_stock_group(
+                market, start_time, end_time, ndays=ndays, failures=failures
+            )
             raw_datas = list[IntradaySeries | KlineSeries](single_datas)
         else:
             snap = await port.board(market, limit=100, sort_asc=False)
             raw_data = snap.message if is_market_error(snap) else snap
 
-        return CloudMapDataResult(raw_data, raw_datas, resolved_sector, special_cache_key)
+        return CloudMapDataResult(raw_data, raw_datas, resolved_sector, special_cache_key, tuple(failures))
 
     def resolve_sector(self, market: str, sector: Optional[str]) -> Optional[str]:
         if not is_intraday_sector(sector):
@@ -136,13 +140,14 @@ class CloudMapDataService:
         series_list: List[KlineSeries],
         start_time: Optional[datetime],
         end_time: Optional[datetime],
+        failures: tuple[str, ...] = (),
     ) -> CloudMapDataResult:
         if not series_list:
             return CloudMapDataResult(ErroText["notData"], [], "compare-stock", None)
         st_f = start_time.strftime("%Y%m%d") if start_time else ""
         et_f = end_time.strftime("%Y%m%d") if end_time else ""
         raw_datas = list[IntradaySeries | KlineSeries](series_list)
-        return CloudMapDataResult(series_list[0], raw_datas, "compare-stock", f"compare-stock-{st_f}-{et_f}")
+        return CloudMapDataResult(series_list[0], raw_datas, "compare-stock", f"compare-stock-{st_f}-{et_f}", failures)
 
     async def _as_compare_result(
         self,
@@ -150,10 +155,11 @@ class CloudMapDataService:
         start_time: Optional[datetime],
         end_time: Optional[datetime],
     ) -> CloudMapDataResult:
-        raw_data, compare_datas = await self.fetch_compare_stocks(market, start_time, end_time)
+        failures: list[str] = []
+        raw_data, compare_datas = await self.fetch_compare_stocks(market, start_time, end_time, failures=failures)
         if isinstance(raw_data, str):
             return CloudMapDataResult(raw_data, [], "compare-stock", None)
-        return self._compare_result_from_series(compare_datas, start_time, end_time)
+        return self._compare_result_from_series(compare_datas, start_time, end_time, tuple(failures))
 
     async def _fetch_kline(
         self,
@@ -177,6 +183,8 @@ class CloudMapDataService:
         market: str,
         start_time: Optional[datetime],
         end_time: Optional[datetime],
+        *,
+        failures: list[str] | None = None,
     ) -> tuple[CloudMapRawData, List[KlineSeries]]:
         markets = [item.strip() for item in market.replace("，", " ").replace(",", " ").split() if item.strip()]
         expanded: List[str] = []
@@ -199,7 +207,11 @@ class CloudMapDataService:
             # 重构时曾误写成 D1_RECENT（仅 50 天），用户会感觉像「最近一个月」
             series = await port.kline(query, KlinePeriod.D1_YEAR, start=start_d, end=end_d)
             if is_market_error(series):
+                if failures is not None:
+                    failures.append(f"{query}：{series.message}")
                 continue
+            if not series.bars and failures is not None:
+                failures.append(f"{query}：无 K 线数据")
             results.append(series)
         if not results:
             return ErroText["notData"], []
@@ -244,6 +256,7 @@ class CloudMapDataService:
         board_code: str,
         *,
         ndays: int = 1,
+        failures: list[str] | None = None,
     ) -> tuple[CloudMapRawData, List[IntradaySeries]]:
         codes = await self._fetch_sector_codes(board_code)
         if not codes:
@@ -252,11 +265,15 @@ class CloudMapDataService:
         port = get_market()
         results = await asyncio.gather(*[port.intraday(code, ndays=ndays) for code in codes])
         valid: List[IntradaySeries] = []
-        for item in results:
+        for code, item in zip(codes, results, strict=True):
             if is_market_error(item):
+                if failures is not None:
+                    failures.append(f"{code}：{item.message}")
                 continue
             if item.points:
                 valid.append(item)
+            elif failures is not None:
+                failures.append(f"{item.symbol.display_name or code}：无分时数据")
         if not valid:
             return ErroText["notData"], []
         return valid[0], valid
@@ -268,6 +285,7 @@ class CloudMapDataService:
         end_time: Optional[datetime],
         *,
         ndays: int = 1,
+        failures: list[str] | None = None,
     ) -> tuple[CloudMapRawData, List[IntradaySeries]]:
         _ = start_time, end_time
         port = get_market()
@@ -279,7 +297,7 @@ class CloudMapDataService:
                 return series.message, []
             if self._is_sector_series(series):
                 board_code = series.symbol.code or market_list[0]
-                return await self._fetch_sector_stocks(board_code, ndays=ndays)
+                return await self._fetch_sector_stocks(board_code, ndays=ndays, failures=failures)
             return series, []
 
         tasks = [port.intraday(item, ndays=ndays) for item in market_list]
@@ -289,15 +307,21 @@ class CloudMapDataService:
             query_name = market_list[idx] if idx < len(market_list) else f"#{idx}"
             if isinstance(item, BaseException):
                 logger.error(f"[SayuStock] 多股查询第{idx + 1}只标的[{query_name}]异常: {item!r}")
+                if failures is not None:
+                    failures.append(f"{query_name}：查询异常")
                 continue
             if is_market_error(item):
                 logger.warning(f"[SayuStock] 多股查询跳过失败标的[{query_name}]: {item.message}")
+                if failures is not None:
+                    failures.append(f"{query_name}：{item.message}")
                 continue
             if not isinstance(item, IntradaySeries):
                 logger.warning(
                     f"[SayuStock] 多股查询第{idx + 1}只标的[{query_name}]结果类型异常: type={type(item).__name__}"
                 )
                 continue
+            if not item.points and failures is not None:
+                failures.append(f"{item.symbol.display_name or query_name}：无分时数据")
             valid_results.append(item)
         if not valid_results:
             return ErroText["notData"], []

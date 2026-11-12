@@ -124,7 +124,7 @@ def test_industry_cloudmap_keeps_l2_constituents() -> None:
     """成分股所属行业仍是一级名时，行业云图也不能再按 sector 过滤掉。"""
     data = build_cloudmap_render_data(_cement_snap(), "行业云图", "水泥", layer=1)
     assert isinstance(data, CloudmapRenderData)
-    assert list(data.df["name"]) == ["海螺水泥"]
+    assert [leaf.name for leaf in data.leaves] == ["海螺水泥"]
 
 
 class _MenuPort:

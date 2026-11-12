@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<style>
+{% include "theme.css" %}
+.treemap { width: {{ page.width }}px; padding: {{ 28 * page.unit }}px; }
+.map-kicker { font-size: {{ 13 * page.unit }}px; color: {{ BLUE }}; font-weight: 650; }
+.map-title { font-size: {{ 30 * page.unit }}px; line-height: 1.2; font-weight: 750; margin-top: {{ 4 * page.unit }}px; }
+.map-meta { font-size: {{ 14 * page.unit }}px; color: {{ MUTED }}; margin-top: {{ 5 * page.unit }}px; }
+.map { position: relative; margin-top: {{ 14 * page.unit }}px; width: {{ page.plot_width }}px; height: {{ page.plot_height }}px; background: {{ PAGE }}; }
+.map-group { position: absolute; color: {{ TEXT }}; font-size: {{ 14 * page.unit }}px; font-weight: 650; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.map-tile { position: absolute; display: flex; flex-direction: column; align-items: center; justify-content: center; overflow: hidden; color: {{ WHITE }}; font-weight: 650; }
+.map-tile b { text-align: center; width: 96%; max-height: 2.35em; overflow: hidden; }
+.map-tile span { font-size: 0.82em; font-weight: 500; opacity: 0.92; }
+.map-foot { margin-top: {{ 10 * page.unit }}px; color: {{ MUTED }}; font-size: {{ 13 * page.unit }}px; gap: {{ 12 * page.unit }}px; }
+.map-scale { display: flex; flex-direction: row; gap: {{ 1 * page.unit }}px; }
+.map-swatch { min-width: {{ 56 * page.unit }}px; padding: 3px {{ 5 * page.unit }}px; text-align: center; font-size: {{ 12 * page.unit }}px; color: {{ TEXT }}; font-variant-numeric: tabular-nums; }
+</style>
+</head>
+<body>
+<main class="page treemap">
+  <div class="map-kicker">市场热度 · TREEMAP</div>
+  <div class="map-title">{{ page.title }}</div>
+  <div class="map-meta">{{ page.subtitle }}</div>
+  <div class="map">
+    <svg width="{{ page.plot_width }}" height="{{ page.plot_height }}" viewBox="0 0 {{ page.plot_width }} {{ page.plot_height }}">
+      {% for group in page.groups %}<rect x="{{ group.x }}" y="{{ group.y }}" width="{{ group.w }}" height="{{ group.h }}" fill="{{ SURFACE }}"/>{% endfor %}
+      {% for tile in page.tiles %}<rect x="{{ tile.x }}" y="{{ tile.y }}" width="{{ tile.w }}" height="{{ tile.h }}" fill="{{ tile.color }}"/>{% endfor %}
+    </svg>
+    {% for group in page.groups %}
+    {% if group.show_title %}
+    <span class="map-group" style="left: {{ group.x + 7 * page.unit }}px; top: {{ group.y + 4 * page.unit }}px; width: {{ group.w - 14 * page.unit }}px">{{ group.name }}</span>
+    {% endif %}
+    {% endfor %}
+    {% for tile in page.tiles %}
+    {% if tile.w >= 48 * page.unit and tile.h >= 32 * page.unit %}
+    <div class="map-tile" style="left: {{ tile.x }}px; top: {{ tile.y }}px; width: {{ tile.w }}px; height: {{ tile.h }}px; font-size: {{ tile.font_size }}px">
+      <b>{{ tile.name }}</b>
+      {% if tile.h >= 43 * page.unit %}<span>{{ tile.change }}</span>{% endif %}
+    </div>
+    {% endif %}
+    {% endfor %}
+  </div>
+  <div class="row between map-foot">
+    <div class="map-scale">
+      {% for label, color in page.heat_key %}<span class="map-swatch" style="background: {{ color }}">{{ label }}</span>{% endfor %}
+    </div>
+    <span>面积：总市值 · 颜色：涨跌幅</span>
+    <span>{{ page.footer }}</span>
+  </div>
+</main>
+</body>
+</html>
+
