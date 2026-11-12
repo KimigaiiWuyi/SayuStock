@@ -29,9 +29,9 @@ from SayuStock.utils.all_weather_html import (
 from SayuStock.utils.paper_holdings_html import (
     SPARK_H as PH_SPARK_H,
     SPARK_W as PH_SPARK_W,
+    PAPER_HOLDINGS_WIDTH,
     HoldingBarRow,
     build_paper_holdings_html,
-    paper_holdings_canvas_size,
 )
 
 _WATCH = [
@@ -228,26 +228,6 @@ def test_offline_my_stock_png() -> None:
     assert png_spark[:8] == b"\x89PNG\r\n\x1a\n"
 
 
-def _render_legacy(html: str, width: int, height: int) -> bytes:
-    pytest.importorskip("pytakumi")
-    from gsuid_core.utils.html_render import render_html_to_bytes
-
-    async def _go() -> bytes:
-        return await render_html_to_bytes(
-            html,
-            max_width=float(width * 2),
-            dpi=192.0,
-            device_height=float(height * 2),
-            default_font_size=15.0,
-            allow_refit=False,
-            image_format="png",
-            lang="zh",
-            root_max_width=float(width),
-        )
-
-    return asyncio.run(_go())
-
-
 def test_offline_paper_holdings_png() -> None:
     data = _skip_no_cache()
     zs = load_board_items(data, "主要指数")
@@ -303,12 +283,10 @@ def test_offline_paper_holdings_png() -> None:
         initial_cash=1_000_000.0,
         holdings=rows,
         index_items=index_items,
-        title_num="5",
         sparklines=sparks,
     )
     assert "图例" in html
     assert 'class="donut-svg"' in html
-    width, height = paper_holdings_canvas_size(len(rows))
-    png = _render_legacy(html, width, height)
+    png = _render(html, PAPER_HOLDINGS_WIDTH, "模拟盘自选")
     _write_evidence("paper_holdings.png", png)
     assert png[:8] == b"\x89PNG\r\n\x1a\n"

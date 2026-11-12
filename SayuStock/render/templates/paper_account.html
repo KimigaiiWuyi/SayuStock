@@ -1,0 +1,48 @@
+{% extends "extras_base.html" %}
+{% from "extras_macros.html" import heading, metrics %}
+{% block style %}
+.paper-hero { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.paper-hero-number { margin-top: 4px; font-size: 39px; font-weight: 750; }
+.paper-return { margin-top: 5px; font-size: 25px; font-weight: 750; }
+.paper-position .ex-th, .paper-position .ex-tr { grid-template-columns: 1fr 98px 128px 152px; }
+.paper-trade .ex-th, .paper-trade .ex-tr { grid-template-columns: 60px 1fr 100px 115px 105px; }
+{% endblock %}
+{% block content %}
+{{ heading("模拟盘 · 账户视图", account_name, subtitle, "运行中" if enabled else "已停用", "down" if enabled else "neutral") }}
+<section class="panel ex-panel">
+  <div class="paper-hero">
+    <div><div class="ex-note">总资产 · 持仓按成本计</div><div class="paper-hero-number ex-num">{{ equity }}</div></div>
+    <div class="ex-right"><div class="ex-note">累计盈亏</div><div class="paper-return ex-num {{ pnl_tone }}">{{ pnl }} <span>{{ pnl_pct }}</span></div></div>
+  </div>
+  {{ metrics(metrics_values, "three") }}
+</section>
+<section class="panel ex-panel">
+  <div class="row between"><h2 class="ex-h2">当前持仓</h2><span class="ex-note">{{ positions|length }} 只</span></div>
+  {% if positions %}
+  <div class="ex-table paper-position">
+    <div class="ex-th"><span>标的</span><span class="ex-right">数量（股）</span><span class="ex-right">均价</span><span class="ex-right">持仓成本</span></div>
+    {% for position in positions %}
+    <div class="ex-tr{% if loop.index0 is even %} ex-tr-striped{% endif %}">
+      <span class="ex-name">{{ position.name }} <span class="ex-code">{{ position.code }}</span></span>
+      <span class="ex-right">{{ position.quantity }}</span><span class="ex-right">{{ position.price }}</span><span class="ex-right">{{ position.value }}</span>
+    </div>
+    {% endfor %}
+  </div>
+  {% else %}<div class="ex-empty">暂无持仓</div>{% endif %}
+</section>
+<section class="panel ex-panel">
+  <h2 class="ex-h2">最近 5 笔交易</h2>
+  {% if trades %}
+  <div class="ex-table paper-trade">
+    <div class="ex-th"><span>方向</span><span>标的</span><span class="ex-right">数量（股）</span><span class="ex-right">成交价</span><span class="ex-right">手续费</span></div>
+    {% for trade in trades %}
+    <div class="ex-tr{% if loop.index0 is even %} ex-tr-striped{% endif %}">
+      <b class="{{ trade.tone }}">{{ trade.side }}</b>
+      <span class="ex-name">{{ trade.name }}</span>
+      <span class="ex-right">{{ trade.quantity }}</span><span class="ex-right">{{ trade.price }}</span><span class="ex-right">{{ trade.fee }}</span>
+    </div>
+    {% endfor %}
+  </div>
+  {% else %}<div class="ex-empty">暂无交易</div>{% endif %}
+</section>
+{% endblock %}

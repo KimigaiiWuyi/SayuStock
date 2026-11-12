@@ -1,0 +1,27 @@
+{% extends "extras_base.html" %}
+{% from "extras_macros.html" import heading %}
+{% block style %}
+.leaderboard .ex-th, .leaderboard .ex-tr { grid-template-columns: 52px 1fr 142px 140px 120px; }
+.rank-index { width: 34px; padding: 4px 0; color: {{ TEXT_SOFT }}; background: {{ SURFACE }};
+  border-radius: 5px; font-size: 15px; font-weight: 700; text-align: center; }
+.rank-top .rank-index { color: {{ BLUE }}; background: {{ rgba(BLUE, 0.12) }}; }
+.rank-yield { font-size: 19px; font-weight: 730; }
+{% endblock %}
+{% block content %}
+{{ heading("模拟盘 · 净值快照", "各盘收益排行", "各盘最新交易日快照 · 按累计收益率降序", "TOP 20", "info") }}
+<section class="panel ex-panel">
+  {% if rows %}
+  <div class="ex-table leaderboard">
+    <div class="ex-th"><span>排名</span><span>盘名</span><span class="ex-right">总资产</span><span class="ex-right">累计盈亏</span><span class="ex-right">收益率</span></div>
+    {% for row in rows %}
+    <div class="ex-tr{% if loop.index0 is even %} ex-tr-striped{% endif %}{% if loop.index <= 3 %} rank-top{% endif %}">
+      <span class="rank-index">{{ "%02d"|format(loop.index) }}</span>
+      <div><div class="ex-name">{{ row.name }}</div><div class="ex-code">{{ row.trade_date }}</div></div>
+      <span class="ex-right">{{ row.equity }}</span><span class="ex-right {{ row.pnl_tone }}">{{ row.pnl }}</span>
+      <span class="ex-right rank-yield {{ row.return_tone }}">{{ row.return_pct }}</span>
+    </div>
+    {% endfor %}
+  </div>
+  {% else %}<div class="ex-empty">暂无排行数据</div>{% endif %}
+</section>
+{% endblock %}

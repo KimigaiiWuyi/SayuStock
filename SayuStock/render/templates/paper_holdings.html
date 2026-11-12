@@ -1,0 +1,77 @@
+{% extends "extras_base.html" %}
+{% from "extras_macros.html" import heading, metrics %}
+{% block style %}
+.hold-overview { display: grid; grid-template-columns: 95px 1fr; align-items: center; gap: 12px; }
+.allocation { width: 92px; height: 92px; position: relative; }
+.allocation .donut-svg { display: block; }
+.allocation-label { position: absolute; left: 0; top: 22px; width: 92px; text-align: center; }
+.allocation-label b { display: block; font-size: 24px; font-weight: 750; }
+
+
+
+.hold-table .ex-tr, .hold-table .ex-th { grid-template-columns: 1fr 134px 95px 97px; gap: 12px; }
+.hold-table .ex-tr { padding-top: 10px; padding-bottom: 10px; min-height: 66px; }
+.hold-table .spark { width: 134px; height: 40px; }
+.hold-change { justify-self: end; padding: 4px 7px; border-radius: 5px; background: {{ SURFACE }};
+  font-size: 15px; font-weight: 700; }
+.hold-change.up { background: {{ rgba(UP, 0.12) }}; }
+.hold-change.down { background: {{ rgba(DOWN, 0.12) }}; }
+.hold-change.ex-warn { background: {{ rgba(AMBER, 0.12) }}; }
+.hold-meta { margin-top: 3px; font-size: 13px; color: {{ MUTED }}; }
+{% endblock %}
+{% block content %}
+{{ heading("模拟盘 · 持仓简图", account_name, "策略 " ~ strategy_id, "运行中" if enabled else "已停用", "down" if enabled else "neutral") }}
+<section class="panel ex-panel">
+  <div class="hold-overview">
+    <div class="allocation">
+      <svg class="donut-svg" xmlns="http://www.w3.org/2000/svg" width="92" height="92" viewBox="0 0 36 36">
+        <circle cx="18" cy="18" r="15.9155" fill="none" stroke="{{ BORDER }}" stroke-width="2.1"/>
+        {% if position_arc %}
+        <path d="{{ position_arc }}" fill="none" stroke="{{ BLUE }}" stroke-width="2.1" stroke-linecap="round"/>
+        {% endif %}
+      </svg>
+      <div class="allocation-label"><b class="ex-num">{{ position_share }}</b><span class="ex-note">仓位</span></div>
+    </div>
+    {{ metrics(metrics_values, "five", false) }}
+  </div>
+</section>
+{% if indices %}
+<section class="panel ex-panel">
+  <div class="row between">
+    <h2 class="ex-h2">市场参考</h2>
+    <span class="ex-note">可用行情平均日涨跌 <b class="{{ average_tone }}">{{ average_day }}</b></span>
+  </div>
+  {{ metrics(indices, "four") }}
+</section>
+{% endif %}
+{% if failure_lines %}
+<div class="ex-warn-panel">
+  <b>{{ warn_title }}</b>
+  {% for reason in failure_lines %}<div class="ex-note">{{ reason }}</div>{% endfor %}
+</div>
+{% endif %}
+<section class="panel ex-panel">
+  <div class="row between">
+    <h2 class="ex-h2">当前持仓</h2>
+    {% if rows %}<span class="ex-note legend">图例：今日涨跌相对昨收 · 持仓收益相对成本</span>{% endif %}
+  </div>
+  {% if rows %}
+  <div class="ex-table hold-table">
+    <div class="ex-th"><span>标的 / 仓位</span><span>当日分时</span><span class="ex-right">今日涨跌</span><span class="ex-right">持仓收益</span></div>
+    {% for row in rows %}
+    <div class="ex-tr{% if loop.index0 is even %} ex-tr-striped{% endif %}">
+      <div>
+        <div class="ex-name">{{ row.holding.name }} <span class="ex-code">{{ row.holding.code }}</span></div>
+        <div class="hold-meta">{{ row.holding.qty }} 股 · 成本 {{ row.cost }} · {{ row.holding.price_basis }} {{ row.price }} · 占 {{ row.weight }}</div>
+      </div>
+      <div>{% if row.spark %}<div class="spark">{{ row.spark }}</div>{% endif %}</div>
+      <div class="hold-change {{ 'ex-warn' if row.day_tone == 'warn' else row.day_tone }}">{{ row.day_text }}</div>
+      <div class="hold-change {{ row.hold_tone }}">{{ row.hold_text }}</div>
+    </div>
+    {% endfor %}
+  </div>
+  {% else %}
+  <div class="ex-empty">当前无持仓 · 资金都在现金</div>
+  {% endif %}
+</section>
+{% endblock %}
