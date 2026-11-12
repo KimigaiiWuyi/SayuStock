@@ -1,6 +1,7 @@
 """Typed offline chart fixtures and native-render gallery."""
 
 import os
+import re
 import struct
 import asyncio
 from io import BytesIO
@@ -24,10 +25,10 @@ from SayuStock.render.treemap import render_treemap
 from SayuStock.stock_cloudmap import render as cloudmap
 from SayuStock.render.intraday import prepare_multi_intraday, prepare_single_intraday
 from SayuStock.utils.time_range import get_trading_datetimes_bjt
-from SayuStock.render.chart_page import ChartPage, page_html, render_chart
+from SayuStock.render.chart_page import TOP, ChartPage, plot_x, page_html, percent_text, render_chart
 from SayuStock.utils.render_data import build_kline_render_data
 from SayuStock.utils.market.enums import BoardKind, AssetClass, KlinePeriod
-from SayuStock.utils.market.models import BoardRow, SymbolRef, BoardSnapshot, IntradayPoint, IntradaySeries
+from SayuStock.utils.market.models import BoardRow, SymbolRef, KlineSeries, BoardSnapshot, IntradayPoint, IntradaySeries
 from SayuStock.stock_stockinfo.data import CloudMapDataResult
 
 
@@ -88,6 +89,94 @@ def _kline(period: KlinePeriod = KlinePeriod.D1) -> ChartPage:
     chart = prepare_kline(series)
     assert not isinstance(chart, str), chart
     return chart
+
+
+def _three_staggered_intraday() -> list[IntradaySeries]:
+    cases = (
+        (_series("600101", "远山科技", 1, 0.76), 0, 137, 33, 53, 1.0),
+        (_series("600102", "星海微电子", 1, -0.75, phase=1.3), 13, 145, 75, 99, 0.65),
+        (_series("600103", "三江新能", 1, 0.49, phase=2.1), 30, 158, 110, 127, 1.4),
+    )
+    result: list[IntradaySeries] = []
+    for series, start, end, gap_start, gap_end, factor in cases:
+        points = tuple(
+            replace(point, amount=point.amount * factor, volume=point.volume * factor)
+            for index, point in enumerate(series.points)
+            if start <= index < end and not gap_start <= index < gap_end
+        )
+        assert series.quote is not None
+        last = points[-1]
+        quote = replace(
+            series.quote,
+            price=last.price,
+            change_pct=(last.price / 25 - 1) * 100,
+            amount=sum(point.amount for point in points),
+        )
+        result.append(replace(series, points=points, quote=quote))
+    return result
+
+
+def _kline_across_year() -> KlineSeries:
+    source = _kline_series("星海微电子", n=90, seed=15)
+    start = datetime(2025, 10, 13)
+    dates = [stamp for i in range(126) if (stamp := start + timedelta(days=i)).weekday() < 5]
+    return replace(
+        source,
+        bars=tuple(replace(bar, ts=stamp) for bar, stamp in zip(source.bars, dates, strict=True)),
+        provider="eastmoney",
+    )
+
+
+def test_three_intraday_curves_and_amounts_keep_each_symbols_own_minutes() -> None:
+    series_list = _three_staggered_intraday()
+    chart = prepare_multi_intraday(series_list)
+    assert not isinstance(chart, str), chart
+    price, money = chart.panels
+    colors = {entry.label: entry.color for entry in chart.legend}
+    assert set(colors) == {series.symbol.name for series in series_list}
+    dates = sorted({point.ts for series in series_list for point in series.points})
+    x_by_time = dict(zip(dates, plot_x(len(dates), bars=True), strict=True))
+    peak_pct = max(abs((point.price / 25 - 1) * 100) for series in series_list for point in series.points)
+    limit = (peak_pct // 2 + 1) * 2
+    peak_amount = max(
+        sum(point.amount for series in series_list for point in series.points if point.ts == stamp) for stamp in dates
+    )
+    for series in series_list:
+        color = colors[series.symbol.name]
+        (stroke,) = [line for line in price.series if line.color == color]
+        commands = re.findall(r"([ML])([\d.]+),([\d.]+)", stroke.path)
+        expected: list[tuple[str, str, str]] = []
+        previous = None
+        for point in series.points:
+            op = "L" if previous is not None and point.ts - previous == timedelta(minutes=1) else "M"
+            y = price.bottom - (((point.price / 25 - 1) * 100 + limit) / (2 * limit)) * (price.bottom - TOP)
+            expected.append((op, f"{x_by_time[point.ts]:.1f}", f"{y:.1f}"))
+            previous = point.ts
+        assert commands == expected
+        last = series.points[-1]
+        assert any(dot.x == x_by_time[last.ts] and dot.color == color for dot in price.dots)
+        assert any(
+            entry.color == color and entry.value == percent_text((last.price / 25 - 1) * 100) for entry in chart.legend
+        )
+        rectangles = [rect for rect in money.rects if rect.color == color]
+        assert [rect.x + rect.width / 2 for rect in rectangles] == pytest.approx(
+            [x_by_time[point.ts] for point in series.points]
+        )
+        assert [rect.height for rect in rectangles] == pytest.approx(
+            [point.amount * (money.bottom - TOP) / (peak_amount * 1.12) for point in series.points]
+        )
+
+
+def test_ninety_daily_candles_show_both_years_on_date_axis() -> None:
+    series = _kline_across_year()
+    chart = prepare_kline(series)
+    assert not isinstance(chart, str), chart
+    assert len(series.bars) == len(chart.panels[0].rects) == 90
+    assert "90 根" in chart.subtitle
+    ticks = [tick.label for tick in chart.panels[-1].x_ticks]
+    assert ticks[0] == "2025-10-13" and ticks[-1] == "2026-02-13"
+    assert {label[:4] for label in ticks} == {"2025", "2026"}
+    assert all(label in page_html(chart) for label in ticks)
 
 
 def test_kline_indicators_and_period_match_upstream() -> None:
@@ -234,6 +323,21 @@ def _save_png(name: str, result: str | bytes) -> None:
         target = Path(os.environ["SAYUSTOCK_RENDER_EVIDENCE_DIR"]) / "charts"
         target.mkdir(parents=True, exist_ok=True)
         (target / f"{name}.png").write_bytes(result)
+
+
+@pytest.mark.asyncio
+async def test_historical_chart_cases_use_native_worker() -> None:
+    _required()
+    for name, page in (
+        ("10-three-staggered-intraday", prepare_multi_intraday(_three_staggered_intraday())),
+        ("11-kline-90-cross-year", prepare_kline(_kline_across_year())),
+    ):
+        assert not isinstance(page, str), page
+        png = await render_chart(page)
+        _save_png(name, png)
+        assert isinstance(png, bytes)
+        with Image.open(BytesIO(png)) as image:
+            assert image.convert("RGBA").getpixel((0, 0))[-1] == 255
 
 
 @pytest.mark.asyncio

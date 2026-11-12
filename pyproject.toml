@@ -8,9 +8,7 @@ authors = [
 dependencies = [
   "jinja2>=3.1.6,<4",
   "playwright>=1.49.0",
-  "plotly>=5.24.1",
   "pandas>=2.2.3",
-  "mplchart>=0.0.37",
   "holidays>=0.50",
 ]
 requires-python = "==3.12.*"

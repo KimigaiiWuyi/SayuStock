@@ -28,7 +28,7 @@ test/
 ├── test_stock_analysis_unit.py
 ├── test_papertrade_*.py           # 日历/撮合/策略/候选池/账户 scope…
 │                                  # test_papertrade_indicators 进 CI 轻量 job
-└── test_end_label_dodge.py        # 末端标注避让；假包加载 chart_base
+└── test_end_label_dodge.py        # 新图表末端标签与引线避让
 ```
 
 ## 8.2 怎么跑
@@ -56,7 +56,7 @@ ruff check SayuStock/ test/
 ruff format --check SayuStock/ test/
 ```
 
-当前规模约 **465 passed**（无东财 JSON 时离线 PNG 冒烟 skip；本地缓存缺失时 `test_intraday_align` 部分 skip）。  
+完整测试包含真实 Node 渲染；CI 设置 `SAYUSTOCK_REQUIRE_RENDER_RUNTIME=1`。本地缓存冒烟在无行情 JSON 时仍可 skip。
 **为什么 Full suite 要嵌套 checkout、为什么不能 `import SayuStock` 触发 `__init__`**：见 [§10](./10-cicd-and-dev-workflow.md)。
 
 ## 8.3 分层测什么
@@ -112,7 +112,7 @@ CI 用 **basedpyright**（钉版本），不要用官方 pyright（见 §10.5.4�
 | papertrade | 对应 `test_papertrade_*` |
 | 自选 / 全天候 HTML、sparkline | `test_sparkline` / `test_my_stock_html` / `test_all_weather_html` |
 | 本地缓存出 PNG | `test_offline_card_render`（无 `*_single-stock*_data.json` 必须 skip） |
-| `chart_base` 相对 import / 末端标注 | `test_end_label_dodge`（collection 即校验 compat 桩） |
+| 末端标注 / 字体 / 背景 / 页脚 | `test_end_label_dodge` + `test_chart_render_contract` |
 | 快讯 NewsPort / 汇总水位线 | `test_news_port` + `test_news_digest_retry` |
 | 大范围重构 | 全量 `pytest test/` + `basedpyright --pythonpath <venv>/python` |
 
@@ -128,4 +128,4 @@ CI 用 **basedpyright**（钉版本），不要用官方 pyright（见 §10.5.4�
 2. `大盘云图` / `行业云图 半导体` / `概念云图 xxx`  
 3. `对比个股 沪深300 中证白酒`  
 4. `我的个股`（需先添加自选）  
-5. 若有 AI：同命令问两次，确认第二次仍有文字（热缓存）  
+5. 若有 AI：同命令问两次，确认第二次仍有文字（热缓存）

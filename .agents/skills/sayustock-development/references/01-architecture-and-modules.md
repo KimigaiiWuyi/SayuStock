@@ -24,7 +24,8 @@ plugins/SayuStock/
 │   ├── __init__.py            # Plugins(name="SayuStock", force_prefix=["a","股票"])
 │   ├── version.py
 │   ├── stock_*/               # 功能子包（命令 / AI / 模拟盘…）
-│   ├── utils/                 # 共享：market / news / render / indicators / db
+│   ├── render/                # Jinja / SVG / 调色板 / Node Takumi
+│   ├── utils/                 # 共享：market / news / render_data / indicators / db
 │   ├── Kronos/                # vendored 预测模型（pyright exclude）
 │   └── tools/                 # 离线脚本（如 gen_A.py）
 ├── test/                      # pytest（从插件根或 monorepo 根跑）
@@ -39,9 +40,9 @@ plugins/SayuStock/
 
 | 子包 | 职责 |
 |------|------|
-| `stock_cloudmap/` | **大盘/行业/概念云图**（plotly + playwright 截图）；定时清缓存 |
-| `stock_stockinfo/` | **个股分时 / K 线 / 对比 / mpl 云图入口**（matplotlib + mplchart） |
-| `stock_info/` | 大盘概览、我的自选、基金持仓（均走 pytakumi HTML）；**全天候**同走 pytakumi HTML |
+| `stock_cloudmap/` | **大盘/行业/概念云图**（Jinja + Node Takumi）；定时清缓存 |
+| `stock_stockinfo/` | **个股分时 / K 线 / 对比 / 云图入口**（Jinja + Node Takumi） |
+| `stock_info/` | 大盘概览、我的自选、基金持仓与**全天候**（Jinja + Node Takumi） |
 | `stock_user/` | 添加/删除自选（`SsBind`） |
 | `stock_sina/` | 市盈/市净/股息等估值对比图 |
 | `stock_analysis/` | 技术分析、股票卡片、自动选股、组合体检 |
@@ -99,8 +100,8 @@ utils/
 ├── database/papertrade_models.py
 ├── constant.py             # ErroText / market_dict / VIX_LIST …
 ├── time_range.py           # 交易时段、分时轴
-├── image.py                # playwright 截图等
-├── all_weather_html.py     # 全天候 pytakumi HTML
+├── image.py                # 帮助/状态资产与云图配置
+├── all_weather_html.py     # 全天候展示结构与 Jinja 模板入口
 ├── load_data.py            # 证券代码表
 └── resource_path.py        # MAIN_PATH / DATA_PATH / CONFIG_PATH
 ```
@@ -126,14 +127,14 @@ stock_stockinfo/get_cloudmap.py → render_mpl.render_image_file
   ├─ _emit_ai_text(...)          # ★ 必须在缓存命中 return 之前
   │     └─ render_text.*_text(领域模型) → ai_return(文字)
   │
-  ├─ get_file(...).exists() + mapcloud_refresh_minutes 缓存？
+  ├─ cached_render(...) + mapcloud_refresh_minutes 缓存？
   │     └─ 命中则直接 return 已有 PNG
   │
   └─ to_single_fig / to_single_fig_kline / to_multi_fig / to_compare_fig / to_fig
-        └─ build_*_render_data(模型)  →  chart_*.py 画图 → 写 PNG
+        └─ build_*_render_data(模型)  →  render/*.py + Jinja → Node Takumi → 写 PNG
 ```
 
-云图命令（「大盘云图」等）走 `stock_cloudmap/`：**plotly 写 HTML** + playwright 截图；
+云图命令（「大盘云图」等）走 `stock_cloudmap/`：**Jinja 写 HTML** + Node Takumi PNG；
 数据同样经 Port → `BoardSnapshot`，`build_cloudmap_render_data` + `render_text.cloudmap_text`。
 
 ## 1.6 分层原则（写代码时的默认取向）
@@ -143,15 +144,15 @@ stock_stockinfo/get_cloudmap.py → render_mpl.render_image_file
 | 命令 / SV | 解析用户文本、调 service、`bot.send` | 解析 `f*`、拼东财 URL |
 | data 服务 | 调 `get_market()`，聚合 `CloudMapDataResult` | 编码 EM dict |
 | render_data / render_text | 吃领域模型，出 DataFrame / 字符串 | 读供应商原始字段 |
-| chart / plotly | 只吃 RenderData / DataFrame | 再请求行情 |
+| render / Jinja | 只吃 RenderData / DataFrame | 再请求行情 |
 | market adapter | HTTP + 解析供应商 JSON → 模型 | 被 feature 直接 import 解析函数做业务 |
 
 ## 1.7 依赖与运行环境
 
 - **宿主**：GsCore（`gsuid_core`）+ 平台适配器
-- **主要第三方**：`pandas`、`plotly`、`playwright`、`mplchart`、matplotlib
+- **主要第三方**：`pandas`、`jinja2`、`playwright`；图片运行时 Node 24 + Takumi 2.14.0
 - **Python**：`pyproject.toml` 声明 `==3.12.*`（以当前环境为准）；pyright 排除 `Kronos/`
-- **Playwright**：未 `playwright install` 时云图截图会卡住
+- **Playwright**：仅原有雪球 Cookie 自动获取需要浏览器；图片安装见 [rendering.md](../../../../docs/rendering.md)
 
 ## 1.8 版本与入口
 

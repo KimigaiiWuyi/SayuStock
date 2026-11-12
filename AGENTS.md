@@ -42,9 +42,10 @@
 
 | 子包 | 职责 |
 |------|------|
-| `stock_cloudmap/` | 大盘/行业/概念云图（plotly + playwright） |
-| `stock_stockinfo/` | 个股分时 / K 线 / 对比 / mpl |
-| `stock_info/` | 大盘概览、自选列表、基金持仓（全走 pytakumi HTML）；全天候 pytakumi |
+| `stock_cloudmap/` | 大盘/行业/概念云图，Jinja HTML + Takumi PNG |
+| `stock_stockinfo/` | 个股分时 / K 线 / 对比，保留原命令入口 |
+| `stock_info/` | 大盘概览、自选列表、基金持仓、全天候，Jinja + Takumi |
+| `render/` | 共享模板、调色板、SVG 几何与有界 Node 渲染运行时 |
 | `stock_user/` | 自选增删（`SsBind`） |
 | `stock_sina/` | PB/PE/PS |
 | `stock_analysis/` | 技术分析、卡片、选股、组合 |
@@ -84,7 +85,7 @@ basedpyright --pythonpath <Core venv>/python
 - `testpaths = ["test"]`，`pythonpath = [".", "test"]`。
 - `ruff.toml`：120 列，排除 `Kronos`、`pyproject.toml`。
 - `pyrightconfig.json` **不要**写死本机 `venvPath`。
-- 云图需要 `playwright install`。不要改 `Kronos/` 当业务代码。
+- 图片使用 Node 24 + Takumi，安装与实图验收见 [`docs/rendering.md`](docs/rendering.md)。Playwright 仍用于雪球 Cookie。不要改 `Kronos/` 当业务代码。
 
 ## Code style
 
@@ -100,7 +101,7 @@ basedpyright --pythonpath <Core venv>/python
 | §1.9 | 股票 / 模拟盘 / 研报词只出现在本插件 `covers` / `aliases` / 代理 prompt |
 | §2 | 函数全标注；领域模型用 TypedDict / dataclass，禁止业务侧裸 EM dict |
 | §3 | `SsBind` 与 papertrade 表：无 `__tablename__`，`@with_session`，`col()` |
-| §4 | 全异步；重 CPU 绘图 `asyncio.to_thread`；matplotlib `Agg` |
+| §4 | 全异步；绘图统一 `render.render_html`，不要另建浏览器或线程渲染链 |
 
 行宽 120。本插件额外：
 
@@ -121,7 +122,7 @@ basedpyright --pythonpath <Core venv>/python
 - 扁平（无 Core）与嵌套（`plugins/SayuStock`）都要能 collection。
 - `test/conftest.py` 包壳：不要执行 `SayuStock/__init__.py` 的 Plugins 链。
 - 改 `ai_return`：`test_ai_text_delivery.py`。分时：`test_intraday_align.py`。模拟盘：`test_papertrade_*.py`。
-- 改 `chart_base` 的 compat 导入：`test_end_label_dodge.py` 用假包加载该文件，桩必须能解析每一个 from-import。
+- 图表变化同时验证标签几何、指标/文字一致性和实际 Node PNG；CI 强制真实出图，不因缺运行时而跳过。
 - CI 四门全挡合并：ruff、indicators、full pytest、**basedpyright**。本地类型检查：`basedpyright --pythonpath <Core venv>/python`。
 - `list` 不变：`list[float]` 不能当 `list[float | None]` 传入；价列用 `Sequence[float | None]`。
 - 禁止把真人东财 Cookie 写进 fixture。测完 `DATA_PATH` 要 `unlink`。
@@ -145,14 +146,14 @@ basedpyright --pythonpath <Core venv>/python
 5. 对比图默认 `D1_YEAR`（365 天）。
 6. 名称含 `(板块)` 要展开成分股。
 7. 行业云图：`chinese_stocks` 申万三级成分 + 大盘 hotmap；禁止每次翻页拉 BK 行情。
-8. importlib 桩漏 `mplchart_compat` 导出名 → Full suite collection `ImportError`。
+8. 新图使用独立版本命名的图片缓存，不覆盖行情 JSON；热缓存也必须先发 AI 文字。
 9. 价序列类型用 `Sequence`，不要让 `list[float]` 与 `list[float | None]` 互赋。
 10. 离线出图测：空 `DATA_PATH` 不是缓存；要有 `*_single-stock*_data.json`。
 11. 模拟盘交易日**自证**（上证 `1.000001` 分时/日 K），别再维护人工假期表——旧表只到 2026-02 就过期，长假照常撮合写脏流水；`holiday_heal` 会自动清。`text()` 查询回来的 datetime 列是**字符串**，解析失败要跳过并告警，**兜底 `now()` 会把整个账本当脏数据删光**。
 12. 持仓要跟流水**双向**对账，且**不许挂在"有没有脏成交"的早退后面**。2026-10-01 美的集团就是反方向损坏：卖出播报了、钱少了、库无流水——旧代码让 LLM 直接 `position_upsert(qty=0)` 删掉持仓行，`trade_insert` 因持仓不足被拒，于是持仓没了、钱没进、流水没有。只有"流水有 → 补持仓"和"持仓有 → 删幽灵仓"都做，且遍历范围要含**只有持仓、零流水**的盘（只遍历 `by_acc` 会整类漏掉），才算自愈。
 13. 东财限流（`-400016`）时 `get_quote` 返回 `None`，**不许当成"跳过校验"放行**。`record_trade` 的偏差校验早先是 `_live is not None and ...`——限流恰好落进"跳过"分支，等于风控期完全失守，任意价格都能落库。拿不到实时价必须**拒绝入库**。且失败缓存 TTL 要短（`QUOTE_FAIL_TTL`，别沿用 60s 成功 TTL），否则一次限流把该票锁死一分钟。注意：拒绝要**就地 return**，不能先把判断结果存进 flag 再在下一段用，否则 `_live` 丢 None 收窄，basedpyright 会报算术运算符类型错。
 14. `async_maker()` 是**普通 AsyncSession，退出 `with` 不自动提交**（实测：不 commit 时 INSERT 离开会话后查不到）。`holiday_heal` 把持仓写入放在「无脏成交」的早退分支里，所以**每条 return 前都要确认该 commit 的 commit 了**，否则"重启即自动修复"只是看起来成立：日志写着已对账，库里什么都没有。验证这类"以为落库了"的改动必须**另开独立连接复查**——同一个 session 会命中未提交事务，骗过自己。
-15. 出图验收别拿精确色扫成品：每条渲染路径最后都由 `convert_img` 统一转 **JPEG**（`img.convert("RGB")` + `quality=pic_quality`，全插件 8 个文件 24 处），有损量化会把 `(187,26,26)` 写成 `(186,26,26)`——在成品图上按精确色找柱会一个像素都搜不到，看着像「柱子全丢了」，其实是探针在自己的收尾步骤上假阴性。像素级验收要么在 `convert_img` **之前**接住画布，要么按容差匹配。
+15. 模板输出无损 PNG；部分发送入口和聊天平台会再转码或压缩。精确像素断言只检查本地原始 PNG，发送后图片用容差并实际看图，不能把有损压缩误判成图元消失。
 
 ## Security notes
 

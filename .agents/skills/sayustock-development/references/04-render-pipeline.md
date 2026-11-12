@@ -1,190 +1,101 @@
 # 四、渲染管线
 
-> **返回主入口**：[`../SKILL.md`](../SKILL.md) · **上一章**：[三](./03-market-data-port.md) · **下一章**：[五、AI 工具与能力代理](./05-ai-tools-and-agents.md)
+> **返回主入口**：[`../SKILL.md`](../SKILL.md) · [行情 Port](./03-market-data-port.md) · [测试](./08-testing-and-quality.md)
 
-出图链路的设计目标：**数据模型统一、计算单源、图与文字一致、缓存不丢 AI 文字。**
+数据模型统一、计算单源、图与文字一致、缓存不丢 AI 文字。
+安装、运行时路径和真实出图方法见 [`docs/rendering.md`](../../../../docs/rendering.md)。
 
-## 4.1 两套出图后端
-
-| 场景 | 包 | 技术 | 产物 |
-|------|-----|------|------|
-| 大盘/行业/概念云图（主路径） | `stock_cloudmap/` | plotly → HTML → playwright | HTML + PNG/bytes |
-| 个股分时 / K 线 / 对比 / 备用云图 | `stock_stockinfo/` | matplotlib + mplchart | PNG |
-| 全天候板块 | `stock_info/draw_future.py` | pytakumi `render_html_to_bytes`（`utils/all_weather_html.py`） | PNG bytes |
-| 我的自选 | `stock_info/draw_my_info.py` | pytakumi（`utils/my_stock_html.py`） | PNG bytes |
-| 基金持仓 | `stock_info/draw_fund_info.py` | pytakumi（`utils/fund_holdings_html.py`） | PNG bytes |
-| 模拟盘自选 | `stock_papertrade/render.py` | pytakumi（`utils/paper_holdings_html.py`） | PNG bytes |
-
-**取数失败不许静默**：我的自选 / 模拟盘自选用 `utils/warn_box.py` 的黄色警告框
-（`Failure` → `failure_lines` → `warn_box_html`），失败的每一条都要在图上写出来，
-并进 `ai_return` 文字。CSS 类名注意别和持仓条的绝对定位类撞名
-（`.day` / `.hold` / `.wt` / `.st`），图例小标签要用 `.chip.c-*`、分隔线用 `.sep-*`。
-
-**基金页不挂失败横幅**：它每行就是一只重仓股，失败了就该没有涨跌幅——
-在**原本涨跌幅那一格写「失败」**，原因写在同一行折线的位置即可。
-（自选页不一样：失败的票压根没有行可画，只能靠横幅点名。）
-
-**颜色有语义，别乱换**：红/绿/灰行底 = 涨跌（与「我的自选」同一套素材
-`myup/mydown/myeq`），**金色行底只给取数失败的那一行**
-（`myup_gold.png`，由 `tools/gen_fund_bar_asset.py` 从 `myup.png` **只转色相**
-生成：饱和度/明度/alpha 不动，渐变、左侧色条、右侧药丸、圆角逐像素对齐）。
-改了 `myup.png` 就要重跑一次生成脚本。**正常行不许染黄**——黄色是失败的信号，
-满页黄就等于满页都在报错。金色药丸上白字只有 3:1 对比度，那一格走深色字。
-
-**失败写在原位**：基金页每行就是一只重仓股，失败了就该没有涨跌幅——
-在**原本涨跌幅那一格写「失败」**，原因写在同一行折线的位置。
-不另挂失败横幅（自选页不一样：失败的票压根没有行可画，只能靠横幅点名）。
-
-**一列网格**：行卡片素材自带 30px 透明边，可见区是 **30..869**。
-全页卡片（指数条 / 信息条 / 图例 / 分隔线）都按这一列对齐，
-`CONTENT_L` / `CONTENT_W` 是唯一真相。
-
-两者 **共享**：
-
-- `utils/render_data.py`（算轴、补点、指标列…）
-- `utils/render_text.py`（给 AI 的文字）
-- `utils/indicators.py`（指标）
-- `utils/market`（取数）
-
-`stock_*/render_data.py` 只是 re-export，**禁止再各写一份**。
-
-## 4.2 数据服务 `CloudMapDataService`
-
-两处实现（云图包精简版 / 个股包完整版）：
-
-| 文件 | 覆盖 |
-|------|------|
-| `stock_stockinfo/data.py` | 云图 + 分时 + K 线 + 对比 + 多股 + 板块展开 |
-| `stock_cloudmap/data.py` | 仅 大盘/行业/概念云图 |
-
-```python
-@dataclass
-class CloudMapDataResult:
-    raw_data: BoardSnapshot | IntradaySeries | KlineSeries | str
-    raw_datas: list[IntradaySeries | KlineSeries]  # 多标的 / 对比
-    sector: str | None
-    special_cache_key: str | None
-```
-
-- `raw_data` 为 **str** → 业务错误文案，上层直接 `bot.send`  
-- 否则为领域模型，进入 render  
-
-**禁止**再往 `raw_data` 塞东财形 `{"data": {"f58": …}}`。
-
-### fetch 分流（个股包）
-
-| 条件 | 取数 |
-|------|------|
-| market ∈ 大盘云图 | `hotmap`；带筛选时 `board(sector)` |
-| 行业云图 | 申万名 → 成分代码（`chinese_stocks` L1/L2/L3，缺表才 BK 30 天缓存）∩ `hotmap()` |
-| 概念云图 | `sector_menu("concept")` + `board` |
-| sector 以 `single-stock-kline` 开头 | `kline` + `KlinePeriod` |
-| sector == `compare-stock` | 多标的 `kline(D1_YEAR)`（默认约一年日 K） |
-| sector == `single-stock` | `intraday`；若名含「(板块)」则展开成分股分时 |
-| sector == `single-stock-ndays-5` | `intraday(..., ndays=5)`，五日分时（图上按交易日分隔） |
-| 其它 | `board(market)` |
-
-板块展开：`_fetch_sector_codes` → 并行 `intraday`，最多约 13 只。
-
-## 4.3 `utils/render_data.py` 入口
-
-| 函数 | 输入 | 输出 |
-|------|------|------|
-| `build_single_stock_render_data` | `IntradaySeries` | `SingleStockRenderData` 或错误 str |
-| `build_multi_stock_render_data` | `list[IntradaySeries]` | `MultiStockRenderData` |
-| `build_kline_render_data` | `KlineSeries` | `KlineRenderData` |
-| `build_compare_render_data` | `list[KlineSeries]` | `CompareRenderData` |
-| `build_cloudmap_render_data` | `BoardSnapshot` + market/sector/layer | `CloudmapRenderData` |
-
-内部会做：
-
-- 分时：会话模板补齐（`time_range.get_trading_datetimes_bjt`）、跨天 HH:MM 锚定  
-- K 线：`kline_to_cn_df` + 均线 + 缺口 breaks  
-- 云图：按市值抽样、treemap path  
-
-## 4.4 chart 层（matplotlib）
-
-```
-stock_stockinfo/
-├── chart_base.py      # Agg 后端、颜色、线程画图 _draw_in_thread
-├── chart_intraday.py  # 单股 / 多股分时
-├── chart_kline.py     # 日K…；指标来自 utils.indicators
-├── chart_compare.py   # 归一化对比 + swing_stats
-├── chart_cloudmap.py  # 矩形树图（mpl 备用）
-└── render_mpl.py      # 对外入口 + _emit_ai_text
-```
-
-`render_mpl.render_image_file` 伪代码：
+## 4.1 所有业务图片共用 Jinja + Takumi
 
 ```text
-result = await CLOUDMAP_DATA_SERVICE.fetch(...)
-if str: return
-_emit_ai_text(...)          # 先文字
-if cache fresh: return file
-fig = await to_*(模型)
-save PNG
+命令 → 原数据服务 → get_market() 领域模型
+                       ↓
+             render_data / indicators
+                 ↙             ↘
+       render_text / ai_return  typed 页面结构 → Jinja HTML/SVG
+                                                    ↓
+                                      render.render_html → Node Takumi → PNG
 ```
 
-## 4.5 云图 plotly 层
+`render/` 管理模板、调色板和几何；原 `stock_*/` 包继续负责命令、取数与返回合同。
+`stock_stockinfo/render_mpl.py` 保留原导入路径，内部不再使用 matplotlib。
+`stock_cloudmap/render_html` 仍可生成静态 HTML 文件，PNG 由同一模板渲染，不启动浏览器。
+自选、基金、全天候、概览、估值、预测、模拟盘、IPO 和分析卡片也走共享入口。
+Core 的帮助和 Markdown 渲染仍归 Core，不能把整个 Core UI 复制进插件。
 
+模板不能接收东财裸 `f*` 字典。用领域模型或有类型的展示结构，展示层只安排位置、
+精度、标签与颜色，不重算或替换业务指标。`render/charts.py` 只提供 SVG 几何。
+
+## 4.2 保留取数与降级语义
+
+`stock_stockinfo/data.py` 覆盖分时、五日分时、K 线、对比、多股、板块展开与云图；
+`stock_cloudmap/data.py` 保留云图的数据入口。`raw_data` 为 `str` 时是业务错误，
+直接返回，不传进 `build_*_render_data`。
+
+| 请求 | 数据合同 |
+|---|---|
+| 大盘云图 | `hotmap`；带筛选时 `board(sector)` |
+| 行业云图 | 申万三级成分 ∩ `hotmap()`，缺表才用原 BK 缓存 |
+| 概念云图 | `sector_menu("concept")` + `board` |
+| `single-stock-kline-*` | `kline` + 原 `KlinePeriod` |
+| `compare-stock` | 多标的 `kline(D1_YEAR)`，默认约一年 |
+| `single-stock` | `intraday`，名称含「(板块)」时展开成分股 |
+| `single-stock-ndays-5` | `intraday(..., ndays=5)`，按交易日分隔，不能替换成日 K |
+
+数据源显示使用 `display.source_footer(*providers)`，传真实结果的 `provider`。
+没有来源标识的数据不能根据市场猜供应商。保留数据时间，生成时间不能冒充行情时间。
+不新增取数请求来补装饰性 UI。
+
+## 4.3 失败必须留在图和文字里
+
+- 我的自选：保留 `intraday → quote` 降级，失败票逐个列在警告区；不得静默减少请求数量。
+- 基金：失败重仓仍占原行并保留原权重，在涨跌幅格写失败、同一行写原因，不能删掉后重排。
+- 模拟盘持仓：保留失败标的和现有文字兜底，不因换渲染器改变账户或订单数据。
+- 多股图：缺失数据不挤乱标的对应关系，部分失败写进图和 AI 文字。
+
+颜色有含义：红涨、绿跌、灰平盘；金色/黄色用于失败或警告，不给正常行统一染黄。
+行情没有价格/涨跌幅时显示缺失，不能按零涨跌或零价格绘制。
+
+## 4.4 自选页的布局合同
+
+顶部表情包使用原图完整比例，横跨内容宽度；下方是一排四张等宽指数卡，不能移到右边。
+四卡为上证指数、深证成指、中证 A500、中证 2000；缺失指数保留位置。
+列表是否双列按已保存自选总数判断（18 只及以上），不能因本轮取数失败变成单列。
+股票名、代码、最新价和涨跌幅必须可辨；ETF 涨跌额保留三位小数。
+
+## 4.5 计算单源
+
+`utils/render_data.py` 负责分时时间轴、补点、K 线表和云图投影。
+`stock_*/render_data.py` 只 re-export，不复制一套计算。
+`utils/indicators.py` 供图、AI 文字和模拟盘共用：
+
+- MA5/10/20/60、BBI、KDJ、BOLL、CMF、RSI6/12/24 保持上游口径。
+- MACD 柱为 `2 * (DIF - DEA)`，不能换成外部绘图库的西式默认。
+- 分时按交易会话补齐；跨天锚在开盘日，不能把 HH:MM 强贴到另一日。
+- 对比保留同一基准与跨市场对齐；90 根日 K 跨年必须显示足以辨年的日期。
+- Kronos 仅替换展示，模型、输入、回测和预测计算不变。
+
+## 4.6 先发文字，再读图片缓存
+
+```text
+result = await fetch(...)
+if isinstance(result, str): return result
+emit_ai_text(result)
+return await cached_render(path, ttl, render_callback)
 ```
-stock_cloudmap/
-├── data.py
-├── render.py          # to_fig + render_html + render_image
-├── get_cloudmap.py     # 对外 facade
-└── render_data.py     # re-export
-```
 
-`layer`：大盘常用 2，行业/概念常用 1（影响 treemap 深度与抽样）。
+`utils/stock/render_cache.py` 管理版本隔离的图片/HTML 缓存，原行情 JSON 缓存不变。
+图片必须完整有效才能原子写入；失败和取消不覆盖已有缓存。
+普通图片沿用 `mapcloud_refresh_minutes`，Kronos 保留原 150 分钟缓存合同。
+缓存锁等待有上限，模型推理与图片绘制的预算分开，不能拿 45 秒绘图预算截断合法预测。
 
-## 4.6 `utils/render_text.py`：有图必有文字
+`render_text` 仍覆盖分时、K 线、对比和云图；技术指标数值与图保持同源。
+冷缓存、热缓存都要调用 `ai_return`；失败时已有可用文字不能被渲染异常抹掉。
 
-| 函数 | 输入 |
-|------|------|
-| `single_stock_text` | `IntradaySeries` 或 list |
-| `kline_text` | `KlineSeries` + sector |
-| `compare_text` | `list[KlineSeries]` |
-| `cloudmap_text` | `BoardSnapshot` |
+## 4.7 修改后的验收
 
-K 线文字必须覆盖图上指标：MA/BOLL/BBI/KDJ/RSI/MACD/CMF/量比/支撑压力/区间涨回撤等，
-数值与 `compute_indicators` **同源**。
-
-调用方式：
-
-```python
-from gsuid_core.ai_core.trigger_bridge import ai_return
-ai_return(render_text.kline_text(series, sector))
-```
-
-## 4.7 缓存与「有图必有文字」
-
-- 缓存键：`utils/stock/utils.get_file(market, suffix, sector, special_cache_key)`  
-- 目录：`DATA_PATH`（`{res}/SayuStock/data`）  
-- TTL：`STOCK_CONFIG.mapcloud_refresh_minutes`（默认 3 分钟）  
-- Kronos：`@async_file_cache(minutes=150)` 缓 PNG  
-
-**铁律**：`ai_return` / `_emit_ai_text` 必须在 **「缓存命中直接 return 文件」之前**。  
-命中缓存时绘图函数体不执行——若文字写在函数体里，热缓存时 AI 零输入。
-
-回归：`test/test_ai_text_delivery.py`（冷/热缓存两次都发文字）。
-
-## 4.8 指标 `utils/indicators.py`
-
-- 图表 `chart_kline` 与 `render_text` / papertrade / AI 工具共用  
-- 口径：通达信式 MACD 柱（DIF-DEA）×2、国内 RSI 周期等  
-- **不要**用 mplchart 自带 MACD/RSI/BBANDS 替换主读数（西方口径会漂）  
-
-## 4.9 分时时间轴 `utils/time_range.py`
-
-- 按 `provider_symbol` / secid 前缀选会话（A 股 / 美期 103. / 港股…）  
-- 跨天品种：锚在「会话开盘日」，禁止把 HH:MM 暴力贴到「次日模板」  
-- 回归：`test/test_intraday_align.py`  
-
-## 4.10 新增一种图 checklist
-
-1. Port 能否返回已有模型？不能则扩展 Port/adapter。  
-2. `data.fetch` 增加分支，只放模型进 `CloudMapDataResult`。  
-3. `render_data` 增加 `build_xxx_render_data(模型)`。  
-4. `chart_xxx` 或 plotly 绘制。图角调用 `source_footer`，传入这张图用到的每个 `provider`。  
-5. `render_text.xxx_text` + `render_mpl._emit_ai_text` 分支。  
-6. 缓存前发文字；补测试。  
+1. 跑受影响页面测试，使用 `Quote`、`IntradaySeries`、`KlineSeries` 等领域模型 fixture。
+2. 跑指标、AI 文字、冷/热缓存及受影响的失败分支。
+3. 开启 `SAYUSTOCK_REQUIRE_RENDER_RUNTIME=1` 实际生成 PNG，检查文字、精度、轴和失败状态。
+4. 布局和样式变化检查真实图；单元测试或 HTML 非空不能替代视觉验收。
+5. 跨页面迁移运行四个 CI 检查；不因缺 Node 或原生模块把强制出图变成 skip。

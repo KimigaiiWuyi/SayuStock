@@ -45,11 +45,14 @@ node tools/install-render-runtime.mjs \
 
 ```python
 from SayuStock.render import render_html
-from SayuStock.render.templates import render_template
+from SayuStock.render.chart_page import ChartPage, Panel, page_html
 
-html = render_template("chart_page.html", page=page, width=1240, plot_width=1184,
-                       left=77, right=1107, top=18)
-png = await render_html(html, width=1240, scale=1.5, label="个股")
+page = ChartPage(
+    title="示例个股", eyebrow="行情", subtitle="暂无有效分时数据",
+    panels=[Panel(label="分时", height=260, axis=[], empty="行情暂缺")],
+    footer="离线示例",
+)
+png = await render_html(page_html(page), width=1240, scale=1.5, label="个股")
 ```
 
 `width` 是 CSS 像素，`scale` 是输出倍率，内容决定高度。Jinja 开启自动转义和
@@ -76,6 +79,38 @@ CI 的完整测试安装运行时并开启强制出图，缺依赖或渲染失�
 
 检查 PNG 中的字体、完整名称、数值精度、日期轴、末端标签和失败行；单测通过不能代替
 查看图片。改变模板后更新相应页面测试，保留指标、AI 文字与冷/热缓存行为的断言。
+
+## 页面样例
+
+下图由测试中的合成数据生成。完整 PNG（包含空态、部分失败、三股缺测、90 根跨年日 K）
+由 CI 的 `takumi-render-evidence` artifact 提供；这里保留缩放后的展示图。
+Kronos 示例使用预先构造的预测数组，验收展示和缓存链路，不下载或运行模型权重。
+
+<details><summary>我的自选：全宽表情包，下方四张指数卡</summary>
+
+![我的自选](images/watchlist.webp)
+
+</details>
+
+<details><summary>K 线与股息率：共享指标、独立标签与缺测断点</summary>
+
+![K 线](images/kline.webp)
+![股息率](images/valuation.webp)
+
+</details>
+
+<details><summary>Kronos：回测与预测区间</summary>
+
+![预测展示](images/forecast.webp)
+
+</details>
+
+<details><summary>模拟盘与技术分析</summary>
+
+![模拟盘持仓](images/paper-holdings.webp)
+![技术分析](images/analysis.webp)
+
+</details>
 
 ## 回退
 

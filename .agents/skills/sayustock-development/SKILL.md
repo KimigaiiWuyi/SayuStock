@@ -15,7 +15,7 @@ description: >
   面向 **SayuStock（早柚股票）插件开发者与维护者**的系统级开发指南。
   与「GsCore 框架开发」「插件通用开发」SKILL 不同，本 SKILL 讲的是 **SayuStock
   自身的内部结构与设计约束**：目录与模块全景、SV 命令与触发器、MarketDataPort
-  行情抽象与多源路由、渲染管线（data → render_data → chart / plotly → ai_return）、
+  行情抽象与多源路由、渲染管线（data → render_data → Jinja / Takumi 与 ai_return）、
   AI 工具与能力代理、模拟盘 papertrade、配置/数据库/缓存、测试与质量门、
   CI/CD 与本地开发流程，以及一份**已知坑与开发注意事项**清单。
 ---
@@ -49,7 +49,7 @@ description: >
 | 一 | 架构与模块全景（目录树、包职责、请求→出图总链路） | [references/01-architecture-and-modules.md](./references/01-architecture-and-modules.md) |
 | 二 | 插件布局与命令层（Plugins / SV、各子包命令、to_ai 桥接） | [references/02-plugin-layout-and-commands.md](./references/02-plugin-layout-and-commands.md) |
 | 三 | 行情数据层 MarketDataPort（领域模型、适配器、路由、禁止 f*） | [references/03-market-data-port.md](./references/03-market-data-port.md) |
-| 四 | 渲染管线（data 服务 → render_data → chart/plotly → render_text / ai_return） | [references/04-render-pipeline.md](./references/04-render-pipeline.md) |
+| 四 | 渲染管线（data 服务 → render_data → Jinja / Takumi → render_text / ai_return） | [references/04-render-pipeline.md](./references/04-render-pipeline.md) |
 | 五 | AI 工具与能力代理（@ai_tools、stock_agent、Kronos 预测） | [references/05-ai-tools-and-agents.md](./references/05-ai-tools-and-agents.md) |
 | 六 | 模拟盘 papertrade（账户/持仓/心跳/撮合/SQLModel） | [references/06-papertrade.md](./references/06-papertrade.md) |
 | 七 | 配置 / 数据库 / 缓存 / 资源路径 | [references/07-config-database-cache.md](./references/07-config-database-cache.md) |
@@ -88,7 +88,7 @@ description: >
 - **模拟盘落库 SQLModel**：禁止用 `record_*` / `state_set` 拼第二套账本。
 - **插件加载只 import 各包 `__init__.py`**：兄弟模块的 `@sv` / `@ai_tools` 必须在 `__init__.py` 里**显式 import** 才会生效。
 - **测试双布局**：扁平（无 Core，CI 指标门）与嵌套（`…/plugins/SayuStock`，全量 CI）都要能过；依赖 `test/conftest.py` 包壳，勿让单测执行 `SayuStock/__init__.py` 的 Plugins 链。
-- **CI 四门全挡合并**：lint（ruff）→ indicators（轻量）→ full pytest → basedpyright；细节见 [十](./references/10-cicd-and-dev-workflow.md)。
+- **CI 四门全挡合并**：lint（ruff）→ indicators（轻量）→ full pytest（含真实 Node 出图）→ basedpyright；细节见 [十](./references/10-cicd-and-dev-workflow.md)。
 
 ## 仓库路径约定
 

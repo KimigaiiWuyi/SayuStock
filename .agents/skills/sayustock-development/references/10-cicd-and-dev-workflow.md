@@ -94,7 +94,7 @@ pytest test/ -q -p no:cacheprovider
    - `.` 相对 workspace 根也指不到 Core 包。
    - CI 做法：`grep -v '^-e' … > /tmp/…` 只装依赖；**Core 本体靠目录层级 import，不 `pip install -e`。**
 3. **不要装 playwright**（出图浏览器只在运行期需要，CI 单测 mock / 不截真浏览器）。
-4. 插件侧再装：`pandas mplchart matplotlib plotly pytest holidays`（`holidays` 给全天候休市日；未装则相关用例 skip，basedpyright 报缺导入）。
+4. 插件侧再装：`pandas jinja2 pytest pytest-asyncio holidays`。完整测试安装 Node 24，并运行 `node tools/install-render-runtime.mjs`，设置 `SAYUSTOCK_REQUIRE_RENDER_RUNTIME=1` 强制真实出图。
 
 ### 10.2.4 Typecheck
 
@@ -319,21 +319,10 @@ REPO_ROOT = Path(__file__).resolve().parent.parent.parent.parent.parent
 - 勿把「0 errors」和「exit 0」当成一回事。  
 - 本机全局 basedpyright 报几十个 MissingImports、CI 却只有 sparkline 两条：解释器不是 Core venv（见 §10.2.4）。
 
-### 10.5.10 importlib 桩漏 `mplchart_compat` 导出名
+### 10.5.10 原生绘图运行时缺失
 
-**现象**（Full suite collection）：
-
-```text
-ImportError: cannot import name 'chart_series_xy' from
-'_end_label_dodge_test.utils.mplchart_compat'
-```
-
-**原因**：`test_end_label_dodge.py` 用假包名加载 `chart_base.py`，并手搓 `mplchart_compat`。
-`chart_base` 的 `from ..utils.mplchart_compat import Chart, …, chart_series_xy` 每加一个
-名字，桩白名单漏了就在 **collection** 炸，一条用例都跑不到。
-
-**正确做法**：白名单与 `chart_base` 的 from-import 对齐；模块级 `__getattr__` 对未知名返回
-`MagicMock`，避免下次 compat 新增导出名再红 CI。
+完整测试必须先安装 Node 24 和锁定版本 Takumi，再开启强制出图。
+不要通过 skip 或恢复旧 matplotlib 桩让 CI 变绿；安装方法见 [rendering.md](../../../../docs/rendering.md)。
 
 ### 10.5.11 `list[float]` 不能赋给 `list[float | None]`
 
@@ -399,7 +388,7 @@ assert 4 >= 12   # class="spark"
 | C-8 | parents[N] 仅嵌套可用 | 改 conftest / 双布局验证 |
 | C-9 | typecheck：`Import "holidays" could not be resolved` | Full suite / typecheck 都要 `pip install holidays`；`market_holidays` 的 import 行保留 `reportMissingImports` ignore 给本地未装 |
 | C-14 | typecheck：`Import "torch" could not be resolved` | **不要** `pip install torch`。在 `draw_ai_map` 惰性 import 上加 `reportMissingImports` ignore |
-| C-10 | full suite collection：`cannot import name 'chart_series_xy' from '…mplchart_compat'` | 假包桩对齐 `chart_base` from-import + 模块 `__getattr__`（§10.5.10） |
+| C-10 | 完整测试缺少 Node/Takumi | 运行安装脚本并检查服务 PATH，禁止跳过强制渲染（§10.5.10） |
 | C-11 | typecheck：`list[float]` 不能赋给 `list[float \| None]` | 价列用 `Sequence[float \| None]`（§10.5.11） |
 | C-12 | 本地 basedpyright 几十个 MissingImports，与 CI 不符 | `--pythonpath` 指向 Core 3.12 venv，勿用全局解释器 |
 | C-13 | `test_offline_all_weather_png`：`assert 4 >= 12` spark | 空 DATA_PATH 不是缓存；看 `*_single-stock*_data.json`（§10.5.12） |
