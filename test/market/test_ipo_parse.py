@@ -498,12 +498,11 @@ def test_ipo_html_two_line_subline_and_ticker() -> None:
         ),
     ]
     html = build_ipo_calendar_html(build_ipo_calendar_render_data(evs, anchor=date(2026, 9, 21)))
-    # 美股：ticker 作主名，全名进日期行
-    assert ">EMI</span>" in html
-    assert "Encore Medical Inc" in html
-    # 双行副标题：日期行(l2) 与数字行(l3) 分离
-    # 港股/美股两行各带日期行+数字行；A股空分组行只有提示文字（l2）
-    assert html.count('class="l2"') == 3 and html.count('class="l3"') == 2
+    assert "<span>EMI</span>" in html
+    assert 'ipo-identity">Encore Medical Inc</div>' in html
+    assert 'ipo-dates-text">09-22上市</div>' in html
+    assert 'ipo-numbers">发行价49港元 · 超购72.9倍' in html
+    assert "窗口内无发行/上市安排" in html
     assert "首日-9.2%" in html and "超购72.9倍" in html
 
 
@@ -557,9 +556,7 @@ def test_apply_pre_window_not_drawn_as_tick() -> None:
     )
     data = build_ipo_calendar_render_data([ev], anchor=date(2026, 9, 21))
     html = build_ipo_calendar_html(data)
-    row = html.split("中塑股份")[1].split("</div>\n</div>")[0]
-    # 不应有画在 0% 的申购实心条
-    assert 'class="tick heavy" style="left:0.00%' not in row
+    assert 'class="ipo-bar phase-apply"' not in html
     # 应有左缘彩色摘要：申购 + 中签缴款
     assert "申购09-10" in html and "中签缴款09-14" in html
 

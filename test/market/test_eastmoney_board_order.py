@@ -12,6 +12,7 @@
 from __future__ import annotations
 
 import asyncio
+from pathlib import Path
 from unittest.mock import patch
 
 from SayuStock.utils.market.enums import RankBy, BoardKind
@@ -95,7 +96,7 @@ def test_eastmoney_rank_list_high_first_mapping() -> None:
         assert param_dict_low.get("po") == "0"
 
 
-def test_draw_info_requests_fall_as_asc_and_rise_as_desc() -> None:
+def test_draw_info_requests_fall_as_asc_and_rise_as_desc(tmp_path: Path) -> None:
     """验证大盘概览绘图时，领跌按 sort_asc=True 拉取，领涨按 sort_asc=False 拉取。"""
     from SayuStock.stock_info import draw_info
 
@@ -174,15 +175,18 @@ def test_draw_info_requests_fall_as_asc_and_rise_as_desc() -> None:
     from PIL import Image
 
     fake_img = Image.new("RGBA", (10, 10), (0, 0, 0, 0))
+    preview = tmp_path / "preview_output" / "market_overview.png"
 
     with (
         patch("SayuStock.stock_info.draw_info.get_market", return_value=_MockMarket()),
         patch("SayuStock.stock_info.draw_info.get_image_from_em", return_value=fake_img),
-        patch("SayuStock.stock_info.draw_info.render_html_to_bytes", side_effect=_mock_render),
+        patch("SayuStock.stock_info.draw_info.render_html", side_effect=_mock_render),
         patch("SayuStock.stock_info.draw_info.ai_return") as mock_ai,
+        patch.object(draw_info, "PREVIEW_FILE", preview),
     ):
         res = asyncio.run(draw_info.draw_info_img())
         assert res == b"fake_png"
+        assert not preview.exists()
 
         # 检查 4 次 board 调用：行业/概念的跌幅榜必须是 sort_asc=True，涨幅榜必须是 sort_asc=False
         assert ("行业板块", True) in board_calls
@@ -194,3 +198,9 @@ def test_draw_info_requests_fall_as_asc_and_rise_as_desc() -> None:
         ai_text = mock_ai.call_args[0][0]
         assert "【领涨行业板块】\n  行业板块_涨: +5.0%" in ai_text
         assert "【领跌行业板块】\n  行业板块_跌: -3.0%" in ai_text
+
+        assert asyncio.run(draw_info.draw_info_img(is_save=True)) == b"fake_png"
+        assert preview.read_bytes() == b"fake_png"
+        with patch.object(draw_info, "render_html", side_effect=draw_info.RenderError("test failure")):
+            assert asyncio.run(draw_info.draw_info_img(is_save=True)) == "大盘概览出图失败"
+        assert preview.read_bytes() == b"fake_png"

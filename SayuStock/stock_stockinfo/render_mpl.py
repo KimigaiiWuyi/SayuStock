@@ -1,17 +1,8 @@
-"""个股/云图渲染对外入口（matplotlib 实现）。
-
-绘图实现已按种类拆到 ``chart_*.py``，本模块只保留：
-
-- ``render_html`` / ``render_image_file`` / ``render_image``：拉数据 → 选图 → 出图
-- ``_ai_return_*``：把图上的数据以**文字**发给 AI —— 部分模型看不到图，
-  这段文字是它拿到的全部信息，实现在 ``utils/render_text.py``
-
-历史调用方按 ``from .render_mpl import draw_xxx`` 导入，故此处 re-export 绘图函数。
-"""
+"""个股图表对外入口；沿用原命令和文件缓存接口。"""
 
 import asyncio
 from pathlib import Path
-from datetime import datetime, timedelta
+from datetime import datetime
 
 from gsuid_core.logger import logger
 from gsuid_core.utils.image.convert import convert_img
@@ -19,28 +10,21 @@ from gsuid_core.ai_core.trigger_bridge import ai_return
 
 from .data import CLOUDMAP_DATA_SERVICE
 from ..utils import render_text
-from .chart_base import BotSendContent
-from .chart_kline import to_single_fig_kline, draw_single_kline_chart
-from .chart_compare import to_compare_fig, draw_compare_chart
-from .chart_cloudmap import to_fig, draw_cloudmap_chart
+from ..render import RenderError
+from .chart_kline import to_single_fig_kline
+from .chart_compare import to_compare_fig
+from .chart_cloudmap import to_fig
 from .chart_intraday import (
     to_multi_fig,
     to_single_fig,
-    draw_multi_stock_chart,
-    draw_single_stock_chart,
 )
 from ..utils.constant import ErroText
-from ..utils.stock.utils import get_file
 from ..utils.stock_period import is_intraday_sector, intraday_ndays_from_sector
 from ..utils.market.models import KlineSeries, BoardSnapshot, IntradaySeries
+from ..utils.stock.render_cache import cached_render, get_render_file
 from ..stock_config.stock_config import STOCK_CONFIG
 
 __all__ = [
-    "draw_cloudmap_chart",
-    "draw_compare_chart",
-    "draw_multi_stock_chart",
-    "draw_single_kline_chart",
-    "draw_single_stock_chart",
     "render_html",
     "render_image",
     "render_image_file",
@@ -58,7 +42,7 @@ async def render_html(
     start_time: datetime | None = None,
     end_time: datetime | None = None,
 ) -> str | Path:
-    """兼容旧入口名：mpl 版本不生成 HTML，实际缓存 PNG 图片。"""
+    """兼容旧入口名：实际返回缓存 PNG 图片路径。"""
     return await render_image_file(market, sector, start_time, end_time)
 
 
@@ -88,37 +72,39 @@ async def render_image_file(
     # 刷新窗口内问第二次，AI 就一个字都收不到。
     _emit_ai_text(market, sector, raw_data, raw_datas)
 
-    file = get_file(market, "png", sector, data_result.special_cache_key)
-    if file.exists():
-        minutes = int(STOCK_CONFIG.get_config("mapcloud_refresh_minutes").data)
-        file_mod_time = datetime.fromtimestamp(file.stat().st_mtime)
-        if datetime.now() - file_mod_time < timedelta(minutes=minutes):
-            logger.info(f"[SayuStock] png文件在{minutes}分钟内，直接返回文件数据。")
-            return file
+    failures = data_result.failures
+    if failures:
+        ai_return("未获取到数据：" + "；".join(failures))
+    key = data_result.special_cache_key
+    if failures:
+        key = f"{key}|" + "|".join(failures)
+    file = get_render_file(market, "png", sector, key, namespace="takumi-stock-v1")
+    minutes = int(STOCK_CONFIG.get_config("mapcloud_refresh_minutes").data)
 
-    if is_intraday_sector(sector):
-        if raw_datas:
-            fig = await to_multi_fig([s for s in raw_datas if isinstance(s, IntradaySeries)])
-        elif isinstance(raw_data, IntradaySeries):
-            fig = await to_single_fig(raw_data)
-        else:
-            return ErroText["notData"]
-    elif sector == "compare-stock":
-        fig = await to_compare_fig([s for s in raw_datas if isinstance(s, KlineSeries)])
-    elif sector and sector.startswith("single-stock-kline"):
-        if not isinstance(raw_data, KlineSeries):
-            return ErroText["notData"]
-        fig = await to_single_fig_kline(raw_data)
-    else:
-        if not isinstance(raw_data, BoardSnapshot):
-            return ErroText["notData"]
-        fig = await to_fig(raw_data, market, sector, 2 if market == "大盘云图" else 1)
+    async def draw() -> bytes | str:
+        try:
+            if is_intraday_sector(sector):
+                if raw_datas:
+                    return await to_multi_fig(
+                        [s for s in raw_datas if isinstance(s, IntradaySeries)], failures=failures
+                    )
+                if isinstance(raw_data, IntradaySeries):
+                    return await to_single_fig(raw_data)
+                return ErroText["notData"]
+            if sector == "compare-stock":
+                return await to_compare_fig([s for s in raw_datas if isinstance(s, KlineSeries)], failures=failures)
+            if sector and sector.startswith("single-stock-kline"):
+                if not isinstance(raw_data, KlineSeries):
+                    return ErroText["notData"]
+                return await to_single_fig_kline(raw_data)
+            if not isinstance(raw_data, BoardSnapshot):
+                return ErroText["notData"]
+            return await to_fig(raw_data, market, sector, 2 if market == "大盘云图" else 1)
+        except RenderError as error:
+            logger.error(f"[SayuStock] 个股图表绘制失败: {error}")
+            return "图表生成失败，请稍后重试。"
 
-    if isinstance(fig, str):
-        return fig
-
-    await asyncio.to_thread(fig.save, file, format="PNG")
-    return file
+    return await cached_render(file, minutes, draw)
 
 
 def _emit_ai_text(
@@ -191,7 +177,7 @@ async def render_image(
     sector: str | None = None,
     start_time: datetime | None = None,
     end_time: datetime | None = None,
-) -> BotSendContent:
+) -> str | bytes:
     image_path = await render_image_file(market, sector, start_time, end_time)
     if isinstance(image_path, str):
         return image_path

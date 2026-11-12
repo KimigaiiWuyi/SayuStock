@@ -6,10 +6,9 @@ authors = [
   { name = "KimigaiiWuyi", email = "444835641@qq.com" },
 ]
 dependencies = [
+  "jinja2>=3.1.6,<4",
   "playwright>=1.49.0",
-  "plotly>=5.24.1",
   "pandas>=2.2.3",
-  "mplchart>=0.0.37",
   "holidays>=0.50",
 ]
 requires-python = "==3.12.*"
@@ -39,7 +38,7 @@ distribution = false
 [tool.pyright]
 include = ["SayuStock"]
 # Kronos 是 vendored 的第三方 submodule，不检查它自己的代码
-exclude = ["**/__pycache__", "**/node_modules", "SayuStock/Kronos"]
+exclude = ["**/__pycache__", "SayuStock/Kronos"]
 extraPaths = [
   "../../../",
   "../../../gsuid_core",
@@ -57,6 +56,7 @@ disableBytesTypePromotions = false
 testpaths = ["test"]
 # "." → import SayuStock；"test" → import kline_fixtures 等测试辅助模块
 pythonpath = [".", "test"]
+asyncio_default_fixture_loop_scope = "function"
 
 # 本仓库以 ruff.toml 为准；此处只排除非 Python 文件，避免扩展把 TOML 当 .py 查
 [tool.ruff]

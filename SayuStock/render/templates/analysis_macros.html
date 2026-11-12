@@ -1,0 +1,27 @@
+{% from "extras_macros.html" import metrics, text_list %}
+{% macro technical_readings(report, compact=false) -%}
+{{ metrics(report.readings, "four") }}
+<div class="tech-levels">
+  <div class="ex-note">关键价位</div>
+  {{ metrics(report.levels, "three" if compact else "six") }}
+</div>
+{%- endmacro %}
+
+{% macro technical_evidence(report) -%}
+<div class="tech-evidence">
+  <section class="panel ex-panel">
+    <h2 class="ex-h2 ex-info">信号</h2>
+    {{ text_list(report.signals) }}
+  </section>
+  <section class="panel ex-panel">
+    <h2 class="ex-h2 ex-warn">风险</h2>
+    {{ text_list(report.risks) }}
+  </section>
+</div>
+{% if report.summary %}
+<section class="panel ex-panel tech-summary">
+  <h2 class="ex-h2">摘要</h2>
+  <p class="ex-item">{{ report.summary }}</p>
+</section>
+{% endif %}
+{%- endmacro %}

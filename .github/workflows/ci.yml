@@ -51,6 +51,9 @@ jobs:
   test:
     name: Full test suite
     runs-on: ubuntu-latest
+    env:
+      SAYUSTOCK_REQUIRE_RENDER_RUNTIME: "1"
+      SAYUSTOCK_RENDER_EVIDENCE_DIR: ${{ github.workspace }}/render-evidence
     steps:
       # 插件必须坐落在 <gsuid_core>/gsuid_core/plugins/SayuStock，
       # 测试里的相对 import 和 sys.path 计算都依赖这个层级。
@@ -76,12 +79,17 @@ jobs:
           grep -v '^-e' gsuid_core/requirements.txt > /tmp/gsuid_core_reqs.txt
           pip install -r /tmp/gsuid_core_reqs.txt
       - name: Install SayuStock deps
-        # playwright 只在出图的运行期需要，CI 不跑浏览器，装它纯属拖时间
-        # holidays：全天候/休市日；未装时相关用例 importorskip，basedpyright 也会报缺导入
-        run: pip install pandas mplchart matplotlib plotly pytest pytest-asyncio "holidays>=0.50"
+        run: pip install pandas pytest pytest-asyncio "jinja2>=3.1.6,<4" "holidays>=0.50"
       - name: Run tests
         working-directory: gsuid_core/gsuid_core/plugins/SayuStock
         run: pytest test/ -q -p no:cacheprovider
+      - name: Upload rendered examples
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: takumi-render-evidence
+          path: render-evidence/
+          if-no-files-found: error
 
   typecheck:
     name: Typecheck (pyright)
@@ -114,7 +122,7 @@ jobs:
         run: |
           grep -v '^-e' gsuid_core/requirements.txt > /tmp/gsuid_core_reqs.txt
           pip install -r /tmp/gsuid_core_reqs.txt
-          pip install pandas mplchart matplotlib plotly "holidays>=0.50" basedpyright==1.39.7
+          pip install pandas "jinja2>=3.1.6,<4" "holidays>=0.50" basedpyright==1.39.7
       - name: Run basedpyright
         working-directory: gsuid_core/gsuid_core/plugins/SayuStock
         run: basedpyright

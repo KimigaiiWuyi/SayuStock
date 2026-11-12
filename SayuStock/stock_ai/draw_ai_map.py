@@ -1,7 +1,7 @@
 """Kronos AI 预测出图。
 
 惰性加载 Kronos（依赖 torch / HF），避免插件 import 期拖垮无 torch 的环境。
-出图结果经 ``@async_file_cache`` 写成 PNG；``ai_return`` 必须在缓存函数外调用。
+出图结果缓存为 PNG；``ai_return`` 在命中缓存前调用。
 """
 
 from __future__ import annotations
@@ -12,11 +12,11 @@ from typing import Any, Union, cast
 from pathlib import Path
 from contextlib import contextmanager
 from dataclasses import dataclass
+from importlib.util import find_spec
 from collections.abc import Iterator
 
 import numpy as np
 import pandas as pd
-from PIL import Image
 from tqdm import trange
 from numpy.typing import NDArray
 
@@ -29,8 +29,10 @@ from ..utils.market import KlinePeriod, get_market, is_market_error
 from .forecast_chart import draw_forecast_chart
 from ..utils.constant import ErroText
 from ..utils.load_data import get_full_security_code
-from ..utils.stock.utils import async_file_cache
+from ..render.chart_page import ChartPage, render_chart
 from ..utils.market.models import KlineSeries
+from ..utils.market.display import source_footer
+from ..utils.stock.render_cache import cached_render, get_render_file
 from ..stock_config.stock_config import STOCK_CONFIG
 from ..utils.stock.request_utils import get_code_id
 from ..utils.market.convert.dataframe import kline_to_df
@@ -155,16 +157,15 @@ async def draw_ai_kline_with_forecast(market: str, bot: Bot) -> str | bytes:
     if df is None or df.empty:
         return "无有效K线数据"
 
-    # 文字必须发在缓存**之外**：部分模型看不到图，ai_return 的文字是它唯一的输入，
-    # 而 _draw_ai_kline_with_forecast 挂着 @async_file_cache(minutes=150) —— 命中缓存
-    # 时装饰器直接返回文件、整个函数体都不执行。文字若留在里面，2.5 小时内问第二次
-    # 同一只票，AI 就一个字都收不到。
     _ai_return_kronos_data(series, df)
 
-    await bot.send("[SayuStock] 模型预测中，预计约3分钟（视模型与设备配置而定），请稍后...")
+    if NOW_QUEUE:
+        return f"当前队列中还有{len(NOW_QUEUE)}只股票在预测中，请稍后提交..."
     NOW_QUEUE.append(sec_id)
     try:
-        fig_or_path = await _draw_ai_kline_with_forecast(sec_id, df, series, kronos_run_config().cache_tag)
+        await bot.send("[SayuStock] 模型预测中，预计约3分钟（视模型与设备配置而定），请稍后...")
+        config = kronos_run_config()
+        fig_or_path = await _draw_ai_kline_with_forecast(sec_id, df, series, config)
     except Exception as e:
         logger.error(f"[SayuStock] 模型预测出现错误: {e}")
         return f"模型预测出现错误: {e}"
@@ -174,34 +175,24 @@ async def draw_ai_kline_with_forecast(market: str, bot: Bot) -> str | bytes:
 
     if isinstance(fig_or_path, str):
         return fig_or_path
-    if isinstance(fig_or_path, Path):
-        return await convert_img(fig_or_path)
-    if isinstance(fig_or_path, Image.Image):
-        return await convert_img(fig_or_path)
-    return "出现了未知错误。"
+    return await convert_img(fig_or_path)
 
 
-@async_file_cache(
-    market="{sec_id}",
-    sector="single-stock-ai-{model_tag}",
-    suffix="png",
-    minutes=150,
-)
 async def _draw_ai_kline_with_forecast(
     sec_id: str,
     df: pd.DataFrame,
     series: KlineSeries,
-    model_tag: str,
-) -> str | Path | Image.Image:
-    """只负责出图（Kronos 预测约 3 分钟，故缓存 150 分钟）。
+    config: KronosRunConfig,
+) -> str | Path:
+    file = get_render_file(
+        sec_id, "png", f"single-stock-ai-{config.cache_tag}", config.device, namespace="takumi-kronos-v1"
+    )
 
-    **不要在这里调 ai_return**：命中缓存时装饰器直接返回文件、本函数根本不执行，
-    文字会丢。发文字请留在未被缓存的 ``draw_ai_kline_with_forecast`` 里。
-    ``df`` / ``series`` 由调用方传入以免重复取数；缓存键取 ``{sec_id}`` +
-    ``{model_tag}``（Tokenizer+模型），网页端切换配置后立即换用新缓存。
-    """
-    _ = sec_id
-    return await asyncio.to_thread(gdf, df, series)
+    async def draw() -> str | bytes:
+        page = await asyncio.to_thread(gdf, df, series, config)
+        return await render_chart(page)
+
+    return await cached_render(file, 150, draw)
 
 
 def _ai_return_kronos_data(series: KlineSeries, df: pd.DataFrame) -> None:
@@ -287,13 +278,15 @@ def _as_float_array(values: Any) -> NDArray[np.floating[Any]]:
     return arr
 
 
-def gdf(df: pd.DataFrame, series: KlineSeries) -> str | Image.Image:
+def gdf(df: pd.DataFrame, series: KlineSeries, config: KronosRunConfig | None = None) -> str | ChartPage:
     """运行 Kronos 回测+未来预测并返回预测图（或错误文本）。"""
+    if find_spec("torch") is None:
+        return "模型预测需要 PyTorch，请先安装适合当前设备的 torch。"
     # Kronos 是 git submodule 且顶层 import torch —— 惰性导入
     with temp_sys_path(str(kronos_dir)):
         from ..Kronos.model import Kronos, KronosPredictor, KronosTokenizer
 
-    run_cfg = kronos_run_config()
+    run_cfg = config if config is not None else kronos_run_config()
     device = _resolve_kronos_device(run_cfg.device)
     logger.info(f"[SayuStock] Kronos预测配置: tokenizer={run_cfg.tokenizer}, model={run_cfg.model}, device={device}")
     tokenizer = KronosTokenizer.from_pretrained(run_cfg.tokenizer)
@@ -432,6 +425,8 @@ def gdf(df: pd.DataFrame, series: KlineSeries) -> str | Image.Image:
         tokenizer=run_cfg.tokenizer,
         model=run_cfg.model,
         device=device,
+        source=source_footer(series.provider),
+        period=f"周期 {freq_label}",
         hist_t=list(hist_t),
         hist_y=hist_close.to_numpy(),
         backtest_t=list(backtest_t_plotting),

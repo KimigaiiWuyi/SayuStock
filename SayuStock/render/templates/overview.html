@@ -1,0 +1,82 @@
+{% from "cards.html" import quote_cards, section, footer %}
+<!doctype html>
+<html><head><meta charset="utf-8"><style>
+{% include "theme.css" %}
+{% include "cards.css" %}
+.page { width: {{ width }}px; }
+.overview-top { align-items: stretch; gap: 12px; margin-top: 12px; }
+.overview-top.no-flow { align-items: center; }
+.overview-mood { align-self: center; }
+.market-pulse { flex: 1; min-width: 0; gap: 9px; padding: 12px 14px; }
+.market-flow { align-self: center; }
+.turnover { margin-top: 3px; font-size: 24px; color: {{ TEXT }}; }
+.flow-empty { padding: 16px 0; color: {{ TEXT_SOFT }}; }
+.breadth { padding: 12px 15px; }
+.breadth-grid { margin-top: 9px; display: flex; flex-direction: row; gap: 5px; }
+.breadth-col { flex: 1; min-width: 0; align-items: center; }
+.breadth-lane { height: 132px; justify-content: flex-end; align-items: center; width: 100%; }
+.breadth-num { font-size: 14px; margin-bottom: 3px; }
+.breadth-bar { width: 64%; border-radius: 3px 3px 0 0; }
+.breadth-bar.up { background: {{ UP }}; }
+.breadth-bar.down { background: {{ DOWN }}; }
+.breadth-bar.flat { background: {{ FLAT }}; }
+.breadth-label { font-size: 13px; color: {{ TEXT_SOFT }}; margin-top: 7px; }
+.board-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; align-items: start; }
+.board-col { gap: 5px; }
+.board-title { font-size: 15px; padding: 9px 10px; border-radius: 6px; background: {{ GRID }}; }
+.board-rank { min-height: 49px; padding: 5px 8px; border-radius: 6px; background: {{ SURFACE }}; }
+.board-rank.up { background: {{ UP_CARD_END }}; }
+.board-rank.down { background: {{ DOWN_CARD_END }}; }
+.board-row { gap: 6px; }
+.board-name { min-width: 0; flex: 1; font-size: 14px; color: {{ TEXT }}; }
+.board-member { min-width: 0; flex: 1; font-size: 12px; color: {{ TEXT_SOFT }}; }
+.board-number { font-size: 13px; flex-shrink: 0; }
+</style></head><body>
+<main class="page">
+  <header class="row between header">
+    <div class="column"><span class="eyebrow">A 股市场</span><b class="page-title">大盘概览</b></div>
+    <div class="column summary"><span>{{ date }}</span><b>{{ status }}</b></div>
+  </header>
+  <div class="row overview-top{% if not flow %} no-flow{% endif %}">
+    <img class="overview-mood" src="{{ mood }}" width="682" height="320.94" alt="市场情绪表情包">
+    <div class="column panel market-pulse">
+      <div class="row between"><b>两市成交额</b>{% if trade_date %}<span class="muted">交易日 {{ trade_date }}</span>{% endif %}</div>
+      <div class="row between"><b class="turnover number">{{ turnover }}</b><span class="{{ turnover_tone }}">{{ turnover_delta }}</span></div>
+      <b>主力净流入</b>
+      {% if flow %}<img class="market-flow" src="{{ flow }}" width="400" height="219.2" alt="主力净流入分时">
+      {% else %}<span class="flow-empty">暂缺主力资金图</span>{% endif %}
+    </div>
+  </div>
+  {{ section("主要指数") }}
+  {{ quote_cards(index_cards, 6, true) }}
+  {{ section("涨跌分布") }}
+  <div class="column panel breadth">
+    {% if breadth %}
+    <div class="row between"><span>上涨 {{ up_count }} · 平 {{ flat_count }} · 下跌 {{ down_count }}</span></div>
+    <div class="breadth-grid">
+      {% for bar in breadth %}
+      <div class="column breadth-col">
+        <div class="column breadth-lane"><b class="breadth-num number {{ bar.tone }}">{{ bar.count }}</b><div class="breadth-bar {{ bar.tone }}" style="height:{{ bar.height }}px"></div></div>
+        <span class="breadth-label">{{ bar.name }}</span>
+      </div>
+      {% endfor %}
+    </div>
+    {% else %}<span class="flow-empty">暂缺涨跌分布</span>{% endif %}
+  </div>
+  {{ section("行业与概念", "各榜前 20") }}
+  <div class="board-grid">
+    {% for title, rows in boards %}
+    <div class="column board-col">
+      <b class="board-title">{{ title }}</b>
+      {% for row in rows %}
+      <div class="column board-rank {{ row.tone }}">
+        <div class="row board-row"><b class="board-name">{{ row.name }}</b><b class="number board-number">{{ row.change }}</b></div>
+        {% if row.member %}<div class="row board-row"><span class="board-member">{{ row.member }}</span><span class="number board-number">{{ row.member_change }}</span></div>{% endif %}
+      </div>
+      {% else %}<span class="flow-empty">暂无数据</span>{% endfor %}
+    </div>
+    {% endfor %}
+  </div>
+  {{ footer(source, brand) }}
+</main>
+</body></html>

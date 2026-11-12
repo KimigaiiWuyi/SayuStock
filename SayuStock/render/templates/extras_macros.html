@@ -1,0 +1,29 @@
+{% macro heading(kicker, title, subtitle="", badge="", tone="neutral") -%}
+<header class="ex-head">
+  <div>
+    <div class="ex-kicker">{{ kicker }}</div>
+    <h1 class="ex-title">{{ title }}</h1>
+    {% if subtitle %}<div class="ex-sub">{{ subtitle }}</div>{% endif %}
+  </div>
+  {% if badge %}<span class="ex-badge {{ tone if tone in ("up", "down", "flat") else "ex-" ~ tone }}">{{ badge }}</span>{% endif %}
+</header>
+{%- endmacro %}
+
+{% macro metrics(items, columns, spaced=true) -%}
+<div class="ex-grid {{ columns }}{% if spaced %} spaced{% endif %}">
+  {% for item in items %}
+  <div class="ex-metric">
+    <div class="ex-metric-label">{{ item.label }}</div>
+    <div class="ex-metric-value ex-num {{ item.tone if item.tone in ("up", "down", "flat") else "ex-" ~ item.tone }}">{{ item.value }}</div>
+    {% if item.note %}<div class="ex-metric-note">{{ item.note }}</div>{% endif %}
+  </div>
+  {% endfor %}
+</div>
+{%- endmacro %}
+
+{% macro text_list(lines, empty="暂无") -%}
+<div class="ex-list">
+  {% for line in lines %}<div class="ex-item">· {{ line }}</div>
+  {% else %}<div class="ex-item muted">{{ empty }}</div>{% endfor %}
+</div>
+{%- endmacro %}

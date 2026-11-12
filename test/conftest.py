@@ -13,9 +13,12 @@
 
 from __future__ import annotations
 
+import os
 import sys
 from types import ModuleType
 from pathlib import Path
+
+import pytest
 
 _PLUGIN_ROOT = Path(__file__).resolve().parent.parent
 if str(_PLUGIN_ROOT) not in sys.path:
@@ -50,3 +53,9 @@ _ensure_pkg_shell("SayuStock.utils", _PKG / "utils")
 _ensure_pkg_shell("SayuStock.stock_stockinfo", _PKG / "stock_stockinfo")
 _ensure_pkg_shell("SayuStock.stock_info", _PKG / "stock_info")
 _ensure_pkg_shell("SayuStock.stock_analysis", _PKG / "stock_analysis")
+
+
+@pytest.fixture
+def require_render_runtime() -> None:
+    if os.environ.get("SAYUSTOCK_REQUIRE_RENDER_RUNTIME") != "1":
+        pytest.skip("SAYUSTOCK_REQUIRE_RENDER_RUNTIME=1 enables real PyTakumi rendering")
