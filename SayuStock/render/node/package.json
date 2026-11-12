@@ -1,0 +1,14 @@
+{
+  "name": "sayustock-render",
+  "private": true,
+  "description": "Takumi HTML-to-PNG worker for SayuStock charts.",
+  "license": "GPL-3.0-or-later",
+  "type": "module",
+  "engines": {
+    "node": ">=24 <25"
+  },
+  "dependencies": {
+    "@takumi-rs/core": "2.14.0",
+    "@takumi-rs/helpers": "2.14.0"
+  }
+}

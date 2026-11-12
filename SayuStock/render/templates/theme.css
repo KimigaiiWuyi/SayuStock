@@ -1,0 +1,45 @@
+/* Shared SayuStock theme; rendered by @takumi-rs/core 2.14.0. */
+.page {
+  display: flex;
+  flex-direction: column;
+  padding: 28px;
+  background: linear-gradient(180deg, {{ PAGE_TOP }} 0%, {{ PAGE }} 60%, {{ PAGE_BOTTOM }} 100%);
+  color: {{ TEXT }};
+  font-family: "MiSans", sans-serif;
+}
+.row { display: flex; flex-direction: row; align-items: center; }
+.column { display: flex; flex-direction: column; }
+.between { justify-content: space-between; }
+.muted { color: {{ MUTED }}; }
+.dim { color: {{ DIM }}; }
+.up { color: {{ UP }}; }
+.down { color: {{ DOWN }}; }
+.flat { color: {{ FLAT }}; }
+.panel {
+  position: relative;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.025);
+  border: 1px solid rgba(255, 255, 255, 0.07);
+}
+.cells { display: grid; gap: 10px; }
+.cell {
+  display: flex;
+  flex-direction: column;
+  padding: 10px 14px;
+  border-radius: 8px;
+  background: {{ SURFACE }};
+  font-size: 15px;
+  color: {{ MUTED }};
+}
+.cell b { margin-top: 4px; font-size: 20px; color: {{ TEXT }}; }
+.axis-label {
+  position: absolute;
+  font-size: 13px;
+  color: {{ MUTED }};
+  white-space: nowrap;
+}
+.foot {
+  margin-top: 14px;
+  font-size: 13px;
+  color: {{ DIM }};
+}
