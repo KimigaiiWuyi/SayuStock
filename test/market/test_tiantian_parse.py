@@ -123,12 +123,10 @@ def test_quote_uses_unit_nav_not_acc_nav() -> None:
 def test_compare_render_accepts_fund_nav_series() -> None:
     from datetime import datetime, timedelta
 
-    from PIL import Image
-
+    from SayuStock.render.compare import prepare_compare
     from SayuStock.utils.constant import ErroText
     from SayuStock.utils.render_data import build_compare_render_data
     from SayuStock.utils.market.models import Bar, SymbolRef, KlineSeries
-    from SayuStock.stock_stockinfo.chart_compare import draw_compare_chart
 
     payload = json.loads((FIX / "tiantian_nav_720001.json").read_text(encoding="utf-8"))
     fund = parse_nav_rows(
@@ -174,10 +172,11 @@ def test_compare_render_accepts_fund_nav_series() -> None:
     data = build_compare_render_data([fund, etf])
     assert not isinstance(data, str)
     assert len(data.items) == 2
-    fig = draw_compare_chart([fund, etf])
-    assert fig != ErroText["notData"]
-    assert isinstance(fig, Image.Image)
-    assert fig.size[0] > 100
+    page = prepare_compare([fund, etf])
+    assert page != ErroText["notData"]
+    assert not isinstance(page, str)
+    assert len(page.panels[0].series) == 2
+    assert len(page.legend) == 2
 
 
 def _bar(ts_day: int, close: float) -> Bar:

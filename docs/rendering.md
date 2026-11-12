@@ -31,9 +31,14 @@ python -c "import jinja2; from gsuid_core.utils.html_render import render_html_t
 
 ```python
 from SayuStock.render import render_html
+from SayuStock.render.chart_page import ChartPage, Panel, page_html
 
-html = '<div style="display:flex;padding:24px;background:#10151d;color:#e6edf3;font-family:MiSans">早柚股票</div>'
-png = await render_html(html, width=600, scale=1.5, label="示例")
+page = ChartPage(
+    title="示例个股", eyebrow="行情", subtitle="暂无有效分时数据",
+    panels=[Panel(label="分时", height=260, axis=[], empty="行情暂缺")],
+    footer="离线示例",
+)
+png = await render_html(page_html(page), width=1240, scale=1.5, label="个股")
 ```
 
 `width` 是 CSS 像素，`scale` 是输出倍率，内容决定高度。Jinja 开启自动转义和
