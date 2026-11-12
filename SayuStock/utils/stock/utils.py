@@ -6,8 +6,6 @@ from pathlib import Path
 from datetime import date, datetime, timedelta
 
 import aiofiles
-from PIL import Image
-from plotly.graph_objects import Figure
 
 from gsuid_core.logger import logger
 
@@ -86,9 +84,6 @@ def async_file_cache(
                     if datetime.now() - file_mod_time < timedelta(minutes=cache_minutes):
                         logger.info(f"[SayuStock] 缓存文件在{cache_minutes}分钟内，直接返回文件数据。")
 
-                        if file_path.suffix in {".html", ".png", ".jpg", ".jpeg", ".webp"}:
-                            return cast(_R, file_path)
-
                         async with aiofiles.open(file_path, mode="r", encoding="utf-8") as f:
                             logger.success(f"✅ [SayuStock] 缓存命中！正在从 {file_path} 读取...")
                             content = await f.read()
@@ -102,23 +97,6 @@ def async_file_cache(
             result = await func(*args, **kwargs)
             if isinstance(result, (int, str)):
                 return result
-
-            if isinstance(result, Figure):
-                result.write_html(str(file_path))
-                return cast(_R, file_path)
-
-            if isinstance(result, Image.Image):
-                result.save(file_path)
-                return cast(_R, file_path)
-
-            if isinstance(result, (bytes, bytearray)) and file_path.suffix.lower() in {
-                ".png",
-                ".jpg",
-                ".jpeg",
-                ".webp",
-            }:
-                file_path.write_bytes(bytes(result))
-                return cast(_R, file_path)
 
             if isinstance(result, dict):
                 result["file_name"] = file_path.name
