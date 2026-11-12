@@ -92,7 +92,7 @@ def _patch(
         return None
 
     monkeypatch.setattr(draw_future, "get_market", lambda: market)
-    monkeypatch.setattr(draw_future, "render_html_to_bytes", render)
+    monkeypatch.setattr(draw_future, "render_html", render)
     monkeypatch.setattr(draw_future, "ai_return", ai)
     monkeypatch.setattr(draw_future.asyncio, "sleep", _sleep)
 

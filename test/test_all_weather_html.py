@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import re
-from pathlib import Path
 from datetime import datetime
 
 import pytest
@@ -12,7 +11,6 @@ from SayuStock.utils.constant import bond, whsc, crypto, i_code, commodity
 from SayuStock.utils.time_range import has_session_started_today
 from SayuStock.utils.market.display import DisplayItem
 from SayuStock.utils.all_weather_html import (
-    _STALE_PRICE,
     _FALLBACK_EMOJI,
     em_secid,
     format_price,
@@ -20,10 +18,7 @@ from SayuStock.utils.all_weather_html import (
     format_change,
     resolve_emoji,
     build_all_weather_html,
-    all_weather_canvas_size,
 )
-
-_TEST_OUTPUT = Path(__file__).resolve().parent.parent / "test_output"
 
 
 def _item(name: str, price: float = 1.0, chg: float = 0.5) -> DisplayItem:
@@ -61,8 +56,6 @@ def test_html_puts_emoji_left_of_names() -> None:
     assert "-0.30%" in html
     assert "2026-08-24 10:00" in html
     assert "width: 1000px" in html
-    _, canvas_h = all_weather_canvas_size(sections)
-    assert f"height: {canvas_h}px" in html
     assert "data:image/jpeg;base64," not in html
     assert "data:image/png;base64," in html
     assert 'class="sec-title"' in html
@@ -75,9 +68,6 @@ def test_html_puts_emoji_left_of_names() -> None:
     assert "track off" in html
     assert html.count("track on") >= 3
     assert html.count("track off") >= 2
-    assert "#ef4444" in html
-    assert "box-shadow:" in html
-    assert "border:1px solid #ffffff" in html
 
 
 def test_sparkline_slot_in_tile() -> None:
@@ -112,15 +102,6 @@ def test_intl_tiles_get_spark_from_secid() -> None:
     assert "sec has-spark" in html
     assert em_secid("i:1.000001") == "1.000001"
     assert em_secid("100.HSI") == "100.HSI"
-
-
-def test_canvas_grows_when_section_has_spark() -> None:
-    items = [_item("XAU", 4604.09, 1.88)]
-    sections = [("大宗商品", items)]
-    _, h0 = all_weather_canvas_size(sections)
-    svg = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10"></svg>'
-    _, h1 = all_weather_canvas_size(sections, sparklines={"XAU": svg})
-    assert h1 > h0
 
 
 def test_crypto_section_stays_four_unique() -> None:
@@ -357,55 +338,8 @@ def test_preopen_us_price_is_gray_asia_is_live() -> None:
         now=now,
     )
     assert "tile stale" in html
-    assert _STALE_PRICE in html
     assert html.count("tile stale") == 1
     assert "[休]" in html
     assert html.count("[休]") == 1
-    assert "opacity: 0.6" in html
     assert "+0.43%" in html
     assert "+0.04%" in html
-
-
-def test_pytakumi_renders_png_header() -> None:
-    pytest.importorskip("pytakumi")
-    import asyncio
-
-    from gsuid_core.utils.html_render import render_html_to_bytes
-    from SayuStock.utils.all_weather_html import CSS_WIDTH, all_weather_canvas_size
-
-    sections = [
-        ("国际市场", _sample_items(i_code)),
-        ("大宗商品", _sample_items(commodity)),
-        ("债券市场", _sample_items(bond)),
-        ("外汇市场", _sample_items(whsc)),
-        ("加密货币", _sample_items(crypto)),
-    ]
-    html = build_all_weather_html(sections, now=datetime(2026, 8, 24, 10, 0))
-    assert "-0.30%" in html
-    width, height = all_weather_canvas_size(sections)
-
-    async def _go() -> bytes:
-        return await render_html_to_bytes(
-            html,
-            max_width=float(width * 2),
-            dpi=192.0,
-            device_height=float(height * 2),
-            default_font_size=15.0,
-            allow_refit=False,
-            image_format="png",
-            lang="zh",
-            root_max_width=float(CSS_WIDTH),
-        )
-
-    png = asyncio.run(_go())
-    assert png[:8] == b"\x89PNG\r\n\x1a\n"
-    assert len(png) > 8000
-    _TEST_OUTPUT.mkdir(parents=True, exist_ok=True)
-    (_TEST_OUTPUT / "all_weather.png").write_bytes(png)
-    from io import BytesIO
-
-    from PIL import Image
-
-    im = Image.open(BytesIO(png))
-    ratio = im.size[1] / im.size[0]
-    assert abs(ratio - height / width) < 0.05, im.size

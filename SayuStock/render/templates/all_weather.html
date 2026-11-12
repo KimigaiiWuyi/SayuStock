@@ -1,0 +1,83 @@
+{% from "cards.html" import footer %}
+<!doctype html>
+<html><head><meta charset="utf-8"><style>
+{% include "theme.css" %}
+{% include "cards.css" %}
+.page { width: {{ width }}px; font-family: "MiSans", "Twemoji", sans-serif; }
+.weather-clock { font-size: 18px; color: {{ TEXT_SOFT }}; }
+.timeline { margin-top: 15px; padding: 13px 18px 18px; }
+.timeline-heading { margin-bottom: 10px; }
+.timeline-note { color: {{ TEXT_SOFT }}; font-size: 13px; }
+.gantt { display: flex; flex-direction: row; align-items: stretch; }
+.tcol { flex: none; width: 64px; padding-top: 25px; }
+.tname { height: 31px; line-height: 31px; color: {{ TEXT_SOFT }}; font-size: 15px; }
+.tname.on { font-weight: 700; }
+.tplot { flex: 1; margin: 0 20px; position: relative; padding-top: 25px; padding-bottom: 25px; }
+.vline { position: absolute; top: 25px; height: 217px; width: 1px; background: {{ GRID }}; }
+.track { height: 31px; position: relative; border-top: 1px solid {{ GRID_SOFT }}; }
+.tbar { position: absolute; top: 9px; height: 12px; border-radius: 4px; opacity: 0.38; }
+.track.on .tbar { opacity: 0.95; top: 7px; height: 16px; }
+.now-line { position: absolute; top: 24px; height: 218px; width: 2px; background: {{ AMBER }}; }
+.now-cap { position: absolute; top: 0; color: {{ YELLOW }}; font-size: 13px; transform: translateX(-50%); white-space: nowrap; }
+.tick { position: absolute; top: 248px; transform: translateX(-50%); font-size: 12px; color: {{ TEXT_SOFT }}; white-space: nowrap; }
+.tick.t-close-cn { transform: translateX(-70%); }
+.tick.t-close-hk { transform: translateX(-30%); }
+.sec { margin-top: 16px; }
+.sec-title { display: flex; flex-direction: row; align-items: center; gap: 8px; margin-bottom: 8px; }
+.sec-title span { color: {{ TEXT }}; font-size: 20px; font-weight: 720; }
+.sec-bar { display: block; width: 4px; height: 18px; border-radius: 2px; }
+.grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 9px; }
+.tile { display: flex; flex-direction: column; padding: 9px 11px; min-height: 93px; min-width: 0; gap: 5px;
+  border: 1px solid {{ BORDER }}; border-radius: 8px; background: {{ SURFACE }}; }
+.tile.up { background: linear-gradient(125deg, {{ UP_CARD }}, {{ UP_CARD_END }}); }
+.tile.down { background: linear-gradient(125deg, {{ DOWN_CARD }}, {{ DOWN_CARD_END }}); }
+.tile.stale { background: {{ SURFACE }}; }
+.tile .name { display: flex; align-items: baseline; gap: 5px; color: {{ TEXT_SOFT }}; }
+.tile .emo, .tile .rest { flex-shrink: 0; }
+.tile .emo { font-family: "Twemoji", "MiSans", sans-serif; }
+.tile .nm { font-size: 14px; font-weight: 650; }
+.tile .rest { color: {{ MUTED }}; font-size: 11px; }
+.tile .chg { font-size: 14px; font-weight: 650; }
+.tile .price { font-size: 20px; font-weight: 720; color: {{ TEXT }}; }
+.tile.stale .price { color: {{ MUTED }}; }
+.tile .spark, .tile .spark-gap { height: 32px; }
+</style></head><body><main class="page">
+  <header class="row between header">
+    <div class="column"><span class="eyebrow">全球市场</span><b class="page-title">全天候</b></div>
+    <span class="weather-clock number">{{ stamp }} 北京时间</span>
+  </header>
+  <div class="timeline panel">
+    <div class="row between timeline-heading"><b class="section-title">交易时段</b><span class="timeline-note">高亮为正在交易</span></div>
+    <div class="gantt">
+      <div class="tcol">
+        {% for track in tracks %}<div class="tname {{ 'on' if track.active else 'off' }}"{% if track.active %} style="color:{{ track.color }}"{% endif %}>{{ track.name }}</div>{% endfor %}
+      </div>
+      <div class="tplot">
+        {% for label, left in ticks %}<i class="vline" style="left:{{ left }}%"></i>{% endfor %}
+        {% for track in tracks %}
+        <div class="track {{ 'on' if track.active else 'off' }}">
+          {% for bar in track.bars %}<i class="tbar" style="left:{{ bar.left }}%;width:{{ bar.width }}%;background:{{ track.color }}"></i>{% endfor %}
+        </div>
+        {% endfor %}
+        <i class="now-line" style="left:{{ now_left }}%"></i><span class="now-cap number" style="left:{{ now_left }}%">{{ clock }}</span>
+        {% for label, left in ticks %}<span class="tick number{% if label == '15:00' %} t-close-cn{% elif label == '16:00' %} t-close-hk{% endif %}" style="left:{{ left }}%">{{ label }}</span>{% endfor %}
+      </div>
+    </div>
+  </div>
+  {% for block in sections %}
+  <section class="sec{% if block.has_spark %} has-spark{% endif %}">
+    <div class="sec-title"><i class="sec-bar" style="background:{{ block.accent }}"></i><span>{{ block.title }}</span></div>
+    <div class="grid">
+      {% for tile in block.tiles %}
+      <div class="tile{% if tile.stale %} stale{% endif %} {{ tile.tone }}">
+        <div class="name"><span class="emo">{{ tile.emoji }}</span><span class="nm">{{ tile.label }}</span>{% if tile.stale %}<span class="rest">[休]</span>{% endif %}</div>
+        <b class="chg number {{ tile.tone }}">{{ tile.change }}</b>
+        {% if tile.spark %}<div class="spark">{{ tile.spark | safe }}</div>{% elif block.has_spark %}<div class="spark-gap"></div>{% endif %}
+        <b class="price number">{{ tile.price }}</b>
+      </div>
+      {% endfor %}
+    </div>
+  </section>
+  {% endfor %}
+  {{ footer(source, brand) }}
+</main></body></html>

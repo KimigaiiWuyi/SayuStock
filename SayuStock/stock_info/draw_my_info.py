@@ -1,219 +1,112 @@
 import asyncio
-from typing import Optional
-from pathlib import Path
 from dataclasses import replace
-
-from PIL import Image, ImageDraw
 
 from gsuid_core.logger import logger
 from gsuid_core.models import Event
-from gsuid_core.utils.fonts.fonts import core_font as ss_font
-from gsuid_core.utils.html_render import render_html_to_bytes
 from gsuid_core.ai_core.trigger_bridge import ai_return
 
-from .draw_info import DIFF_MAP
+from ..render import RenderError, render_html
 from ..utils.utils import convert_list, number_to_chinese
-from ..utils.market import Quote, get_market, is_market_error
+from ..utils.market import Quote, MarketDataPort, get_market, is_market_error
 from ..utils.warn_box import Failure
-from ..utils.sparkline import sparkline_from_series
-from ..utils.index_quotes import quote_index_items
-from ..utils.my_stock_html import SPARK_H, SPARK_W, build_my_stock_html, my_stock_canvas_size
+from ..render.card_widgets import watch_sparkline
+from ..utils.my_stock_html import (
+    SPARK_H,
+    SPARK_W,
+    WATCH_INDEXES,
+    watchlist_width,
+    watchlist_average,
+    build_my_stock_html,
+)
 from ..utils.market.display import market_error_text
 from ..utils.database.models import SsBind
 
-TEXT_PATH = Path(__file__).parent / "texture2d"
 
-
-def bar_labels_from_quote(q: Quote, fallback_code: str = "") -> tuple[str, str]:
-    """列表条主标题 / 小字代码。
-
-    名称走 ``SymbolRef.display_name``（带 沪深A / 港股 等后缀）；
-    代码必须用该票自己的 ``symbol.code``，不能沿用调用方误传的基金代码。
-    """
-    name = q.symbol.display_name or (q.symbol.name or "").strip()
-    code = (q.symbol.code or "").strip() or fallback_code
-    return name, code
-
-
-def draw_bar_from_quote(
-    q: Quote,
-    u: str,
-    percent: Optional[str] = None,
-) -> Image.Image:
-    e_money = number_to_chinese(q.amount) if q.amount is not None else "-"
-    hs = q.turnover_rate if q.turnover_rate is not None else 0
-    p = float(q.change_pct) if q.change_pct is not None else 0.0
-    now_price = q.price
-    b_title, code = bar_labels_from_quote(q, u)
-    s_title = f"({code}) 换: {hs}% 额: {e_money} 价: {now_price}"
-    if p > 0:
-        bar = Image.open(TEXT_PATH / "myup.png")
-        p_color = (213, 102, 102)
-    elif p == 0:
-        bar = Image.open(TEXT_PATH / "myeq.png")
-        p_color = (240, 240, 240)
-    else:
-        bar = Image.open(TEXT_PATH / "mydown.png")
-        p_color = (175, 231, 170)
-    bar_draw = ImageDraw.Draw(bar)
-    bar_draw.text((82, 40), b_title, (255, 255, 255), ss_font(32), "lm")
-    bar_draw.text((82, 75), s_title, p_color, ss_font(20), "lm")
-    bar_draw.text((758, 55), f"+{p}%" if p >= 0 else f"{p}%", (255, 255, 255), ss_font(28), "mm")
-    if percent is not None:
-        bar_draw.text((613, 55), percent, (240, 240, 240), ss_font(28), "mm")
-    return bar
+async def _watch_index_quotes(market: MarketDataPort) -> list[Quote | None]:
+    results = await market.quotes([code for _, code in WATCH_INDEXES])
+    return [None if is_market_error(result) else result for result in results]
 
 
 async def draw_my_stock_img(ev: Event) -> str | bytes:
     user_id = ev.at if ev.at else ev.user_id
-    uid = await SsBind.get_uid_list_by_game(user_id, ev.bot_id)
-
-    if not uid:
+    saved = await SsBind.get_uid_list_by_game(user_id, ev.bot_id)
+    if not saved:
         return "您还未添加自选呢~请输入 添加自选 查看帮助!"
 
-    uid = convert_list(uid)
+    uid = convert_list(saved)
     market = get_market()
+    index_quotes = await _watch_index_quotes(market)
 
-    two_col = len(uid) >= 18
-    zyzs = (
-        ["上证指数", "深证成指", "中证A500", "中证2000"]
-        if not two_col
-        else ["上证指数", "深证成指", "创业板指", "上证50", "沪深300", "中证A500", "中证2000", "国债指数"]
-    )
-    # 涨跌幅前 100 里没有上证。按代码报价，缺的卡片跳过。
-    index_items = await quote_index_items(zyzs)
-
-    all_p = 0.0
-    stock_details: list[dict[str, object]] = []
-    quotes: list[tuple[Quote, str] | None] = [None] * len(uid)
-    sparks: dict[str, str] = {}
-    series_sources: list[str | None] = []
-    # index → 失败原因。取不到的一律记下来，画黄色警告框，不许静默丢卡。
-    failed: dict[int, str] = {}
-
-    async def sg(index: int, u: str) -> None:
-        nonlocal all_p
-        query = u[4:] if u.startswith("VIX.") else u
+    async def load(code: str) -> tuple[Quote, str, str | None] | Failure:
+        query = code[4:] if code.startswith("VIX.") else code
         series = await market.intraday(query)
-        q: Quote | None = None
-        if not is_market_error(series):
-            series_sources.append(series.provider)
-            q = series.quote
-
-        # 若分时未带盘口（例如分时仅有点列），或分时完全失败，向行情链请求 quote 兜底
+        q = None if is_market_error(series) else series.quote
         if q is None:
-            q_res = await market.quote(query)
-            if not is_market_error(q_res):
-                q = q_res
-                if not is_market_error(series):
-                    series = replace(series, quote=q)
+            result = await market.quote(query)
+            if is_market_error(result):
+                reason = market_error_text(series) if is_market_error(series) else market_error_text(result)
+                return Failure(label=code, reason=reason)
+            q = result
+        if is_market_error(series):
+            return q, "", None
+        spark = watch_sparkline(replace(series, quote=q), q, width=SPARK_W, height=SPARK_H)
+        return q, spark, series.provider if spark else None
 
-        if q is None:
-            failed[index] = market_error_text(series) if is_market_error(series) else "数据源未返回行情"
-            return
+    quotes: list[tuple[Quote, str]] = []
+    failures: list[Failure] = []
+    sparks: dict[str, str] = {}
+    sources: list[str | None] = []
+    for code, result in zip(uid, await asyncio.gather(*(load(code) for code in uid)), strict=True):
+        if isinstance(result, Failure):
+            failures.append(result)
+            continue
+        quote, spark, provider = result
+        quotes.append((quote, code))
+        if spark:
+            sparks[code] = spark
+            sources.append(provider)
 
-        all_p += float(q.change_pct) if q.change_pct is not None else 0.0
-        stock_details.append(
-            {
-                "code": u,
-                "name": q.symbol.name,
-                "price": q.price,
-                "change": q.change_pct if q.change_pct is not None else 0,
-                "turnover": q.turnover_rate,
-                "amount": q.amount,
-            }
-        )
-        quotes[index] = (q, u)
-        if not is_market_error(series):
-            svg = sparkline_from_series(series, width=SPARK_W, height=SPARK_H)
-            if svg:
-                sparks[u] = svg
-                sparks[q.symbol.code] = svg
-
-    await asyncio.gather(*[sg(index, u) for index, u in enumerate(uid)])
-    filled = [row for row in quotes if row is not None]
-    failures = [Failure(label=uid[i], reason=failed[i]) for i in sorted(failed)]
     if failures:
-        logger.warning(f"[SayuStock] 我的自选 {len(failures)}/{len(uid)} 只行情获取失败: {failed}")
-
-    # 平均涨跌只算拿到数据的那些：失败的不当 0 稀释均值（失败另有警告框说明）。
-    ok_n = len(filled)
-    avg_p = all_p / ok_n if ok_n else 0.0
-    title_num = "11"
-    for i in DIFF_MAP:
-        if avg_p >= i:
-            title_num = DIFF_MAP[i]
-            break
-
+        logger.warning(f"[SayuStock] 我的自选 {len(failures)}/{len(uid)} 只行情获取失败")
+    saved_count = len(uid)
+    _ai_return_my_stock(saved_count, quotes, failures)
     html = build_my_stock_html(
-        quotes=filled,
-        index_items=index_items,
-        title_num=title_num,
+        quotes=quotes,
+        index_quotes=index_quotes,
+        saved_count=saved_count,
         sparklines=sparks,
-        sources=tuple(series_sources),
+        sources=sources,
         failures=failures,
-        warn_title=f"⚠ {len(failures)}/{len(uid)} 只自选股行情获取失败",
     )
-    width, height, _ = my_stock_canvas_size(len(filled), failures)
-    _ai_return_my_stock(uid, all_p, stock_details, failures, ok_n)
     try:
-        return await render_html_to_bytes(
-            html,
-            max_width=float(width * 2),
-            dpi=192.0,
-            device_height=float(height * 2),
-            default_font_size=15.0,
-            allow_refit=False,
-            image_format="png",
-            lang="zh",
-            root_max_width=float(width),
-        )
-    except (RuntimeError, OSError, ValueError) as e:
-        logger.exception(f"[SayuStock] 我的自选 HTML 出图失败: {e}")
+        return await render_html(html, width=watchlist_width(saved_count), label="我的自选")
+    except RenderError as error:
+        logger.warning(f"[SayuStock] 我的自选出图失败: {error}")
         return "自选出图失败"
 
 
-def _ai_return_my_stock(
-    uid_list: list[str],
-    all_p: float,
-    stock_details: list[dict[str, object]] | None = None,
-    failures: list[Failure] | None = None,
-    ok_n: int = 0,
-) -> None:
-    """从自选股语义数据提取文本，经 ai_return 给 AI。"""
+def _ai_return_my_stock(total: int, quotes: list[tuple[Quote, str]], failures: list[Failure]) -> None:
     try:
-        total = len(uid_list)
-        ok = ok_n if ok_n else total
-        avg_p = all_p / ok if ok else 0
-        result = f"【我的自选】共 {total} 只，平均涨跌幅: {avg_p:+.2f}%\n"
-
+        average = watchlist_average(quotes)
+        average_text = f"{average:+.2f}%" if average is not None else "暂无数据"
+        lines = [f"【我的自选】共 {total} 只，平均涨跌幅: {average_text}"]
         if failures:
-            detail = "、".join(f.label for f in failures)
-            result += f"⚠ {len(failures)} 只行情获取失败（未计入平均值）：{detail}\n"
-
-        if stock_details:
-            sorted_details = sorted(
-                stock_details,
-                key=lambda x: float(x["change"]) if "change" in x and isinstance(x["change"], (int, float)) else 0.0,
+            lines.append(f"⚠ {len(failures)} 只行情获取失败（未计入平均值）")
+            lines.extend(f"  {failure.label}：{failure.reason}" for failure in failures)
+        if quotes:
+            lines.append("个股行情:")
+            ranked = sorted(
+                quotes,
+                key=lambda pair: pair[0].change_pct if pair[0].change_pct is not None else float("-inf"),
                 reverse=True,
             )
-            result += "\n个股行情:\n"
-            for s in sorted_details:
-                change = s["change"] if "change" in s else 0
-                sign = "+" if isinstance(change, (int, float)) and change >= 0 else ""
-                amount = s["amount"] if "amount" in s else "N/A"
-                if isinstance(amount, (int, float)):
-                    from ..utils.utils import number_to_chinese as _n2c
-
-                    amount = _n2c(amount)
-                result += (
-                    f"  {s['name']}({s['code']}): "
-                    f"最新价 {s['price']}  {sign}{change}%  "
-                    f"换手率 {s['turnover']}%  成交额 {amount}\n"
+            for quote, code in ranked:
+                change = f"{quote.change_pct:+.2f}%" if quote.change_pct is not None else "暂无数据"
+                amount = number_to_chinese(quote.amount) if quote.amount is not None else "暂无数据"
+                turnover = f"{quote.turnover_rate:.2f}%" if quote.turnover_rate is not None else "暂无数据"
+                lines.append(
+                    f"  {quote.symbol.name}({code}): 最新价 {quote.price} {change} 换手率 {turnover} 成交额 {amount}"
                 )
-        else:
-            result += f"自选代码: {', '.join(uid_list[:10])}"
-
-        ai_return(result)
-    except Exception as e:
-        logger.warning(f"[SayuStock] ai_return 自选股数据提取失败: {e}")
+        ai_return("\n".join(lines))
+    except Exception as error:
+        logger.warning(f"[SayuStock] ai_return 自选股数据提取失败: {error}")

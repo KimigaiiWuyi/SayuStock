@@ -1,0 +1,35 @@
+{% from "cards.html" import quote_cards, quote_row, section, footer %}
+<!doctype html>
+<html><head><meta charset="utf-8"><style>
+{% include "theme.css" %}
+{% include "cards.css" %}
+.page { width: {{ width }}px; padding: 24px; }
+.mood { margin: 12px 0 10px; display: block; }
+.list-grid { display: flex; flex-direction: row; gap: 12px; align-items: flex-start; }
+.list-column { flex: 1; min-width: 0; gap: 7px; }
+.empty-state { padding: 12px 14px; font-size: 15px; color: {{ TEXT_SOFT }}; }
+</style></head><body>
+<main class="page">
+  <header class="row between header">
+    <div class="column">
+      <span class="eyebrow">{{ eyebrow }}</span>
+      <b class="page-title">{{ title }}</b>
+      <span class="page-subtitle">{{ subtitle }}</span>
+    </div>
+    {% if summary %}<div class="column summary"><span>平均涨跌</span><b class="number {{ summary_tone }}">{{ summary }}</b></div>{% endif %}
+  </header>
+  <img class="mood" src="{{ mood }}" width="{{ mood_width }}" height="{{ mood_height }}" alt="行情表情包">
+  {% if cards %}{{ quote_cards(cards, 4) }}{% endif %}
+  {% if warning_lines %}
+  <div class="column warn"><b>{{ warning_title }}</b>{% for line in warning_lines %}<span>{{ line }}</span>{% endfor %}</div>
+  {% endif %}
+  {{ section(section_title, section_note) }}
+  <div class="list-grid" data-columns="{{ columns | length }}">
+    {% for rows in columns %}
+    <div class="column list-column">{% for row in rows %}{{ quote_row(row) }}{% endfor %}</div>
+    {% endfor %}
+  </div>
+  {% if empty %}<span class="empty-state">暂无可展示的行情</span>{% endif %}
+  {{ footer(source, brand) }}
+</main>
+</body></html>
