@@ -156,7 +156,7 @@ async def get_mtdata(
         if is_market_error(snap):
             return snap.message
         return snap
-    snap = await port.board(market, limit=pz, sort_asc=po == 1)
+    snap = await port.board(market, limit=pz, sort_asc=po == 0)
     if is_market_error(snap):
         return snap.message
     return snap

@@ -315,7 +315,8 @@ class EastMoneyMarketData:
         sort_asc: bool = False,
     ) -> BoardSnapshot | MarketError:
         market = _market_key(kind, sector)
-        po = 1 if sort_asc else 0
+        # 东财 clist po: 1=降序(高值在前/涨幅榜), 0=升序(低值在前/跌幅榜)
+        po = 0 if sort_asc else 1
         pz = limit if limit is not None else 100
         # BK 不在 market_dict；limit=None 必须翻页，否则一级行业会被截成 100 只
         is_loop = limit is None and (market in market_dict or _is_bk_market(market))
@@ -345,7 +346,7 @@ class EastMoneyMarketData:
         # 单页上限与 clist pz 一致（最多 100）；质量池 QUALITY_RANK_LIMIT=80 依赖此上限
         lim = max(1, min(int(limit), 100))
         use_high_first = spec.default_high_first if high_first is None else bool(high_first)
-        po = 0 if use_high_first else 1
+        po = 1 if use_high_first else 0
         fs = market_dict["沪深A"] if "沪深A" in market_dict else "m:0 t:6,m:0 t:80,m:1 t:2,m:1 t:23"
         url = "https://push2.eastmoney.com/api/qt/clist/get"
         params = [

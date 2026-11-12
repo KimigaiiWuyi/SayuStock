@@ -277,10 +277,10 @@ async def draw_info_img(is_save: bool = False) -> str | bytes:
     intraday_tasks = [market.intraday(secid) for secid in index_queries]
     intraday_coro = asyncio.gather(*intraday_tasks, return_exceptions=True)
     boards_coro = asyncio.gather(
-        market.board("行业板块", limit=20, sort_asc=False),
         market.board("行业板块", limit=20, sort_asc=True),
-        market.board("概念板块", limit=20, sort_asc=False),
+        market.board("行业板块", limit=20, sort_asc=False),
         market.board("概念板块", limit=20, sort_asc=True),
+        market.board("概念板块", limit=20, sort_asc=False),
         market.breadth(),
         market.market_turnover(),
     )
@@ -291,21 +291,21 @@ async def draw_info_img(is_save: bool = False) -> str | bytes:
         boards_coro,
         img_coro,
     )
-    board_hy_1, board_hy_2, board_gn_1, board_gn_2, bar_r, turnover = boards_results
+    board_hy_fall, board_hy_rise, board_gn_fall, board_gn_rise, bar_r, turnover = boards_results
 
     # 1. 检验板块结果
-    for result in (board_hy_1, board_hy_2, board_gn_1, board_gn_2):
+    for result in (board_hy_fall, board_hy_rise, board_gn_fall, board_gn_rise):
         if is_market_error(result):
             return result.message
-    if not isinstance(board_hy_1, BoardSnapshot) or not isinstance(board_hy_2, BoardSnapshot):
+    if not isinstance(board_hy_fall, BoardSnapshot) or not isinstance(board_hy_rise, BoardSnapshot):
         return "行业板块数据异常"
-    if not isinstance(board_gn_1, BoardSnapshot) or not isinstance(board_gn_2, BoardSnapshot):
+    if not isinstance(board_gn_fall, BoardSnapshot) or not isinstance(board_gn_rise, BoardSnapshot):
         return "概念板块数据异常"
 
-    data_hy_fall = board_rows_to_items(board_hy_1.rows)
-    data_hy_rise = board_rows_to_items(board_hy_2.rows)
-    data_gn_fall = board_rows_to_items(board_gn_1.rows)
-    data_gn_rise = board_rows_to_items(board_gn_2.rows)
+    data_hy_fall = board_rows_to_items(board_hy_fall.rows)
+    data_hy_rise = board_rows_to_items(board_hy_rise.rows)
+    data_gn_fall = board_rows_to_items(board_gn_fall.rows)
+    data_gn_rise = board_rows_to_items(board_gn_rise.rows)
 
     # 2. 处理主要指数与分时折线图
     data_zs_items: list[DisplayItem] = []
@@ -418,7 +418,7 @@ async def draw_info_img(is_save: bool = False) -> str | bytes:
 
     # 9. 数据来源信息
     source_bits = [f"指数{source_label(*index_providers)}"]
-    source_bits.append(f"板块{source_label(board_hy_1.provider, board_gn_1.provider)}")
+    source_bits.append(f"板块{source_label(board_hy_fall.provider, board_gn_fall.provider)}")
     if breadth_provider:
         source_bits.append(f"涨跌{source_label(breadth_provider)}")
     if turnover_provider:
