@@ -83,6 +83,13 @@ jobs:
       - name: Run tests
         working-directory: gsuid_core/gsuid_core/plugins/SayuStock
         run: pytest test/ -q -p no:cacheprovider
+      - name: Upload rendered examples
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: takumi-render-evidence
+          path: render-evidence/
+          if-no-files-found: error
 
   typecheck:
     name: Typecheck (pyright)

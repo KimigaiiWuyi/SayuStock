@@ -16,21 +16,13 @@ from SayuStock.utils.market.models import (
     breadth_counts,
     breadth_up_down,
 )
-from SayuStock.stock_info.draw_info import (
-    _BREADTH_BAR_RIGHT,
-    _BREADTH_BAR_WIDTH,
-    _BREADTH_BAR_COLORS,
-    breadth_bar_left,
-)
-
-# texture2d/div.png 实测尺寸（概览图把分布柱贴在这块 850×500 贴图上）
-DIV_WIDTH = 850
+from SayuStock.utils.market_overview_html import breadth_columns
 
 
 def test_every_band_has_direction_and_color() -> None:
     """分档表一增删，方向/配色必须同步补齐，不能漏档或错色。"""
     assert set(BREADTH_BANDS) == set(BREADTH_DIRECTION)
-    assert set(BREADTH_BANDS) == set(_BREADTH_BAR_COLORS)
+    assert [column.name for column in breadth_columns(dict.fromkeys(BREADTH_BANDS, 0))] == list(reversed(BREADTH_BANDS))
 
 
 def test_flat_band_is_neither_up_nor_down() -> None:
@@ -57,21 +49,10 @@ def test_counts_are_total_and_ordered() -> None:
     assert counts["跌停"] == 0
 
 
-def test_last_bar_stays_inside_canvas_for_any_band_count() -> None:
-    for total in range(2, len(BREADTH_BANDS) + 3):
-        last = breadth_bar_left(total - 1, total)
-        assert last + _BREADTH_BAR_WIDTH == _BREADTH_BAR_RIGHT
-        assert last + _BREADTH_BAR_WIDTH <= DIV_WIDTH
-        assert breadth_bar_left(0, total) >= 0
-
-
-def test_twelve_band_layout_keeps_legacy_spacing() -> None:
-    """12 档（加「平」之前的档数）间距仍是 66px：老图视觉不回归。"""
-    assert [breadth_bar_left(i, 12) for i in range(12)] == [45 + 66 * i for i in range(12)]
-
-
-def test_thirteen_band_layout_fits() -> None:
-    """13 档（当前口径）末柱右缘 807，家数标签也在画布内。"""
-    last = breadth_bar_left(len(BREADTH_BANDS) - 1, len(BREADTH_BANDS))
-    assert last + _BREADTH_BAR_WIDTH == 807
-    assert last + _BREADTH_BAR_WIDTH / 2 <= DIV_WIDTH
+def test_flat_band_has_neutral_tone_and_positive_counts_have_height() -> None:
+    counts = dict.fromkeys(BREADTH_BANDS, 0)
+    counts["涨停"], counts["平"], counts["跌停"] = 50, 100, 20
+    bars = {column.name: column for column in breadth_columns(counts)}
+    assert bars["平"].tone == "flat" and bars["平"].height == 100
+    assert bars["涨停"].tone == "up" and bars["涨停"].height == 50
+    assert bars["跌停"].tone == "down" and bars["跌停"].height == 20

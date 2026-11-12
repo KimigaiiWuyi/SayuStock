@@ -1,273 +1,66 @@
-"""我的自选 HTML（pytakumi / render_html_to_bytes），像素对齐原 PIL。"""
+"""Presentation adapter for 我的自选."""
 
 from __future__ import annotations
 
-import html as html_lib
-from base64 import b64encode
-from pathlib import Path
-from functools import lru_cache
 from collections.abc import Sequence
 
-from .utils import number_to_chinese
-from .market import Quote, DisplayItem
-from .warn_box import WARN_CSS, Failure, failure_lines, warn_box_html, warn_box_height
-from .bottom_chrome import FOOTER_H, FOOTER_W, footer_top, source_top, footer_left, chrome_height, source_band_h
+from .market import Quote
+from .warn_box import Failure
 from .market.display import source_footer
+from ..render.holdings import DOUBLE_WIDTH, SINGLE_WIDTH, holdings_html
+from ..render.card_widgets import row_spark, mood_number, quote_cards, watch_quote_row
 
-TEXT_PATH = Path(__file__).resolve().parent.parent / "stock_info" / "texture2d"
-_FOOTER_PATH = Path(__file__).resolve().parent / "texture2d" / "footer.png"
-
-BAR_H = 110
-HEAD_H = 541
-_SRC_FONT = 15
-FOOT_PAD = chrome_height(font_size=_SRC_FONT)
-TITLE_X_SINGLE = 25
-TITLE_X_DOUBLE = 475
-TITLE_Y = -31
-IDX_Y = 308
-BAR5_Y = 443
-BARS_Y = 541
-IDX_X0_SINGLE = 50
-IDX_X0_DOUBLE = 100
-# 分时小图：原 210×66 左起 430；缩到 0.65 宽并右对齐，避免压住名称/副标题
-SPARK_W = 210.0 * 0.65
-SPARK_H = 66.0
-SPARK_LEFT = 430.0 + 210.0 - SPARK_W
-SPARK_TOP = 22.0
-# 警告框按行卡片的可见区对齐（素材自带 30px 透明边），别跟卡片错开一条边
-WARN_LEFT = 30
-WARN_RIGHT_PAD = 31
+WATCH_INDEXES = (
+    ("上证指数", "1.000001"),
+    ("深证成指", "0.399001"),
+    ("中证A500", "1.000510"),
+    ("中证2000", "2.932000"),
+)
+SPARK_W = 130.0
+SPARK_H = 40.0
+TWO_COLUMNS_FROM = 18
 
 
-def my_stock_canvas_size(n: int, failures: Sequence[Failure] = ()) -> tuple[int, int, bool]:
-    """画布尺寸。``failures`` 非空时预留警告框高度（不静默失败）。"""
-    two_col = n >= 18
-    warn_h = warn_box_height(len(failure_lines(failures)))
-    if two_col:
-        rows = ((n - 1) // 2) + 1
-        return 1800, HEAD_H + warn_h + rows * BAR_H + FOOT_PAD, True
-    return 900, HEAD_H + warn_h + n * BAR_H + FOOT_PAD, False
+def watchlist_width(saved_count: int) -> int:
+    return DOUBLE_WIDTH if saved_count >= TWO_COLUMNS_FROM else SINGLE_WIDTH
 
 
-def _e(value: object) -> str:
-    return html_lib.escape(str(value), quote=True)
-
-
-@lru_cache(maxsize=16)
-def _data_uri(path: str) -> str:
-    file = Path(path)
-    raw = file.read_bytes()
-    suffix = file.suffix.lower()
-    if suffix in {".jpg", ".jpeg"}:
-        mime = "image/jpeg"
-    else:
-        mime = "image/png"
-    return f"data:{mime};base64,{b64encode(raw).decode('ascii')}"
-
-
-def _bar_labels(q: Quote, fallback_code: str) -> tuple[str, str]:
-    name = q.symbol.display_name or (q.symbol.name or "").strip()
-    code = (q.symbol.code or "").strip() or fallback_code
-    return name, code
-
-
-def _bar_asset(change_pct: float) -> str:
-    if change_pct > 0:
-        return "myup.png"
-    if change_pct == 0:
-        return "myeq.png"
-    return "mydown.png"
-
-
-def _sub_color(change_pct: float) -> str:
-    if change_pct > 0:
-        return "rgb(213,102,102)"
-    if change_pct == 0:
-        return "rgb(240,240,240)"
-    return "rgb(175,231,170)"
-
-
-def _idx_colors(change_pct: float) -> tuple[str, str]:
-    if change_pct >= 0:
-        return "rgba(140,18,22,0.216)", "rgb(206,34,30)"
-    return "rgba(59,140,18,0.216)", "rgb(36,206,30)"
-
-
-def _bar_html(q: Quote, uid: str, y: int, x: int, spark_svg: str) -> str:
-    p = float(q.change_pct) if q.change_pct is not None else 0.0
-    e_money = number_to_chinese(q.amount) if q.amount is not None else "-"
-    hs = q.turnover_rate if q.turnover_rate is not None else 0
-    b_title, code = _bar_labels(q, uid)
-    s_title = f"({code}) 换: {hs}% 额: {e_money} 价: {q.price}"
-    pct = f"+{p}%" if p >= 0 else f"{p}%"
-    uri = _data_uri(str(TEXT_PATH / _bar_asset(p)))
-    spark = f'<div class="spark">{spark_svg}</div>' if spark_svg else ""
-    return (
-        f'<div class="bar" style="left:{x}px;top:{y}px;background-image:url({uri})">'
-        f'<div class="bt">{_e(b_title)}</div>'
-        f'<div class="st" style="color:{_sub_color(p)}">{_e(s_title)}</div>'
-        f"{spark}"
-        f'<div class="pct">{_e(pct)}</div>'
-        f"</div>"
-    )
-
-
-def _idx_html(item: DisplayItem, n: int, two_col: bool) -> str:
-    x0 = IDX_X0_DOUBLE if two_col else IDX_X0_SINGLE
-    left = x0 + 200 * n
-    bg, fg = _idx_colors(item.change_pct)
-    diff = item.change_pct
-    chg = f"{'+' if diff >= 0 else ''}{diff}%"
-    name = item.name.split("(")[0].strip()
-    return (
-        f'<div class="idx" style="left:{left}px;top:{IDX_Y}px">'
-        f'<div class="ibox" style="background:{bg}"></div>'
-        f'<div class="ipx" style="color:{fg}">{_e(item.price)}</div>'
-        f'<div class="ichg" style="color:{fg}">{_e(chg)}</div>'
-        f'<div class="inm">{_e(name)}</div>'
-        f"</div>"
-    )
+def watchlist_average(quotes: Sequence[tuple[Quote, str]]) -> float | None:
+    changes = [q.change_pct for q, _ in quotes if q.change_pct is not None]
+    return sum(changes) / len(changes) if changes else None
 
 
 def build_my_stock_html(
     *,
     quotes: list[tuple[Quote, str]],
-    index_items: list[DisplayItem],
-    title_num: str,
+    index_quotes: Sequence[Quote | None],
+    saved_count: int,
     sparklines: dict[str, str] | None = None,
-    sources: tuple[str | None, ...] = (),
+    sources: Sequence[str | None] = (),
     failures: Sequence[Failure] = (),
-    warn_title: str = "",
 ) -> str:
-    """quotes: (Quote, 原始自选字符串)。index_items 已按展示顺序排好。
-
-    ``failures`` 是没拿到行情的条目：画成黄色警告框，不许静默丢卡。
-    """
-    n = len(quotes)
-    width, height, two_col = my_stock_canvas_size(n, failures)
-    title_x = TITLE_X_DOUBLE if two_col else TITLE_X_SINGLE
-    title_uri = _data_uri(str(TEXT_PATH / f"title{title_num}.png"))
-    bar5_uri = _data_uri(str(TEXT_PATH / "bar5.png"))
-    footer_uri = _data_uri(str(_FOOTER_PATH))
-    idx_html = "".join(_idx_html(item, i, two_col) for i, item in enumerate(index_items))
-    fail_lines = failure_lines(failures)
-    warn_h = warn_box_height(len(fail_lines))
-    bars_top = BARS_Y + warn_h
-    warn_html = warn_box_html(
-        title=warn_title or f"⚠ 行情获取失败（{len(failures)} 条）",
-        lines=fail_lines,
-        top=BARS_Y,
-        left=WARN_LEFT,
-        width=width - WARN_LEFT - WARN_RIGHT_PAD,
-        height=warn_h,
+    indexes = [(name, q) for (name, _), q in zip(WATCH_INDEXES, index_quotes, strict=True)]
+    changes = [q.change_pct for q, _ in quotes if q.change_pct is not None]
+    rise = sum(change > 0 for change in changes)
+    fall = sum(change < 0 for change in changes)
+    average = watchlist_average(quotes)
+    subtitle = f"共 {saved_count} 只 · 上涨 {rise} / 平 {len(changes) - rise - fall} / 下跌 {fall}"
+    if not changes:
+        subtitle = f"共 {saved_count} 只 · 涨跌幅暂无数据"
+    used = [*sources, *(q.provider for _, q in indexes if q is not None), *(q.provider for q, _ in quotes)]
+    return holdings_html(
+        eyebrow="自选行情",
+        title="我的自选",
+        subtitle=subtitle,
+        average=average,
+        title_num=mood_number(average),
+        cards=quote_cards(indexes),
+        rows=[watch_quote_row(q, code, row_spark(sparklines, code, q.symbol.code)) for q, code in quotes],
+        section_title="自选股",
+        section_note="按自选顺序排列",
+        source=source_footer(*used) if any(used) else "数据来源：未标注 | SayuStock",
+        width=watchlist_width(saved_count),
+        two_columns=saved_count >= TWO_COLUMNS_FROM,
+        failures=failures,
+        warning_title=f"⚠ {len(failures)}/{saved_count} 只自选股行情获取失败",
     )
-    bars: list[str] = []
-    split = ((n - 1) // 2) + 1
-    for index, (q, uid) in enumerate(quotes):
-        if two_col and index >= split:
-            x = 900
-            y = bars_top + (index - split) * BAR_H
-        else:
-            x = 0
-            y = bars_top + index * BAR_H
-        spark = ""
-        if sparklines:
-            if uid in sparklines:
-                spark = sparklines[uid]
-            elif q.symbol.code in sparklines:
-                spark = sparklines[q.symbol.code]
-        bars.append(_bar_html(q, uid, y, x, spark))
-    inner_bars = "".join(bars)
-    used: list[str | None] = list(sources)
-    used.extend(item.provider for item in index_items)
-    used.extend(q.provider for q, _ in quotes)
-    source_text = _e(source_footer(*used))
-    src_top = source_top(height, font_size=_SRC_FONT)
-    src_h = source_band_h(_SRC_FONT)
-    foot_top = footer_top(height)
-    foot_left = footer_left(width)
-    return f"""<!DOCTYPE html>
-<html>
-<head>
-<meta charset="utf-8">
-<style>
-* {{ box-sizing: border-box; margin: 0; padding: 0; }}
-body {{
-  width: {width}px; height: {height}px; background: #07091b;
-  font-family: "MiSans", "Twemoji Mozilla", "PingFang SC", "Microsoft YaHei", sans-serif;
-}}
-.page {{
-  width: {width}px; height: {height}px; position: relative; overflow: hidden;
-  background: #07091b;
-}}
-.title {{
-  position: absolute; left: {title_x}px; top: {TITLE_Y}px;
-  width: 850px; height: 400px;
-}}
-.bar5 {{
-  position: absolute; left: {title_x}px; top: {BAR5_Y}px;
-  width: 850px; height: 90px;
-}}
-.idx {{ position: absolute; width: 200px; height: 140px; }}
-.ibox {{
-  position: absolute; left: 15px; top: 13px; width: 170px; height: 114px;
-}}
-.ipx {{
-  position: absolute; left: 100px; top: 38px; transform: translate(-50%, -50%);
-  font-size: 28px; font-weight: 700; white-space: nowrap;
-}}
-.ichg {{
-  position: absolute; left: 100px; top: 70px; transform: translate(-50%, -50%);
-  font-size: 28px; font-weight: 700; white-space: nowrap;
-}}
-.inm {{
-  position: absolute; left: 100px; top: 99px; transform: translate(-50%, -50%);
-  font-size: 22px; font-weight: 630; color: #ffffff; white-space: nowrap;
-}}
-.bar {{
-  position: absolute; width: 900px; height: 110px;
-  background-repeat: no-repeat; background-size: 900px 110px;
-}}
-.bt {{
-  position: absolute; left: 82px; top: 40px; transform: translateY(-50%);
-  font-size: 30px; font-weight: 700; color: #ffffff; white-space: nowrap;
-}}
-.st {{
-  position: absolute; left: 82px; top: 75px; transform: translateY(-50%);
-  font-size: 18px; font-weight: 400; white-space: nowrap;
-}}
-.spark {{
-  position: absolute; left: {SPARK_LEFT:.1f}px; top: {SPARK_TOP:.0f}px;
-  width: {SPARK_W:.1f}px; height: {SPARK_H:.0f}px;
-}}
-.spark svg {{ display: block; width: 100%; height: 100%; }}
-.pct {{
-  position: absolute; left: 758px; top: 55px; transform: translate(-50%, -50%);
-  font-size: 26px; font-weight: 700; color: #ffffff; white-space: nowrap;
-}}
-.footer {{
-  position: absolute; left: {foot_left}px; top: {foot_top}px;
-  width: {FOOTER_W}px; height: {FOOTER_H}px;
-}}
-.src {{
-  position: absolute; left: 24px; top: {src_top}px;
-  width: {width - 48}px; height: {src_h}px; line-height: {src_h}px;
-  font-size: {_SRC_FONT}px; color: rgba(210, 210, 210, 0.9);
-  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-}}
-{WARN_CSS}
-</style>
-</head>
-<body>
-<div class="page">
-  <img class="title" src="{title_uri}" width="850" height="400" />
-  {idx_html}
-  <img class="bar5" src="{bar5_uri}" width="850" height="90" />
-  {warn_html}
-  {inner_bars}
-  <div class="src">{source_text}</div>
-  <img class="footer" src="{footer_uri}" width="850" height="40" />
-</div>
-</body>
-</html>
-"""

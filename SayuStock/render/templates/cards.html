@@ -1,0 +1,41 @@
+{% macro quote_cards(cards, columns, sparklines=false) %}
+<div class="card-grid" style="grid-template-columns: repeat({{ columns }}, minmax(0, 1fr));">
+  {% for card in cards %}
+  <div class="card {{ card.tone }}">
+    <i class="card-accent"></i>
+    <span class="card-name">{{ card.name }}</span>
+    {% if sparklines %}<div class="card-spark">{{ card.spark | safe }}</div>{% endif %}
+    <b class="card-price number">{{ card.price }}</b>
+    {% if card.change %}<span class="card-change number">{{ card.change }}</span>{% endif %}
+  </div>
+  {% endfor %}
+</div>
+{% endmacro %}
+
+{% macro section(title, note='') %}
+<div class="row between section"><b>{{ title }}</b>{% if note %}<span>{{ note }}</span>{% endif %}</div>
+{% endmacro %}
+
+{% macro quote_row(row) %}
+<div class="row bar {{ row.tone }}">
+  <div class="column q-identity">
+    <div class="row"><b class="q-name">{{ row.name }}</b>{% if row.market %}<span class="q-market">{{ row.market }}</span>{% endif %}</div>
+    <span class="q-detail number">{{ row.details }}</span>
+  </div>
+  {% if row.reason %}
+  <span class="warn-inline">⚠ {{ row.reason }}</span>
+  {% elif row.spark %}
+  <div class="spark">{{ row.spark | safe }}</div>
+  {% endif %}
+  {% if row.weight %}<b class="q-weight number">{{ row.weight }}</b>{% endif %}
+  {% if row.price %}
+  <div class="column q-price number"><b>{{ row.price }}</b>{% if row.move %}<span class="q-move">{{ row.move }}</span>{% endif %}</div>
+  {% endif %}
+  <b class="pill number">{{ row.change }}</b>
+</div>
+{% endmacro %}
+
+{% macro footer(source, image) %}
+<div class="foot">{{ source }}</div>
+<img class="footer-brand" src="{{ image }}" width="425" height="20" alt="SayuStock">
+{% endmacro %}
