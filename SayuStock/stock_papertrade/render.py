@@ -1,247 +1,235 @@
-"""模拟盘渲染：账户视图 / 排行走 PIL；持仓简图走 HTML。"""
+"""模拟盘账户、持仓简图和收益排行的 Takumi 出图入口。"""
 
 from __future__ import annotations
 
 import asyncio
-import datetime as _dt
-
-from PIL import Image, ImageDraw, ImageFont
+from math import isfinite
+from datetime import datetime
+from dataclasses import dataclass
+from collections.abc import Mapping, Sequence
 
 from gsuid_core.logger import logger
-from gsuid_core.utils.fonts.fonts import core_font as ss_font
-from gsuid_core.utils.html_render import render_html_to_bytes
-from gsuid_core.utils.image.convert import convert_img
 from gsuid_core.ai_core.trigger_bridge import ai_return
 
 from . import db
-from ..utils.image import get_footer
+from ..render import RenderError, render_html
 from ..utils.market import DisplayItem, get_market, is_market_error
 from ..utils.warn_box import Failure
 from ..utils.sparkline import sparkline_from_series
+from ..render.extras_ui import Tone, Metric, direction
+from ..render.templates import render_template
 from ..utils.index_quotes import quote_index_items
 from ..utils.market.display import market_error_text
 from ..utils.paper_holdings_html import (
     SPARK_H,
     SPARK_W,
+    PAPER_HOLDINGS_WIDTH,
+    PriceBasis,
     HoldingBarRow,
+    format_holding_price,
     build_paper_holdings_html,
-    paper_holdings_canvas_size,
 )
-from ..utils.database.papertrade_models import SayuPaperPosition
+from ..utils.database.papertrade_models import (
+    SayuPaperTrade,
+    SayuPaperAccount,
+    SayuPaperPosition,
+    SayuPaperSnapshot,
+)
 
-_DIFF_MAP: dict[float, str] = {
-    3.3: "1",
-    2.7: "2",
-    2: "3",
-    1: "4",
-    0: "5",
-    -0.5: "6",
-    -1.3: "7",
-    -2.1: "8",
-    -3.1: "9",
-    -4: "10",
-}
+PAPER_WIDTH = 900
 
 
-# ============================================================
-# 工具
-# ============================================================
-def _font(size: int = 22) -> ImageFont.FreeTypeFont:
-    return ss_font(size)
+@dataclass(frozen=True, slots=True)
+class _AccountPosition:
+    name: str
+    code: str
+    quantity: str
+    price: str
+    value: str
 
 
-def _new_canvas(w: int, h: int) -> Image.Image:
-    img = Image.new("RGB", (w, h), (24, 24, 30))
-    return img
+@dataclass(frozen=True, slots=True)
+class _AccountTrade:
+    name: str
+    side: str
+    tone: Tone
+    quantity: str
+    price: str
+    fee: str
 
 
-def _draw_text(
-    img: Image.Image,
-    xy: tuple,
-    text: str,
-    color: str | tuple[int, ...] = (240, 240, 240),
-    size: int = 22,
-    anchor: str = "lt",
-) -> None:
-    draw = ImageDraw.Draw(img)
-    draw.text(xy, text, fill=color, font=_font(size), anchor=anchor)
+@dataclass(frozen=True, slots=True)
+class _AccountView:
+    name: str
+    subtitle: str
+    enabled: bool
+    equity: str
+    pnl: str
+    pnl_pct: str
+    pnl_tone: Tone
+    metrics: tuple[Metric, ...]
+    positions: tuple[_AccountPosition, ...]
+    trades: tuple[_AccountTrade, ...]
 
 
-def _paste_footer(img: Image.Image) -> Image.Image:
-    """把底部 footer 贴到 img 底部。返回新图。"""
+@dataclass(frozen=True, slots=True)
+class _RankRow:
+    name: str
+    trade_date: str
+    equity: str
+    pnl: str
+    pnl_tone: Tone
+    return_pct: str
+    return_tone: Tone
+
+
+def _account_trade(trade: SayuPaperTrade) -> _AccountTrade:
+    buy = trade.side == "buy"
+    return _AccountTrade(
+        name=trade.stock_name or trade.stock_code,
+        side="买入" if buy else "卖出",
+        tone="up" if buy else "down",
+        quantity=f"{trade.qty:,}",
+        price=f"{trade.price:.2f}",
+        fee=f"{trade.fee:.2f}",
+    )
+
+
+def _account_view(
+    account: SayuPaperAccount, positions: Sequence[SayuPaperPosition], recent_trades: Sequence[SayuPaperTrade]
+) -> _AccountView:
+    value = sum(position.qty * position.avg_cost for position in positions)
+    equity = account.cash + value
+    pnl = equity - account.initial_cash
+    pnl_pct = pnl / account.initial_cash if account.initial_cash else 0.0
+    share = value / equity if equity else 0.0
+    return _AccountView(
+        name=account.name,
+        subtitle=f"策略 {account.strategy_id} · 风控 {account.mode} · 心跳每 {account.frequency_minutes} 分钟",
+        enabled=bool(account.enabled),
+        equity=f"{equity:,.0f}",
+        pnl=f"{pnl:+,.0f}",
+        pnl_pct=f"{pnl_pct:+.2%}",
+        pnl_tone=direction(pnl),
+        metrics=(
+            Metric("期初资金", f"{account.initial_cash:,.0f}"),
+            Metric("当前现金", f"{account.cash:,.0f}"),
+            Metric("持仓成本", f"{value:,.0f}", note=f"仓位 {share:.1%}"),
+        ),
+        positions=tuple(
+            _AccountPosition(
+                position.stock_name or position.stock_code,
+                position.stock_code,
+                f"{position.qty:,}",
+                f"{position.avg_cost:.2f}",
+                f"{position.qty * position.avg_cost:,.0f}",
+            )
+            for position in positions
+        ),
+        trades=tuple(_account_trade(trade) for trade in recent_trades[:5]),
+    )
+
+
+def _account_html(view: _AccountView) -> str:
+    return render_template(
+        "paper_account.html",
+        width=PAPER_WIDTH,
+        account_name=view.name,
+        subtitle=view.subtitle,
+        enabled=view.enabled,
+        equity=view.equity,
+        pnl=view.pnl,
+        pnl_pct=view.pnl_pct,
+        pnl_tone=view.pnl_tone,
+        metrics_values=view.metrics,
+        positions=view.positions,
+        trades=view.trades,
+        footer="SayuStock · 模拟盘账户账本",
+    )
+
+
+def _ai_return_page(text: str, label: str) -> None:
     try:
-        footer = get_footer()
-    except Exception:
-        return img
-    if img.mode != "RGBA":
-        img = img.convert("RGBA")
-    if footer.mode != "RGBA":
-        footer = footer.convert("RGBA")
-    new_h = img.size[1] + footer.size[1]
-    new_img = Image.new("RGBA", (img.size[0], new_h), (24, 24, 30, 255))
-    new_img.paste(img, (0, 0))
-    new_img.paste(footer, (0, img.size[1]), footer)
-    return new_img
+        ai_return(text)
+    except (TypeError, ValueError) as error:
+        logger.warning(f"[SayuStock][{label}] ai_return 失败: {error}")
 
 
-# ============================================================
-# 1) 账户视图
-# ============================================================
-async def draw_account_view(account_id: int) -> bytes:
+def _ai_return_account(view: _AccountView) -> None:
+    lines = [
+        f"【模拟盘账户】{view.name} · {'运行中' if view.enabled else '已停用'}",
+        view.subtitle,
+        f"总资产 {view.equity}（持仓按成本计） 累计盈亏 {view.pnl}（{view.pnl_pct}）",
+        " · ".join(f"{item.label} {item.value} {item.note}".strip() for item in view.metrics),
+        f"当前持仓 {len(view.positions)} 只",
+    ]
+    lines.extend(
+        f"{row.name}({row.code}) {row.quantity}股 均价 {row.price} 持仓成本 {row.value}" for row in view.positions
+    )
+    lines.append(f"最近交易 {len(view.trades)} 笔")
+    lines.extend(f"{row.side} {row.name} {row.quantity}股 @ {row.price} 费 {row.fee}" for row in view.trades)
+    _ai_return_page("\n".join(lines), "模拟盘查看")
+
+
+async def _render_page(html: str, *, width: int, label: str) -> bytes | str:
+    try:
+        return await render_html(html, width=width, label=label)
+    except RenderError as error:
+        logger.exception(f"[SayuStock][{label}] 出图失败: {error}")
+        return f"{label}出图失败"
+
+
+async def draw_account_view(account_id: int) -> bytes | str:
     acc = await db.PaperAccountRepo.get_by_id(account_id)
+    if not acc:
+        return "❌ 该模拟盘不存在，发送「模拟盘列表」查看现有的盘"
     positions = await db.PaperPositionRepo.list_by_account(account_id)
     recent_trades = await db.PaperTradeRepo.list_by_account(account_id, limit=5)
-
-    W, H = 900, 1200
-    img = _new_canvas(W, H)
-
-    # 标题
-    _draw_text(img, (40, 30), "【早柚 模拟盘 · 账户视图】", color=(255, 200, 100), size=30)
-    if not acc:
-        _draw_text(img, (40, 140), "❌ 该模拟盘不存在，发送「模拟盘列表」查看现有的盘", color=(255, 100, 100), size=22)
-        return await convert_img(img)
-    _draw_text(
-        img,
-        (40, 80),
-        f"{acc.name}  ·  策略 {acc.strategy_id}",
-        color=(180, 180, 180),
-        size=18,
-    )
-
-    y = 130
-    # 账户信息
-    _draw_text(img, (40, y), "═══ 账户信息 ═══", color=(100, 200, 255), size=22)
-    y += 40
-    info_lines = [
-        f"初始资金: {acc.initial_cash:,.0f}",
-        f"当前现金: {acc.cash:,.0f}",
-        f"风控模式: {acc.mode}",
-        f"心跳频率: {acc.frequency_minutes} 分钟",
-        f"状态: {'🟢 开启' if acc.enabled else '🔴 关闭'}",
-    ]
-    for line in info_lines:
-        _draw_text(img, (60, y), line, color=(220, 220, 220), size=20)
-        y += 30
-    y += 20
-
-    # 持仓
-    position_value = 0.0
-    _draw_text(img, (40, y), "═══ 当前持仓 ═══", color=(100, 200, 255), size=22)
-    y += 40
-    if not positions:
-        _draw_text(img, (60, y), "（暂无持仓）", color=(150, 150, 150), size=20)
-        y += 30
-    else:
-        for p in positions:
-            value = p.qty * p.avg_cost
-            position_value += value
-            _draw_text(
-                img,
-                (60, y),
-                f"{p.stock_name or p.stock_code} ({p.stock_code})  "
-                f"×{p.qty}股  均价 {p.avg_cost:.2f}  市值 {value:,.0f}",
-                color=(200, 220, 255),
-                size=20,
-            )
-            y += 30
-    y += 20
-
-    # 总资产
-    total_equity = acc.cash + position_value
-    total_pnl = total_equity - acc.initial_cash
-    total_pnl_pct = total_pnl / acc.initial_cash * 100 if acc.initial_cash else 0
-    pnl_color = (100, 255, 120) if total_pnl >= 0 else (255, 120, 120)
-    _draw_text(
-        img,
-        (40, y),
-        f"总资产: {total_equity:,.0f}  (现金 {acc.cash:,.0f} + 持仓 {position_value:,.0f})",
-        color=(255, 220, 100),
-        size=24,
-    )
-    y += 40
-    _draw_text(
-        img,
-        (40, y),
-        f"累计盈亏: {total_pnl:+,.0f}  ({total_pnl_pct:+.2f}%)",
-        color=pnl_color,
-        size=26,
-    )
-    y += 50
-
-    # 最近交易
-    _draw_text(img, (40, y), "═══ 最近 5 笔交易 ═══", color=(100, 200, 255), size=22)
-    y += 40
-    if not recent_trades:
-        _draw_text(img, (60, y), "（暂无交易）", color=(150, 150, 150), size=20)
-        y += 30
-    else:
-        for t in recent_trades:
-            side_color = (255, 120, 120) if t.side == "buy" else (100, 255, 120)
-            side_label = "买入" if t.side == "buy" else "卖出"
-            _draw_text(
-                img,
-                (60, y),
-                f"{side_label} {t.stock_name or t.stock_code}  {t.qty}股 @ {t.price:.2f}  费 {t.fee:.2f}",
-                color=side_color,
-                size=18,
-            )
-            y += 26
-
-    img = _paste_footer(img)
-    return await convert_img(img)
-
-
-# ============================================================
-# 1b) 持仓简图（HTML，对齐「我的自选」+ 仓位摘要 / 图例 / 分时）
-# ============================================================
-def _title_num_for_avg(avg_p: float) -> str:
-    for thr, num in _DIFF_MAP.items():
-        if avg_p >= thr:
-            return num
-    return "11"
+    view = _account_view(acc, positions, recent_trades)
+    _ai_return_account(view)
+    return await _render_page(_account_html(view), width=PAPER_WIDTH, label="模拟盘账户视图")
 
 
 async def _load_index_items() -> list[DisplayItem]:
     return await quote_index_items(["上证指数", "深证成指", "中证A500", "中证2000"])
 
 
-def _fallback_price(position: SayuPaperPosition) -> float:
+def _fallback_price(position: SayuPaperPosition) -> tuple[float, PriceBasis]:
     if position.last_quote_price is not None:
-        return float(position.last_quote_price)
-    return float(position.avg_cost or 0.0)
+        return float(position.last_quote_price), "上次报价"
+    return float(position.avg_cost or 0.0), "成本估值"
 
 
 async def _fetch_holding_row(position: SayuPaperPosition) -> tuple[HoldingBarRow, str, float | None]:
-    price = _fallback_price(position)
+    price, price_basis = _fallback_price(position)
     day_chg: float | None = None
     spark = ""
     live: float | None = None
     source_id: str | None = None
+    spark_provider: str | None = None
     quote_error = ""
     query = position.secid or position.stock_code
     if query:
         series = await get_market().intraday(query)
         if not is_market_error(series):
-            source_id = series.provider
             quote = series.quote
             if quote is not None:
-                if quote.provider:
-                    source_id = source_id or quote.provider
-                if quote.price > 0:
+                if isfinite(quote.price) and quote.price > 0:
                     price = float(quote.price)
                     live = price
-                if quote.change_pct is not None:
+                    price_basis = "最新行情"
+                if quote.change_pct is not None and isfinite(quote.change_pct):
                     day_chg = float(quote.change_pct)
-            svg = sparkline_from_series(series, width=SPARK_W, height=SPARK_H)
-            if svg:
-                spark = svg
+                if live is not None or day_chg is not None:
+                    source_id = quote.provider or series.provider
+            spark = sparkline_from_series(series, width=SPARK_W, height=SPARK_H)
+            if spark:
+                spark_provider = series.provider
         else:
-            # 取不到就是取不到：记下原因，图上写出来，不许用一个破折号糊弄
             quote_error = market_error_text(series)
-    elif position.stock_code:
+    else:
         quote_error = "持仓缺少行情代码"
     if day_chg is None and not quote_error:
-        # 分时拿到了但没给今日涨跌幅：也算没取到，页面上要写明
         quote_error = "数据源未返回今日涨跌幅"
     cost = float(position.avg_cost or 0.0)
     qty = int(position.qty)
@@ -260,6 +248,8 @@ async def _fetch_holding_row(position: SayuPaperPosition) -> tuple[HoldingBarRow
         market_value=round(mv, 2),
         provider=source_id,
         quote_error=quote_error,
+        price_basis=price_basis,
+        spark_provider=spark_provider,
     )
     return row, spark, live
 
@@ -270,36 +260,30 @@ def _ai_return_holdings(
     initial_cash: float,
     holdings: list[HoldingBarRow],
 ) -> None:
-    """有图必有文字：持仓语义先于出图交给 AI。"""
-    try:
-        pos_value = sum(h.market_value for h in holdings)
-        equity = cash + pos_value
-        unreal = sum(h.unrealized_pnl for h in holdings)
-        unreal_pct = (unreal / pos_value * 100.0) if pos_value else 0.0
-        pnl = equity - initial_cash
-        pnl_pct = (pnl / initial_cash * 100.0) if initial_cash else 0.0
-        lines = [
-            f"【模拟盘自选】{account_name} 总资产 {equity:,.0f} 现金 {cash:,.0f} 持仓 {len(holdings)} 只",
-            f"浮盈 {unreal:+.0f}({unreal_pct:+.2f}%) 累计 {pnl:+.0f}({pnl_pct:+.2f}%)",
-        ]
-        ranked = sorted(holdings, key=lambda h: h.unrealized_pnl_pct, reverse=True)
-        for row in ranked:
-            day = "未获取" if row.day_change_pct is None else f"{row.day_change_pct:+.2f}%"
-            lines.append(
-                f"  {row.name}({row.code}) {row.qty}股 成本 {row.avg_cost:.2f} "
-                f"现价 {row.current_price:.2f} 今{day} 持{row.unrealized_pnl_pct:+.2f}%"
-            )
-        ai_return("\n".join(lines))
-    except (TypeError, ValueError) as e:
-        logger.warning(f"[SayuStock] ai_return 模拟盘自选失败: {e}")
+    pos_value = sum(h.market_value for h in holdings)
+    equity = cash + pos_value
+    unreal = sum(h.unrealized_pnl for h in holdings)
+    unreal_pct = (unreal / pos_value * 100.0) if pos_value else 0.0
+    pnl = equity - initial_cash
+    pnl_pct = (pnl / initial_cash * 100.0) if initial_cash else 0.0
+    lines = [
+        f"【模拟盘自选】{account_name} 总资产 {equity:,.0f} 现金 {cash:,.0f} 持仓 {len(holdings)} 只",
+        f"浮盈 {unreal:+.0f}({unreal_pct:+.2f}%) 累计 {pnl:+.0f}({pnl_pct:+.2f}%)",
+    ]
+    ranked = sorted(holdings, key=lambda h: h.unrealized_pnl_pct, reverse=True)
+    for row in ranked:
+        day = "未获取" if row.day_change_pct is None else f"{row.day_change_pct:+.2f}%"
+        reason = f"（{row.quote_error}）" if row.quote_error else ""
+        lines.append(
+            f"  {row.name}({row.code}) {row.qty}股 成本 {format_holding_price(row.avg_cost)} "
+            f"{row.price_basis} {format_holding_price(row.current_price)} "
+            f"今{day}{reason} 持{row.unrealized_pnl_pct:+.2f}%"
+        )
+    _ai_return_page("\n".join(lines), "模拟盘自选")
 
 
 async def build_holdings_snapshot_image(account_id: int) -> bytes | str:
-    """按账户拉持仓 + 分时，渲染「模拟盘自选」HTML 简图。
-
-    Returns:
-        图片 bytes；盘不存在等业务错误返回 str。
-    """
+    """按账户拉持仓 + 分时，返回图片 bytes 或业务错误文案。"""
     acc = await db.PaperAccountRepo.get_by_id(account_id)
     if not acc:
         from . import account_scope as _scope
@@ -316,9 +300,9 @@ async def build_holdings_snapshot_image(account_id: int) -> bytes | str:
     index_items, fetched = await asyncio.gather(_load_index_items(), _all_rows())
     rows: list[HoldingBarRow] = []
     sparks: dict[str, str] = {}
-    writes: list[dict] = []
-    now = _dt.datetime.now()
-    for position, (row, spark, live) in zip(positions, fetched):
+    writes: list[dict[str, str | float | datetime]] = []
+    now = datetime.now()
+    for position, (row, spark, live) in zip(positions, fetched, strict=True):
         rows.append(row)
         if spark:
             sparks[row.code] = spark
@@ -329,11 +313,9 @@ async def build_holdings_snapshot_image(account_id: int) -> bytes | str:
     if writes:
         try:
             await db.PaperPositionRepo.bulk_set_quote(writes, account_id)
-        except (OSError, RuntimeError, ValueError) as e:
-            logger.debug(f"[SayuStock][PaperTrade] 持仓报价回写跳过: {e}")
+        except (OSError, RuntimeError, ValueError) as error:
+            logger.debug(f"[SayuStock][PaperTrade] 持仓报价回写跳过: {error}")
 
-    day_vals = [h.day_change_pct for h in rows if h.day_change_pct is not None]
-    avg_day = sum(day_vals) / len(day_vals) if day_vals else 0.0
     failures = [Failure(label=f"{h.name}({h.code})", reason=h.quote_error) for h in rows if h.quote_error]
     _ai_return_holdings(acc.name, float(acc.cash), float(acc.initial_cash), rows)
     html = build_paper_holdings_html(
@@ -344,72 +326,38 @@ async def build_holdings_snapshot_image(account_id: int) -> bytes | str:
         initial_cash=float(acc.initial_cash),
         holdings=rows,
         index_items=index_items,
-        title_num=_title_num_for_avg(avg_day),
         sparklines=sparks,
         failures=failures,
-        warn_title=f"⚠ {len(failures)}/{len(rows)} 只持仓今日行情获取失败",
+        warn_title=f"{len(failures)}/{len(rows)} 只持仓今日行情获取失败",
     )
-    width, height = paper_holdings_canvas_size(len(rows), failures)
-    try:
-        return await render_html_to_bytes(
-            html,
-            max_width=float(width * 2),
-            dpi=192.0,
-            device_height=float(height * 2),
-            default_font_size=15.0,
-            allow_refit=False,
-            image_format="png",
-            lang="zh",
-            root_max_width=float(width),
+    return await _render_page(html, width=PAPER_HOLDINGS_WIDTH, label="模拟盘自选")
+
+
+def _rank_rows(snapshots: Sequence[SayuPaperSnapshot], accounts: Mapping[int, str]) -> tuple[_RankRow, ...]:
+    return tuple(
+        _RankRow(
+            name=accounts[snap.account_id] if snap.account_id in accounts else f"#{snap.account_id}",
+            trade_date=snap.trade_date.isoformat(),
+            equity=f"{snap.total_equity:,.0f}",
+            pnl=f"{snap.total_pnl:+,.0f}",
+            pnl_tone=direction(snap.total_pnl),
+            return_pct=f"{snap.total_pnl_pct:+.2f}%",
+            return_tone=direction(snap.total_pnl_pct),
         )
-    except (RuntimeError, OSError, ValueError) as e:
-        logger.exception(f"[SayuStock] 模拟盘自选 HTML 出图失败: {e}")
-        return "模拟盘自选出图失败"
+        for snap in snapshots[:20]
+    )
 
 
-# ============================================================
-# 2) 排行
-# ============================================================
-async def draw_leaderboard() -> bytes:
+async def draw_leaderboard() -> bytes | str:
     snaps = await db.PaperSnapshotRepo.list_latest_all_accounts(limit=20)
-    # 快照里只有 account_id，盘名要另查；一次拉全表比逐行查库省往返
-    accounts = {a.id: a for a in await db.PaperAccountRepo.list_all()}
-
-    W, H = 900, 100 + 60 * (len(snaps) + 1)
-    img = _new_canvas(W, H)
-
-    _draw_text(img, (40, 30), "【早柚 模拟盘 · 各盘收益排行 TOP 20】", color=(255, 200, 100), size=28)
-    y = 90
-
-    if not snaps:
-        _draw_text(img, (60, y), "（暂无排行数据）", color=(150, 150, 150), size=20)
-        img = _paste_footer(img)
-        return await convert_img(img)
-
-    # 表头
-    _draw_text(img, (40, y), "排名", color=(180, 180, 180), size=18)
-    _draw_text(img, (100, y), "盘名", color=(180, 180, 180), size=18)
-    _draw_text(img, (250, y), "总资产", color=(180, 180, 180), size=18)
-    _draw_text(img, (400, y), "累计盈亏", color=(180, 180, 180), size=18)
-    _draw_text(img, (600, y), "收益率", color=(180, 180, 180), size=18)
-    y += 35
-
-    for i, s in enumerate(snaps, 1):
-        pnl_color = (100, 255, 120) if s.total_pnl >= 0 else (255, 120, 120)
-        _draw_text(img, (40, y), f"#{i}", color=(220, 220, 220), size=20)
-        acc_row = accounts.get(s.account_id)
-        label = acc_row.name if acc_row is not None else f"#{s.account_id}"
-        _draw_text(img, (100, y), label[:30], color=(220, 220, 220), size=20)
-        _draw_text(img, (250, y), f"{s.total_equity:,.0f}", color=(220, 220, 220), size=20)
-        _draw_text(img, (400, y), f"{s.total_pnl:+,.0f}", color=pnl_color, size=20)
-        _draw_text(
-            img,
-            (600, y),
-            f"{s.total_pnl_pct:+.2f}%",
-            color=pnl_color,
-            size=22,
-        )
-        y += 32
-
-    img = _paste_footer(img)
-    return await convert_img(img)
+    accounts = {account.id: account.name for account in await db.PaperAccountRepo.list_all() if account.id is not None}
+    rows = _rank_rows(snaps, accounts)
+    lines = [
+        f"{i}. {row.name}（{row.trade_date}） 总资产 {row.equity} 累计盈亏 {row.pnl} 收益率 {row.return_pct}"
+        for i, row in enumerate(rows, 1)
+    ]
+    _ai_return_page("\n".join(["【模拟盘收益排行 TOP 20】", *(lines or ["暂无排行数据"])]), "模拟盘排行")
+    html = render_template(
+        "paper_leaderboard.html", width=PAPER_WIDTH, rows=rows, footer="SayuStock · 模拟盘每日净值快照"
+    )
+    return await _render_page(html, width=PAPER_WIDTH, label="模拟盘排行")

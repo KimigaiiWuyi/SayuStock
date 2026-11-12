@@ -1,22 +1,18 @@
-"""分析命令编排：拉数 → 报告 → 出图。
-
-出图结果统一为 ``BotSendContent``（``str | bytes``），与 ``Bot.send`` 入参对齐；
-内部 PIL ``Image`` 仅在 render 层出现，编排层负责 ``convert_img``。
-"""
+"""分析命令编排：拉数 → 报告文字 → 出图，出图失败时直接返回报告。"""
 
 from __future__ import annotations
 
 from gsuid_core.logger import logger
-from gsuid_core.utils.image.convert import convert_img
+from gsuid_core.ai_core.trigger_bridge import ai_return
 
-from .card import build_trade_card
+from .card import TradeCardData, build_trade_card
 from .render import (
     render_card_image,
     render_screener_image,
     render_portfolio_image,
     render_technical_image,
 )
-from .screener import run_screener
+from .screener import ScreenerResult, run_screener
 from .portfolio import analyze_portfolio
 from .technical import (
     report_to_text,
@@ -25,8 +21,9 @@ from .technical import (
 )
 from ..utils.utils import convert_list
 from ..utils.market import KlinePeriod, get_market, kline_to_df, is_market_error
-from ..stock_stockinfo.chart_base import BotSendContent
+from ..render.extras_ui import fmt_number
 
+BotSendContent = str | bytes
 _RENDER_ERRORS = (OSError, RuntimeError, ValueError, TypeError, MemoryError)
 
 
@@ -35,6 +32,13 @@ def _period_to_enum(code: str) -> KlinePeriod:
         return KlinePeriod(code)
     except ValueError:
         return KlinePeriod.D1
+
+
+def _ai_return_report(text: str) -> None:
+    try:
+        ai_return(text)
+    except (TypeError, ValueError) as error:
+        logger.warning(f"[stock_analysis] ai_return 失败: {error}")
 
 
 async def run_technical_analysis(text: str) -> BotSendContent:
@@ -54,52 +58,66 @@ async def run_technical_analysis(text: str) -> BotSendContent:
     )
     if isinstance(report, str):
         return report
+    summary = report_to_text(report)
+    _ai_return_report(summary)
     try:
-        return await convert_img(render_technical_image(report))
-    except _RENDER_ERRORS as e:
-        logger.exception(f"[stock_analysis] technical render fail: {e}")
-        return report_to_text(report)
+        return await render_technical_image(report)
+    except _RENDER_ERRORS as error:
+        logger.exception(f"[stock_analysis] technical render fail: {error}")
+        return summary
+
+
+def _card_summary(card: TradeCardData) -> str:
+    lines = [
+        f"【{card.name}({card.code}) 股票卡片】",
+        (f"现价 {_fmt(card.price)}  涨跌 {card.pct:+.2f}%" if card.pct is not None else f"现价 {_fmt(card.price)}"),
+        f"开盘 {_fmt(card.open_price)}  昨收 {_fmt(card.prev_close)}",
+        f"行业 {card.industry}",
+        f"PE {_fmt(card.pe)}  PB {_fmt(card.pb)}",
+    ]
+    if card.technical:
+        lines.append(report_to_text(card.technical))
+    return "\n".join(lines)
 
 
 async def run_stock_card(text: str) -> BotSendContent:
     card = await build_trade_card(text)
     if isinstance(card, str):
         return card
+    summary = _card_summary(card)
+    _ai_return_report(summary)
     try:
-        return await convert_img(render_card_image(card))
-    except _RENDER_ERRORS as e:
-        logger.exception(f"[stock_analysis] card render fail: {e}")
-        lines = [
-            f"【{card.name}({card.code}) 股票卡片】",
-            (f"现价 {_fmt(card.price)}  涨跌 {card.pct:+.2f}%" if card.pct is not None else f"现价 {_fmt(card.price)}"),
-            f"开盘 {_fmt(card.open_price)}  昨收 {_fmt(card.prev_close)}",
-            f"行业 {card.industry}",
-            f"PE {_fmt(card.pe)}  PB {_fmt(card.pb)}",
-        ]
-        if card.technical:
-            lines.append(report_to_text(card.technical))
-        return "\n".join(lines)
+        return await render_card_image(card)
+    except _RENDER_ERRORS as error:
+        logger.exception(f"[stock_analysis] card render fail: {error}")
+        return summary
+
+
+def _screener_summary(result: ScreenerResult) -> str:
+    if result.df.empty:
+        return "无匹配结果"
+    lines = [f"自动选股 · {result.scope}  命中 {result.matched}/{result.total_pool}  展示 {result.shown}"]
+    for _, row in result.df.head(15).iterrows():
+        pct = row["pct"] if "pct" in row.index else None
+        pct_s = fmt_number(pct, signed=True, suffix="%")
+        code = row["code"] if "code" in row.index else ""
+        name = row["name"] if "name" in row.index else ""
+        pe = row["pe"] if "pe" in row.index else None
+        lines.append(f"{code} {name} {pct_s} PE={pe}")
+    return "\n".join(lines)
 
 
 async def run_auto_screener(text: str) -> BotSendContent:
     result = await run_screener(text)
     if result.error:
         return result.error
+    summary = _screener_summary(result)
+    _ai_return_report(summary)
     try:
-        return await convert_img(render_screener_image(result))
-    except _RENDER_ERRORS as e:
-        logger.exception(f"[stock_analysis] screener render fail: {e}")
-        if result.df.empty:
-            return "无匹配结果"
-        lines = [f"自动选股 · {result.scope}  命中 {result.matched}/{result.total_pool}  展示 {result.shown}"]
-        for _, row in result.df.head(15).iterrows():
-            pct = row["pct"] if "pct" in row.index else None
-            pct_s = f"{pct:+.2f}%" if isinstance(pct, (int, float)) else "—"
-            code = row["code"] if "code" in row.index else ""
-            name = row["name"] if "name" in row.index else ""
-            pe = row["pe"] if "pe" in row.index else None
-            lines.append(f"{code} {name} {pct_s} PE={pe}")
-        return "\n".join(lines)
+        return await render_screener_image(result)
+    except _RENDER_ERRORS as error:
+        logger.exception(f"[stock_analysis] screener render fail: {error}")
+        return summary
 
 
 async def run_portfolio_check(text: str, *, user_codes: list[str] | None = None) -> BotSendContent:
@@ -116,11 +134,17 @@ async def run_portfolio_check(text: str, *, user_codes: list[str] | None = None)
     report = await analyze_portfolio(codes)
     if isinstance(report, str):
         return report
+    requested = min(len(codes), 30)
+    messages = list(report.messages)
+    if len(report.holdings) < requested:
+        messages.insert(0, f"仅覆盖 {len(report.holdings)}/{requested} 只标的，按已获取行情的标的计算。")
+    summary = "\n".join(messages)
+    _ai_return_report(summary)
     try:
-        return await convert_img(render_portfolio_image(report))
-    except _RENDER_ERRORS as e:
-        logger.exception(f"[stock_analysis] portfolio render fail: {e}")
-        return "\n".join(report.messages)
+        return await render_portfolio_image(report, requested_count=requested)
+    except _RENDER_ERRORS as error:
+        logger.exception(f"[stock_analysis] portfolio render fail: {error}")
+        return summary
 
 
 def _fmt(v: object) -> str:

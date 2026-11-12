@@ -1,0 +1,39 @@
+{% extends "extras_base.html" %}
+{% from "extras_macros.html" import heading, metrics, text_list %}
+{% block style %}
+
+.industry-stack { display: flex; height: 18px; overflow: hidden; border-radius: 6px; gap: 2px; margin-top: 12px; }
+.industry-segment { height: 18px; flex-shrink: 1; }
+.industry-row { display: grid; grid-template-columns: 180px 1fr 62px; gap: 12px;
+  align-items: center; padding: 7px 0; border-bottom: 1px solid {{ GRID }}; font-size: 15px; }
+.industry-row:last-child { border-bottom: 0; }
+.industry-bar { height: 6px; border-radius: 4px; background: {{ GRID }}; }
+.industry-bar-fill { height: 6px; border-radius: 4px; }
+{% endblock %}
+{% block content %}
+{{ heading("组合体检", "行业集中度", count ~ " 只持仓 · 等权计算", risk_level, risk_tone) }}
+{% if requested_count is not none %}
+<div class="ex-warn-panel">仅覆盖 {{ count }}/{{ requested_count }} 只标的
+  <div class="ex-note">行业权重与集中度仅按已获取行情的标的计算。</div>
+</div>
+{% endif %}
+<section class="panel ex-panel">{{ metrics(metrics_values, "four", false) }}</section>
+<section class="panel ex-panel">
+  <div class="row between"><h2 class="ex-h2">行业权重</h2><span class="ex-note">{{ weights|length }} 个行业</span></div>
+  {% if weights %}
+  <div class="industry-stack">
+    {% for item in weights %}<div class="industry-segment" style="width: {{ item.weight }}%; background: {{ item.color }}"></div>{% endfor %}
+  </div>
+  <div class="ex-list">
+    {% for item in weights %}
+    <div class="industry-row">
+      <span class="ex-name">{{ item.label }}</span>
+      <div class="industry-bar"><div class="industry-bar-fill" style="width: {{ item.weight }}%; background: {{ item.color }}"></div></div>
+      <b class="ex-right ex-num">{{ item.value }}</b>
+    </div>
+    {% endfor %}
+  </div>
+  {% else %}<div class="ex-empty">暂无行业权重</div>{% endif %}
+</section>
+{% if messages %}<section class="panel ex-panel"><h2 class="ex-h2">体检结论</h2>{{ text_list(messages) }}</section>{% endif %}
+{% endblock %}

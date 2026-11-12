@@ -4,12 +4,13 @@ from __future__ import annotations
 
 import re
 import asyncio
+from dataclasses import replace
 
 from gsuid_core.logger import logger
-from gsuid_core.utils.html_render import render_html_to_bytes
 from gsuid_core.ai_core.trigger_bridge import ai_return
 
-from .ipo_html import CSS_WIDTH, build_ipo_calendar_html, ipo_calendar_canvas_size
+from ..render import RenderError, render_html
+from .ipo_html import CSS_WIDTH, build_ipo_calendar_html
 from ..utils.market import IpoEvent, IpoMarket, get_market, is_market_error
 from ..utils.render_data import build_ipo_calendar_render_data
 from ..utils.render_text import ipo_calendar_text
@@ -60,30 +61,26 @@ async def draw_ipo_calendar_img(text: str = "") -> bytes | str:
         else:
             events.extend(res)
 
-    if not events and failed:
+    if len(failed) == len(wanted):
         return f"IPO日历数据获取失败：{'、'.join(failed)}市场数据源暂时不可用，请稍后再试"
 
     data = build_ipo_calendar_render_data(events, markets=markets)
-    text_summary = ipo_calendar_text(data)
+    visible = [group for group in data.groups if group.label not in failed]
+    if data.total:
+        text_summary = ipo_calendar_text(replace(data, groups=visible))
+    else:
+        labels = "、".join(group.label for group in visible)
+        text_summary = (
+            f"【IPO日历】{data.window_start:%m-%d} ~ {data.window_end:%m-%d}\n{labels}窗口内无新股发行或上市安排。"
+        )
     if failed:
         text_summary += f"\n⚠ {'、'.join(failed)}市场数据源暂时不可用，未计入"
     # 铁律：有图必有文字，且必须在出图之前
     ai_return(text_summary)
 
-    html = build_ipo_calendar_html(data)
-    _, height = ipo_calendar_canvas_size(data)
+    html = build_ipo_calendar_html(data, failed=failed)
     try:
-        return await render_html_to_bytes(
-            html,
-            max_width=float(CSS_WIDTH * 2),
-            dpi=192.0,
-            device_height=float(height * 2),
-            default_font_size=15.0,
-            allow_refit=False,
-            image_format="png",
-            lang="zh",
-            root_max_width=float(CSS_WIDTH),
-        )
-    except (RuntimeError, OSError, ValueError) as e:
-        logger.exception(f"[SayuStock][IPO日历] HTML 出图失败: {e}")
+        return await render_html(html, width=CSS_WIDTH, label="IPO日历")
+    except RenderError as error:
+        logger.exception(f"[SayuStock][IPO日历] HTML 出图失败: {error}")
         return "IPO日历出图失败"

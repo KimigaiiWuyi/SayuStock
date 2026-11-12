@@ -1,0 +1,37 @@
+{% extends "extras_base.html" %}
+{% from "extras_macros.html" import heading, metrics %}
+{% block style %}
+.screen-filters { margin-top: 9px; display: flex; flex-wrap: wrap; gap: 6px; }
+.screen-filter { display: flex; align-items: center; height: 27px; padding: 0 8px; border: 1px solid {{ BORDER }}; border-radius: 6px; font-size: 14px; color: {{ TEXT_SOFT }}; }
+.screen-table .ex-th, .screen-table .ex-tr {
+  grid-template-columns: 82px minmax(108px, 1.4fr) repeat(2, 67px) 85px repeat(3, 61px) minmax(94px, 1fr);
+}
+.screen-table .ex-tr { font-size: 15px; }
+{% endblock %}
+{% block content %}
+{{ heading("自动选股", scope, "按所选条件筛选") }}
+<section class="panel ex-panel">
+  {{ metrics(counts, "three", false) }}
+  <div class="screen-filters">
+    {% for condition in filters %}<span class="screen-filter">{{ condition }}</span>
+    {% else %}<span class="screen-filter">仅板块范围</span>{% endfor %}
+  </div>
+</section>
+<section class="panel ex-panel">
+  <h2 class="ex-h2">筛选结果</h2>
+  {% if rows %}
+  <div class="ex-table screen-table">
+    <div class="ex-th"><span>代码</span><span>名称</span><span class="ex-right">现价</span><span class="ex-right">涨跌%</span><span class="ex-right">市值（亿）</span><span class="ex-right">PE</span><span class="ex-right">换手%</span><span class="ex-right">量比</span><span>行业</span></div>
+    {% for row in rows %}
+    <div class="ex-tr">
+      <span class="ex-code">{{ row.code }}</span><span class="ex-name">{{ row.name }}</span>
+      <span class="ex-right">{{ row.price }}</span><span class="ex-right {{ row.tone }}">{{ row.change }}</span>
+      <span class="ex-right">{{ row.market_cap }}</span><span class="ex-right">{{ row.pe }}</span>
+      <span class="ex-right">{{ row.turnover }}</span><span class="ex-right">{{ row.volume_ratio }}</span>
+      <span class="muted">{{ row.industry }}</span>
+    </div>
+    {% endfor %}
+  </div>
+  {% else %}<div class="ex-empty">无匹配结果</div>{% endif %}
+</section>
+{% endblock %}

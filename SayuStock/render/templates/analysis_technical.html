@@ -1,0 +1,22 @@
+{% extends "extras_base.html" %}
+{% from "extras_macros.html" import heading %}
+{% from "analysis_macros.html" import technical_readings, technical_evidence %}
+{% block style %}{% include "analysis_technical.css" %}{% endblock %}
+{% block content %}
+{{ heading("技术分析", stock_name, code ~ " · " ~ period) }}
+<section class="panel ex-panel">
+  <div class="tech-hero">
+    <div>
+      <div class="ex-note">技术评分</div>
+      <div class="tech-score"><b class="ex-num {{ 'ex-warn' if technical.tone == 'warn' else technical.tone }}">{{ technical.score }}</b><span class="muted">/ 100</span></div>
+      <div class="tech-track"><div class="tech-fill {{ technical.tone }}" style="width: {{ technical.score }}%"></div></div>
+    </div>
+    <div class="ex-right">
+      <div class="ex-note">最新收盘</div>
+      <div class="ex-big ex-num">{{ last_close }}</div>
+    </div>
+  </div>
+  {{ technical_readings(technical) }}
+</section>
+{{ technical_evidence(technical) }}
+{% endblock %}
