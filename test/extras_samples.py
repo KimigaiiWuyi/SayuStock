@@ -1,4 +1,4 @@
-"""Synthetic fixtures for the upstream-only Node rendering pages."""
+"""Synthetic fixtures for the upstream-only rendering pages."""
 
 from __future__ import annotations
 

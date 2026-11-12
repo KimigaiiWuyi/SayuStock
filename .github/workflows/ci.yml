@@ -79,7 +79,7 @@ jobs:
           grep -v '^-e' gsuid_core/requirements.txt > /tmp/gsuid_core_reqs.txt
           pip install -r /tmp/gsuid_core_reqs.txt
       - name: Install SayuStock deps
-        run: pip install pandas mplchart matplotlib plotly pytest pytest-asyncio "jinja2>=3.1.6,<4" "holidays>=0.50"
+        run: pip install pandas pytest pytest-asyncio "jinja2>=3.1.6,<4" "holidays>=0.50"
       - name: Run tests
         working-directory: gsuid_core/gsuid_core/plugins/SayuStock
         run: pytest test/ -q -p no:cacheprovider
@@ -122,7 +122,7 @@ jobs:
         run: |
           grep -v '^-e' gsuid_core/requirements.txt > /tmp/gsuid_core_reqs.txt
           pip install -r /tmp/gsuid_core_reqs.txt
-          pip install pandas mplchart matplotlib plotly "jinja2>=3.1.6,<4" "holidays>=0.50" basedpyright==1.39.7
+          pip install pandas "jinja2>=3.1.6,<4" "holidays>=0.50" basedpyright==1.39.7
       - name: Run basedpyright
         working-directory: gsuid_core/gsuid_core/plugins/SayuStock
         run: basedpyright

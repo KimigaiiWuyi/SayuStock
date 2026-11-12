@@ -107,14 +107,13 @@ async def bar(...):
 - 真网 Cookie 不要写进 fixture 仓库  
 - `mapcloud_refresh_minutes=3`：调试「图不更新」先查 mtime 缓存  
 
-## 9.10 Playwright / 出图环境（S-9）
+## 9.10 Takumi / 出图环境（S-9）
 
-- 未 `playwright install` → 云图截图卡住  
-- matplotlib 必须 `Agg`（`chart_base` 已设）；勿在其它入口改 interactive backend  
-- 重 CPU 绘图放 `asyncio.to_thread`，勿堵事件循环  
-- 新版 mplchart（无 `bgcolor`）：默认浅色；数据 pane 透明，底色在 `label=root`。`Chart(bgcolor=)` 由 `mplchart_compat` 转成暗色 `style`，出图前再刷 root。  
-- 新版忽略 `color_scheme`：BOLL 颜色必须 `Bands(..., color=)`，不能再靠 scheme 键。  
-- matplotlib 不要把 `MiSans VF` 放 `font.sans-serif` 第一位：VF 只注册 Regular，`fontweight` 不会换档。优先系统静态 `MiSans`（Thin–Heavy）。  
+- 图片统一调用 `render.render_html`，由 Core 的 `render_html_to_bytes` 负责预处理、字体和共享渲染；消息处理中不安装依赖。
+- 不在插件内新增进程隔离、并发槽或超时策略；Core 接口取消等待不保证原生绘制立即停止。
+- MiSans 使用 Core 的字体文件；`theme.css` 统一清除默认页边距，原始 PNG 边缘必须不透明。
+- 缺运行时应返回明确错误、保留文字结果；强制实图测试不允许以 skip 代替安装。
+- Playwright 仅保留雪球 Cookie 用途。安装与回退见 [rendering.md](../../../../docs/rendering.md)。
 
 ## 9.11 板块 vs 个股（S-10）
 
@@ -166,8 +165,8 @@ if not isinstance(raw_data, KlineSeries):
 ## 9.15 Kronos / 重依赖（S-14）
 
 - torch / 权重仅预测路径惰性 import  
-- 队列 `NOW_QUEUE` 防并发打爆  
-- 单测必须 mock 模型与 playwright  
+- 预测相同缓存键串行；保留原推理耗时契约，不给推理或绘图额外套统一时限。
+- 单测使用合成模型输出，不下载权重；真实 PNG 测试覆盖预测页面。
 
 ## 9.16 CI / 测试导入（S-15）
 
@@ -179,14 +178,14 @@ if not isinstance(raw_data, KlineSeries):
 | 无 `[tool.pytest.ini_options]` | Full suite：`No module named 'SayuStock'` | 保留 `pythonpath = [".", "test"]`，防止 rootdir 上浮到 Core |
 | `pyrightconfig` 写死 `.venv` | basedpyright exit 3，「0 errors」仍失败 | 删除 `venvPath`/`venv` |
 | 用官方 pyright | unknown diagnostic rule | 统一 **basedpyright** |
-| importlib 桩漏导出名 | Full suite collection：`cannot import name '…' from '_end_label_dodge_test.utils.mplchart_compat'` | 桩覆盖 `chart_base` 的 from-import，并留模块 `__getattr__`；见 [§10.5.10](./10-cicd-and-dev-workflow.md) |
+| 缺少 `pytakumi` | 强制实图测试失败 | 检查 Core 环境中的依赖，不恢复旧渲染桩；见 [§10.5.10](./10-cicd-and-dev-workflow.md) |
 | `list[float]` 赋给 `list[float \| None]` | basedpyright `reportArgumentType`（list 不变） | 价列参数用 `Sequence[float \| None]` |
 | 本地 basedpyright 几十个 MissingImports | 没走 Core venv | `basedpyright --pythonpath <Core venv>/python` |
 | 空 DATA_PATH 当缓存 | Full suite：`test_offline_all_weather_png` 只数到 4 个 spark（加密合成） | `has_quote_cache` 要有 `*_single-stock*_data.json`；不够 skip。见 [§10.5.12](./10-cicd-and-dev-workflow.md) |
 | 脚本 E402 | pre-commit / lint 红 | 路径补丁后的 import 加 `# noqa: E402` |
 | 对比图默认窗口 | 用户觉得「只有一个月」 | 对比默认 `KlinePeriod.D1_YEAR`（365 天），勿改回 `D1_RECENT`（50 天） |
 | 场外基金当 K 线 | `个股 日k 720001` 只有一根柱 | 东财 `150.*` 无真 K 线；走天天基金净值，命令层改 `compare-stock` |
-| 拿精确色扫出货图 | 「柱色全丢了」——`(187,26,26)` 在成品图上 0 像素 | 渲染收尾 `convert_img` 统一转 **JPEG**，有损量化改色。像素级验收在 `convert_img` **之前**接画布，或按容差匹配 |
+| 拿精确色扫出货图 | 发送后颜色与本地原图不同 | 默认 PNG；分析页和模拟盘账户/排行按 Core `PicQuality` 出 JPEG。精确像素验收用本地 PNG，有损图按容差匹配 |
 
 ## 9.17 改完自查清单
 
@@ -214,7 +213,7 @@ if not isinstance(raw_data, KlineSeries):
 | S-6 | 工具无 docstring | §9.7 / [§05](./05-ai-tools-and-agents.md) |
 | S-7 | 模拟盘双账本 / 流水与持仓分裂 / artifact 脏数字 | §9.8 / [§06](./06-papertrade.md) |
 | S-8 | 缓存与测试污染 | §9.9 |
-| S-9 | playwright / Agg | §9.10 |
+| S-9 | Core 绘图接口 / 字体 / 模板适配 | §9.10 |
 | S-10 | 板块展开 | §9.11 |
 | S-11 | str 错误当数据 | §9.12 |
 | S-12 | 业务直读 requester | §9.13 |
