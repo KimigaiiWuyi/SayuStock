@@ -444,7 +444,13 @@ async def run_papertrade_v2_migration() -> Optional[str]:
 
 
 def _empty_heal() -> Dict[str, Any]:
-    return {"orphans": [], "snapshots_updated": 0, "broadcast_filled": 0, "cash_restated": []}
+    return {
+        "orphans": [],
+        "snapshots_updated": 0,
+        "broadcast_filled": 0,
+        "cash_restated": [],
+        "positions_plan_healed": 0,
+    }
 
 
 def _row_date(value: object) -> Optional[date]:
@@ -537,6 +543,12 @@ async def heal_orphan_ledger() -> Dict[str, Any]:
         has_quote = await _has_column(session, "sayupaperposition", "last_quote_price")
         has_name = await _has_column(session, "sayupaperposition", "stock_name")
         has_opened = await _has_column(session, "sayupaperposition", "opened_at")
+        has_plan = (
+            await _has_column(session, "sayupaperposition", "plan_stop_price")
+            and await _has_column(session, "sayupaperposition", "plan_stop_pct")
+            and await _has_column(session, "sayupaperposition", "plan_take_price")
+            and await _has_column(session, "sayupaperposition", "plan_thesis")
+        )
         quote_col = "last_quote_price" if has_quote else "NULL"
         name_col = "stock_name" if has_name else "''"
         opened_col = "opened_at" if has_opened else "NULL"
@@ -602,6 +614,18 @@ async def heal_orphan_ledger() -> Dict[str, Any]:
             and await _has_column(session, "sayupapertrade", "realized_pnl")
             and await _has_column(session, "sayupapertrade", "executed_at")
         )
+        can_trade_snap = (
+            has_plan
+            and await _has_table(session, "sayupapertrade")
+            and await _has_column(session, "sayupapertrade", "snapshot")
+            and await _has_column(session, "sayupapertrade", "side")
+        )
+        can_decision_ind = (
+            has_plan
+            and await _has_table(session, "sayupaperdecision")
+            and await _has_column(session, "sayupaperdecision", "indicators")
+            and await _has_column(session, "sayupaperdecision", "action")
+        )
 
         cash_restated, cash_timeline, live_cash = ([], {}, {})
         if can_cash:
@@ -632,15 +656,130 @@ async def heal_orphan_ledger() -> Dict[str, Any]:
 
         if can_broadcast:
             out["broadcast_filled"] = await _fill_empty_broadcast_routing(session)
+        if has_plan:
+            out["positions_plan_healed"] = await _heal_positions_plan(
+                session, can_trade_snap=can_trade_snap, can_decision_ind=can_decision_ind
+            )
         await session.commit()
-    if out["orphans"] or out["broadcast_filled"] or out["cash_restated"]:
+    if out["orphans"] or out["broadcast_filled"] or out["cash_restated"] or out["positions_plan_healed"] > 0:
         codes = [f"{o['stock_code']}×{o['qty']}" for o in out["orphans"]]
         logger.warning(
             f"{_HEAL_LOG} 幽灵仓 {len(out['orphans'])} 只 {codes}；"
             f"现金更正 {len(out['cash_restated'])} 盘；"
-            f"快照改 {out['snapshots_updated']} 行；播报补 {out['broadcast_filled']} 条"
+            f"快照改 {out['snapshots_updated']} 行；播报补 {out['broadcast_filled']} 条；"
+            f"持仓止损自愈 {out['positions_plan_healed']} 只"
         )
     return out
+
+
+async def _heal_positions_plan(
+    session: AsyncSession,
+    *,
+    can_trade_snap: bool = False,
+    can_decision_ind: bool = False,
+) -> int:
+    """自愈持仓入场计划：缺 plan_* 字段的持仓，按「买入流水 snapshot → 决策
+
+    indicators」顺序补 NULL 字段；已有值一律保留（只补不覆写），无新增不计数。
+    """
+    pos_rows = (
+        await session.execute(
+            text(
+                "SELECT id, account_id, stock_code, "
+                "plan_stop_price, plan_stop_pct, plan_take_price, plan_thesis "
+                "FROM sayupaperposition "
+                "WHERE qty > 0 AND account_id > 0 AND ("
+                "plan_stop_price IS NULL OR plan_stop_pct IS NULL "
+                "OR plan_take_price IS NULL OR plan_thesis IS NULL)"
+            )
+        )
+    ).all()
+    if not pos_rows:
+        return 0
+
+    from ...stock_papertrade.strategy import _as_finite_float, parse_llm_json_object, normalize_plan_indicators
+
+    def _vals(d: dict[str, object]) -> tuple[float | None, float | None, float | None, str | None]:
+        raw_th = str(d.get("plan_thesis") or "").strip()
+        return (
+            _as_finite_float(d.get("plan_stop_price")),
+            _as_finite_float(d.get("plan_stop_pct")),
+            _as_finite_float(d.get("plan_take_price")),
+            raw_th if raw_th else None,
+        )
+
+    healed = 0
+    for row in pos_rows:
+        pid, aid, code = int(row[0]), int(row[1]), str(row[2] or "")
+        cur = (
+            _as_finite_float(row[3]),
+            _as_finite_float(row[4]),
+            _as_finite_float(row[5]),
+            str(row[6] or "").strip() or None,
+        )
+        plan_dict: dict[str, object] = {}
+
+        if can_trade_snap:
+            t_row = (
+                await session.execute(
+                    text(
+                        "SELECT snapshot FROM sayupapertrade "
+                        "WHERE account_id = :aid AND stock_code = :code AND side = 'buy' "
+                        "ORDER BY id DESC LIMIT 1"
+                    ),
+                    {"aid": aid, "code": code},
+                )
+            ).first()
+            if t_row and t_row[0]:
+                plan_dict = normalize_plan_indicators(parse_llm_json_object(str(t_row[0])))
+
+        sp, spct, tp, th = _vals(plan_dict)
+        if can_decision_ind and (sp is None or spct is None or tp is None or th is None):
+            d_row = (
+                await session.execute(
+                    text(
+                        "SELECT indicators FROM sayupaperdecision "
+                        "WHERE account_id = :aid AND stock_code = :code AND LOWER(action) = 'buy' "
+                        "ORDER BY id DESC LIMIT 1"
+                    ),
+                    {"aid": aid, "code": code},
+                )
+            ).first()
+            if d_row and d_row[0]:
+                d_sp, d_spct, d_tp, d_th = _vals(normalize_plan_indicators(parse_llm_json_object(str(d_row[0]))))
+                if sp is None:
+                    sp = d_sp
+                if spct is None:
+                    spct = d_spct
+                if tp is None:
+                    tp = d_tp
+                if th is None:
+                    th = d_th
+
+        new = (
+            cur[0] if cur[0] is not None else sp,
+            cur[1] if cur[1] is not None else spct,
+            cur[2] if cur[2] is not None else tp,
+            cur[3] if cur[3] is not None else th,
+        )
+        if new != cur:
+            await session.execute(
+                text(
+                    "UPDATE sayupaperposition SET "
+                    "plan_stop_price = :sp, "
+                    "plan_stop_pct = :spct, "
+                    "plan_take_price = :tp, "
+                    "plan_thesis = :th "
+                    "WHERE id = :id"
+                ),
+                {"sp": new[0], "spct": new[1], "tp": new[2], "th": new[3], "id": pid},
+            )
+            healed += 1
+            logger.info(
+                f"{_HEAL_LOG} 持仓止损自愈: {code} (id={pid}) -> "
+                f"stop_price={new[0]} stop_pct={new[1]} take_price={new[2]}"
+            )
+    return healed
 
 
 async def _plan_cash_restatement(

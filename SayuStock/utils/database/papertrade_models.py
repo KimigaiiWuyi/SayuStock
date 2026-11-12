@@ -91,6 +91,11 @@ class SayuPaperPosition(BaseIDModel, table=True):
     last_quote_at: Optional[datetime] = Field(default=None, title="报价时间戳")
     opened_at: Optional[datetime] = Field(default=None, title="首次建仓时间")
     updated_at: Optional[datetime] = Field(default=None, title="更新时间")
+    # 持仓入场计划（结构化止损/止盈），随成交原子写入持仓
+    plan_stop_price: Optional[float] = Field(default=None, title="计划止损价")
+    plan_stop_pct: Optional[float] = Field(default=None, title="计划止损幅度（负小数）")
+    plan_take_price: Optional[float] = Field(default=None, title="计划止盈价")
+    plan_thesis: Optional[str] = Field(default=None, title="入场逻辑描述")
 
 
 # ============================================================
@@ -343,6 +348,14 @@ exec_list.extend(
         "ALTER TABLE sayupaperposition ADD COLUMN last_quote_at DATETIME;",
         "ALTER TABLE sayupaperposition ADD COLUMN last_quote_price DOUBLE;",
         "ALTER TABLE sayupaperposition ADD COLUMN last_quote_at DATETIME;",
+        # 持仓入场计划列（结构化止损/止盈）
+        "ALTER TABLE sayupaperposition ADD COLUMN plan_stop_price REAL;",
+        "ALTER TABLE sayupaperposition ADD COLUMN plan_stop_price DOUBLE;",
+        "ALTER TABLE sayupaperposition ADD COLUMN plan_stop_pct REAL;",
+        "ALTER TABLE sayupaperposition ADD COLUMN plan_stop_pct DOUBLE;",
+        "ALTER TABLE sayupaperposition ADD COLUMN plan_take_price REAL;",
+        "ALTER TABLE sayupaperposition ADD COLUMN plan_take_price DOUBLE;",
+        "ALTER TABLE sayupaperposition ADD COLUMN plan_thesis TEXT;",
     ]
 )
 

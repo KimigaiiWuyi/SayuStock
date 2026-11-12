@@ -14,6 +14,7 @@
 """
 
 import sys
+import json
 import asyncio
 from typing import List, Tuple, Optional
 from pathlib import Path
@@ -437,6 +438,10 @@ _HEAL_ALTERS: Tuple[str, ...] = (
     "ALTER TABLE sayupaperposition ADD COLUMN avg_cost REAL DEFAULT 0",
     "ALTER TABLE sayupaperposition ADD COLUMN last_quote_price REAL",
     "ALTER TABLE sayupaperposition ADD COLUMN opened_at TIMESTAMP",
+    "ALTER TABLE sayupaperposition ADD COLUMN plan_stop_price REAL",
+    "ALTER TABLE sayupaperposition ADD COLUMN plan_stop_pct REAL",
+    "ALTER TABLE sayupaperposition ADD COLUMN plan_take_price REAL",
+    "ALTER TABLE sayupaperposition ADD COLUMN plan_thesis TEXT",
     "ALTER TABLE sayupapertrade ADD COLUMN side TEXT DEFAULT 'buy'",
     "ALTER TABLE sayupapertrade ADD COLUMN qty INTEGER DEFAULT 0",
     "ALTER TABLE sayupapertrade ADD COLUMN price REAL DEFAULT 0",
@@ -444,6 +449,9 @@ _HEAL_ALTERS: Tuple[str, ...] = (
     "ALTER TABLE sayupapertrade ADD COLUMN fee REAL DEFAULT 0",
     "ALTER TABLE sayupapertrade ADD COLUMN realized_pnl REAL DEFAULT 0",
     "ALTER TABLE sayupapertrade ADD COLUMN executed_at TIMESTAMP",
+    "ALTER TABLE sayupapertrade ADD COLUMN snapshot TEXT DEFAULT ''",
+    "ALTER TABLE sayupaperdecision ADD COLUMN action TEXT DEFAULT ''",
+    "ALTER TABLE sayupaperdecision ADD COLUMN indicators TEXT DEFAULT ''",
     "ALTER TABLE sayupapersnapshot ADD COLUMN trade_date DATE",
     "ALTER TABLE sayupapersnapshot ADD COLUMN cash REAL DEFAULT 0",
     "ALTER TABLE sayupapersnapshot ADD COLUMN position_value REAL DEFAULT 0",
@@ -587,3 +595,152 @@ def test_heal_restates_cash_when_sell_added_realized_pnl(tmp_path):
     assert abs(float(cash) - 1000985.0) < 0.01
     assert abs(float(snap_cash) - 1000985.0) < 0.01
     assert second["cash_restated"] == []
+
+
+def test_heal_positions_plan_from_trade_snapshot_and_decision_indicators(tmp_path):
+    """历史持仓缺失 plan_stop_price 时，优先从买入流水 snapshot 回填，次选从决策 indicators 回填。"""
+
+    async def body(fx: _Fixture):
+        await _heal_schema(fx)
+        acc = await fx.add_account("111", "onebot", "2025-01-01 09:00:00", cash=1000000.0, initial_cash=1000000)
+        async with fx.maker() as s:
+            await s.execute(
+                text(
+                    "INSERT INTO sayupaperposition "
+                    "(account_id, group_id, bot_id, stock_code, stock_name, qty, avg_cost, plan_stop_price) VALUES "
+                    "(:a,'111','onebot','000333','美的集团',500,88.21,NULL),"
+                    "(:a,'111','onebot','600519','贵州茅台',100,1600.0,NULL)"
+                ),
+                {"a": acc},
+            )
+            snap_midea = json.dumps(
+                {"plan_stop_price": 83.36, "plan_stop_pct": -0.055, "plan_thesis": "白电蓝筹"},
+                ensure_ascii=False,
+            )
+            await s.execute(
+                text(
+                    "INSERT INTO sayupapertrade "
+                    "(account_id, group_id, bot_id, stock_code, side, qty, price, snapshot) VALUES "
+                    "(:a,'111','onebot','000333','buy',500,88.21,:snap)"
+                ),
+                {"a": acc, "snap": snap_midea},
+            )
+            await s.execute(
+                text(
+                    "INSERT INTO sayupapertrade "
+                    "(account_id, group_id, bot_id, stock_code, side, qty, price, snapshot) VALUES "
+                    "(:a,'111','onebot','600519','buy',100,1600.0,'')"
+                ),
+                {"a": acc},
+            )
+            ind_moutai = json.dumps(
+                {"plan_stop_price": 1480.0, "plan_stop_pct": -0.075, "plan_thesis": "白酒龙头"},
+                ensure_ascii=False,
+            )
+            await s.execute(
+                text(
+                    "INSERT INTO sayupaperdecision "
+                    "(account_id, group_id, bot_id, stock_code, action, indicators) VALUES "
+                    "(:a,'111','onebot','600519','buy',:ind)"
+                ),
+                {"a": acc, "ind": ind_moutai},
+            )
+            await s.commit()
+
+        first = await mig.heal_orphan_ledger()
+        midea_plan = await fx.scalar(
+            f"SELECT plan_stop_price FROM sayupaperposition WHERE stock_code = '000333' AND account_id = {acc}"
+        )
+        midea_thesis = await fx.scalar(
+            f"SELECT plan_thesis FROM sayupaperposition WHERE stock_code = '000333' AND account_id = {acc}"
+        )
+        moutai_plan = await fx.scalar(
+            f"SELECT plan_stop_price FROM sayupaperposition WHERE stock_code = '600519' AND account_id = {acc}"
+        )
+        moutai_pct = await fx.scalar(
+            f"SELECT plan_stop_pct FROM sayupaperposition WHERE stock_code = '600519' AND account_id = {acc}"
+        )
+        second = await mig.heal_orphan_ledger()
+        return first, midea_plan, midea_thesis, moutai_plan, moutai_pct, second
+
+    first, midea_plan, midea_thesis, moutai_plan, moutai_pct, second = _run(tmp_path, body)
+    assert first["positions_plan_healed"] == 2
+    assert abs(float(midea_plan) - 83.36) < 0.001
+    assert midea_thesis == "白电蓝筹"
+    assert abs(float(moutai_plan) - 1480.0) < 0.001
+    assert abs(float(moutai_pct) - (-0.075)) < 0.001
+    assert second["positions_plan_healed"] == 0
+
+
+def test_heal_positions_plan_preserves_existing_and_counts_once(tmp_path):
+    """自愈只补 NULL、不覆写：已有 plan 字段不被 snapshot 里的不同值冲掉；
+
+    流水 snapshot 缺的字段由决策 indicators 补齐；无新增信息的行不重复计数。
+    """
+
+    async def body(fx: _Fixture):
+        await _heal_schema(fx)
+        acc = await fx.add_account("111", "onebot", "2025-01-01 09:00:00", cash=1000000.0, initial_cash=1000000)
+        async with fx.maker() as s:
+            await s.execute(
+                text(
+                    "INSERT INTO sayupaperposition "
+                    "(account_id, group_id, bot_id, stock_code, stock_name, qty, avg_cost, "
+                    "plan_stop_price, plan_thesis) VALUES "
+                    "(:a,'111','onebot','000001','平安银行',1000,10.0,9.5,'旧逻辑'),"
+                    "(:a,'111','onebot','000002','五粮液',100,120.0,NULL,NULL),"
+                    "(:a,'111','onebot','000003','立讯精密',500,30.0,NULL,NULL)"
+                ),
+                {"a": acc},
+            )
+            snaps = {
+                "s1": json.dumps({"plan_stop_price": 9.2}, ensure_ascii=False),
+                "s2": json.dumps({"plan_thesis": "快照逻辑", "plan_take_price": 99.0}, ensure_ascii=False),
+                "s3": json.dumps({"plan_thesis": "只有逻辑"}, ensure_ascii=False),
+            }
+            await s.execute(
+                text(
+                    "INSERT INTO sayupapertrade "
+                    "(account_id, group_id, bot_id, stock_code, side, qty, price, amount, "
+                    "executed_at, snapshot) VALUES "
+                    "(:a,'111','onebot','000001','buy',1000,10.0,10000,'2025-06-01 10:00:00',:s1),"
+                    "(:a,'111','onebot','000002','buy',100,120.0,12000,'2025-06-01 10:00:00',:s2),"
+                    "(:a,'111','onebot','000003','buy',500,30.0,15000,'2025-06-01 10:00:00',:s3)"
+                ),
+                {"a": acc, **snaps},
+            )
+            await s.execute(
+                text(
+                    "INSERT INTO sayupaperdecision "
+                    "(account_id, group_id, bot_id, stock_code, action, indicators) VALUES "
+                    "(:a,'111','onebot','000002','buy',:ind)"
+                ),
+                {
+                    "a": acc,
+                    "ind": json.dumps(
+                        {"plan_stop_price": 75.0, "plan_stop_pct": -0.06, "plan_thesis": "决策逻辑"},
+                        ensure_ascii=False,
+                    ),
+                },
+            )
+            await s.commit()
+
+        first = await mig.heal_orphan_ledger()
+        pos1 = await fx.rows("SELECT plan_stop_price, plan_thesis FROM sayupaperposition WHERE stock_code='000001'")
+        pos2 = await fx.rows(
+            "SELECT plan_stop_price, plan_stop_pct, plan_take_price, plan_thesis "
+            "FROM sayupaperposition WHERE stock_code='000002'"
+        )
+        pos3 = await fx.rows("SELECT plan_thesis FROM sayupaperposition WHERE stock_code='000003'")
+        second = await mig.heal_orphan_ledger()
+        return first, pos1, pos2, pos3, second
+
+    first, pos1, pos2, pos3, second = _run(tmp_path, body)
+    # 000001：snapshot 的 stop_price=9.2 不许覆盖已有的 9.5 / 旧逻辑
+    assert pos1 == [(9.5, "旧逻辑")]
+    # 000002：take/thesis 取流水 snapshot，stop 由决策 indicators 补齐
+    assert pos2 == [(75.0, -0.06, 99.0, "快照逻辑")]
+    # 000003：首轮补进 thesis；次轮无新增信息 → 不再重复计数
+    assert pos3 == [("只有逻辑",)]
+    assert first["positions_plan_healed"] == 2
+    assert second["positions_plan_healed"] == 0

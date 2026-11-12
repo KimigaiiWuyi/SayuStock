@@ -37,9 +37,10 @@ async def send_heal_ledger(bot: Bot, ev: Event) -> list[str] | None:
     summary = await heal_orphan_ledger()
     orphans: list[dict[str, Any]] = list(summary["orphans"])
     cash_fix: list[dict[str, Any]] = list(summary["cash_restated"])
+    healed_plans: int = int(summary["positions_plan_healed"])
     lines: list[str] = ["🧾 **模拟盘对账修复**"]
-    if not orphans and not cash_fix and int(summary["broadcast_filled"]) == 0:
-        lines.append("账本已自洽：没有无流水持仓，现金与流水一致，播报路由也无需回填。")
+    if not orphans and not cash_fix and int(summary["broadcast_filled"]) == 0 and healed_plans == 0:
+        lines.append("账本已自洽：没有无流水持仓，现金与流水一致，持仓计划已同步，播报路由也无需回填。")
         return await bot.send("\n".join(lines))
     if orphans:
         lines.append(f"删除幽灵仓 {len(orphans)} 只（持仓有、流水净头寸≤0）：")
@@ -57,6 +58,8 @@ async def send_heal_ledger(bot: Bot, ev: Event) -> list[str] | None:
             )
     if int(summary["snapshots_updated"]) > 0:
         lines.append(f"已回写净值快照 {summary['snapshots_updated']} 行。")
+    if healed_plans > 0:
+        lines.append(f"自愈持仓止损计划：{healed_plans} 只（已从历史流水/决策补齐）。")
     lines.append(f"播报目标补全 ws_bot_id/bot_self_id：{summary['broadcast_filled']} 条。")
     return await bot.send("\n".join(lines))
 

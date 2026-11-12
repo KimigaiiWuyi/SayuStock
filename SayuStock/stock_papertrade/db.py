@@ -19,6 +19,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from gsuid_core.utils.database.base_models import with_session
 
 from .matcher import apply_fill_qty_cost, cash_delta_for_fill
+from .strategy import _as_finite_float, parse_llm_json_object, normalize_plan_indicators
 from ..utils.database.papertrade_models import (
     DEFAULT_STRATEGY_ID,
     DEFAULT_ACCOUNT_NAME,
@@ -390,6 +391,10 @@ class PaperPositionRepo:
         bot_id: str = "",
         last_quote_price: Optional[float] = None,
         last_quote_at: Optional[datetime] = None,
+        plan_stop_price: Optional[float] = None,
+        plan_stop_pct: Optional[float] = None,
+        plan_take_price: Optional[float] = None,
+        plan_thesis: Optional[str] = None,
     ) -> Optional[SayuPaperPosition]:
         """新建或更新持仓。qty=0 时删除持仓记录。
 
@@ -422,6 +427,14 @@ class PaperPositionRepo:
             if last_quote_price is not None:
                 existing.last_quote_price = last_quote_price
                 existing.last_quote_at = last_quote_at or now
+            if plan_stop_price is not None:
+                existing.plan_stop_price = plan_stop_price
+            if plan_stop_pct is not None:
+                existing.plan_stop_pct = plan_stop_pct
+            if plan_take_price is not None:
+                existing.plan_take_price = plan_take_price
+            if plan_thesis is not None:
+                existing.plan_thesis = plan_thesis
             session.add(existing)
             await session.flush()
             return existing
@@ -438,6 +451,10 @@ class PaperPositionRepo:
             last_quote_at=last_quote_at or now if last_quote_price is not None else None,
             opened_at=now,
             updated_at=now,
+            plan_stop_price=plan_stop_price,
+            plan_stop_pct=plan_stop_pct,
+            plan_take_price=plan_take_price,
+            plan_thesis=plan_thesis,
         )
         session.add(pos)
         await session.flush()
@@ -671,6 +688,18 @@ class PaperTradeRepo:
         session.add(acc)
 
         new_qty, new_avg = apply_fill_qty_cost(old_qty, old_avg, side, qty, price, fee)
+        sp: float | None = None
+        spct: float | None = None
+        tp: float | None = None
+        th: str | None = None
+        if side == "buy" and snapshot:
+            parsed_plan = normalize_plan_indicators(parse_llm_json_object(snapshot))
+            sp = _as_finite_float(parsed_plan.get("plan_stop_price"))
+            spct = _as_finite_float(parsed_plan.get("plan_stop_pct"))
+            tp = _as_finite_float(parsed_plan.get("plan_take_price"))
+            raw_th = str(parsed_plan.get("plan_thesis") or "").strip()
+            th = raw_th if raw_th else None
+
         if new_qty <= 0:
             if existing is not None:
                 from sqlalchemy import delete as _sa_delete
@@ -691,6 +720,14 @@ class PaperTradeRepo:
             existing.last_quote_price = price
             existing.last_quote_at = now
             existing.updated_at = now
+            if sp is not None:
+                existing.plan_stop_price = sp
+            if spct is not None:
+                existing.plan_stop_pct = spct
+            if tp is not None:
+                existing.plan_take_price = tp
+            if th is not None:
+                existing.plan_thesis = th
             session.add(existing)
         else:
             session.add(
@@ -707,6 +744,10 @@ class PaperTradeRepo:
                     last_quote_at=now,
                     opened_at=now,
                     updated_at=now,
+                    plan_stop_price=sp,
+                    plan_stop_pct=spct,
+                    plan_take_price=tp,
+                    plan_thesis=th,
                 )
             )
         await session.flush()

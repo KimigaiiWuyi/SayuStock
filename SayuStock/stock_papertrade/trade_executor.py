@@ -115,6 +115,10 @@ class TradeExecutor(ABC):
         qty: int,
         avg_cost: float,
         last_quote_price: float = 0.0,
+        plan_stop_price: Optional[float] = None,
+        plan_stop_pct: Optional[float] = None,
+        plan_take_price: Optional[float] = None,
+        plan_thesis: Optional[str] = None,
     ) -> int:
         """落持仓（qty=0 时删除记录），返回 position id（无则 0）。"""
         ...
@@ -321,6 +325,10 @@ class PaperTradeExecutor(TradeExecutor):
         qty: int,
         avg_cost: float,
         last_quote_price: float = 0.0,
+        plan_stop_price: Optional[float] = None,
+        plan_stop_pct: Optional[float] = None,
+        plan_take_price: Optional[float] = None,
+        plan_thesis: Optional[str] = None,
     ) -> int:
         p = await db.PaperPositionRepo.upsert(
             account_id,
@@ -331,6 +339,10 @@ class PaperTradeExecutor(TradeExecutor):
             avg_cost=avg_cost,
             last_quote_price=last_quote_price if last_quote_price > 0 else None,
             last_quote_at=_dt.datetime.now() if last_quote_price and last_quote_price > 0 else None,
+            plan_stop_price=plan_stop_price,
+            plan_stop_pct=plan_stop_pct,
+            plan_take_price=plan_take_price,
+            plan_thesis=plan_thesis,
         )
         return p.id if p else 0
 
@@ -394,6 +406,10 @@ class LiveTradeExecutor(TradeExecutor):
         qty: int,
         avg_cost: float,
         last_quote_price: float = 0.0,
+        plan_stop_price: Optional[float] = None,
+        plan_stop_pct: Optional[float] = None,
+        plan_take_price: Optional[float] = None,
+        plan_thesis: Optional[str] = None,
     ) -> int:
         raise NotImplementedError(self._NOT_READY)
 

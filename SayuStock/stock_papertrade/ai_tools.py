@@ -131,6 +131,10 @@ class _PositionItem(TypedDict):
     quote_age_seconds: int | None
     quote_source: str  # "live" | "db" | "cost"
     opened_at: str | None
+    plan_stop_price: float | None
+    plan_stop_pct: float | None
+    plan_take_price: float | None
+    plan_thesis: str | None
 
 
 class _TradeItem(TypedDict):
@@ -587,7 +591,7 @@ async def papertrade_account_query(
 
 
 @ai_tools(
-    covers=["查询模拟盘当前持仓：代码/现价/市值/浮盈"],
+    covers=["查询模拟盘当前持仓：代码/现价/市值/浮盈/入场止损止盈计划"],
     category="common",
     capability_domain="AI模拟盘",
     context_tags=_PAPERTRADE_CTX_TAGS,
@@ -615,6 +619,10 @@ async def papertrade_position_list(
         ``"live"`` = 60s 内新鲜报价
         ``"db"``   = DB 有缓存但超过 max_stale_seconds（默认 60s）
         ``"cost"`` = 从未刷过价，用 avg_cost 兜底
+
+    2026-11-12 新增持仓入场计划字段：``plan_stop_price`` / ``plan_stop_pct`` /
+    ``plan_take_price`` / ``plan_thesis``（买入时随成交写入）。卖出复核先读这里；
+    历史老持仓为空再回查 ``papertrade_trade_list`` / ``papertrade_decision_list``。
 
     Args:
         account_name: 盘名。留空 = 默认盘。
@@ -645,6 +653,10 @@ async def papertrade_position_list(
                 "quote_age_seconds": e["quote_age_seconds"],
                 "quote_source": e["quote_source"],
                 "opened_at": opened_iso,
+                "plan_stop_price": p.plan_stop_price,
+                "plan_stop_pct": p.plan_stop_pct,
+                "plan_take_price": p.plan_take_price,
+                "plan_thesis": p.plan_thesis,
             }
         )
     return json.dumps(items, ensure_ascii=False)
@@ -959,10 +971,8 @@ async def papertrade_decision_insert(
 
     action_lc: str = (action or "").lower().strip()
 
-    # reason 归一化 + 长度上限，避免下游播报挤糊
+    # reason 归一化保留完整推理，下游推群播报由 proactive._clean_reason 截断
     norm_reason: str = "".join(ch if ch.isprintable() else " " for ch in (reason or "")).strip()
-    if len(norm_reason) > 200:
-        norm_reason = norm_reason[:197] + "..."
 
     # indicators：合法 JSON 对象；buy 时强制止损计划字段
     ind_obj: dict[str, Any] = _plan_dict_from_json(indicators)
@@ -1085,8 +1095,8 @@ async def papertrade_trade_insert(
         return denied
 
     side_lc: str = (side or "").lower().strip()
+    snap_obj: dict[str, Any] = _plan_dict_from_json(indicators, snapshot)
     if side_lc in ("buy", "sell"):
-        snap_obj: dict[str, Any] = _plan_dict_from_json(indicators, snapshot)
         gate_msg: str = await _gate_entry(
             acc,
             stock_code=stock_code,
@@ -1098,6 +1108,7 @@ async def papertrade_trade_insert(
         if gate_msg:
             return gate_msg
 
+    snap_json: str = json.dumps(snap_obj, ensure_ascii=False) if snap_obj else (snapshot or "")
     result = await get_executor().record_trade(
         account_id=acc.id,
         stock_code=stock_code,
@@ -1110,7 +1121,7 @@ async def papertrade_trade_insert(
         fee=fee,
         realized_pnl=realized_pnl,
         reason=reason,
-        snapshot=snapshot,
+        snapshot=snap_json,
         decision_id=decision_id,
         mode=mode,
     )

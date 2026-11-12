@@ -456,8 +456,11 @@ PAPERTRADE_DECISION_PROMPT = (
    → 看现金 / 模式 / enabled / **真·total_equity**
    （2026-07-01 起 total_equity = cash + Σposition_value，含持仓市值；不再单
    独报 cash 当总资产）
-1.5 papertrade_position_list → 拿**含现价的持仓列表**（current_price /
-   market_value / unrealized_pnl / quote_source）
+1.5 papertrade_position_list → 拿**含现价与入场计划的持仓列表**（current_price /
+   market_value / unrealized_pnl / quote_source / **plan_stop_price** /
+   **plan_stop_pct** / **plan_take_price** / **plan_thesis**）
+   - 持仓表已持久化记录买入时的结构化止损/止盈计划，回看持仓时**直接读取本工具返回的
+     plan_stop_price / plan_stop_pct 即可**，无需依赖大段 snapshot 倒查！
    - 工具内部已自动刷报价（60s TTL 内存复用 + 东财 push2）；你**不需要**
      再单独调 get_single_stock 拿 f43——既慢又重复。
    - quote_source 字段语义：
@@ -467,19 +470,14 @@ PAPERTRADE_DECISION_PROMPT = (
 
 1.6 **持仓入场计划回看（有持仓时必做 · 卖出一致性）**
    对每只持仓，在评估卖/持之前：
-   a. ``papertrade_trade_list(stock_code=该股, limit=10)`` → 找最近一次 **side=buy**
-      的成交价 / qty / reason / **snapshot** / decision_id；
-   b. ``papertrade_decision_list(stock_code=该股, limit=10)`` → 找对应 **action=buy**
-      （优先匹配 decision_id / 时间最近）的 reason + **indicators** JSON。
-   **token 纪律（方案十）**：snapshot/indicators 是大段 JSON——只在**本轮真要复核
-   卖出的那只票**上取全量；其余持仓的例行回看用
-   ``include_snapshot=False`` / ``include_indicators=False`` 先扫脉络，
-   触发卖出评估后再对单票补一次全量查询。
-   从 indicators（优先）或 buy reason/snapshot 解析入场计划：
-      ``plan_stop_pct`` / ``plan_stop_price`` / ``plan_take_pct`` / ``plan_take_price`` /
-      ``plan_entry`` / ``plan_thesis``（有则用，无则记「未写结构化计划」）。
+   a. **优先直接以 1.5 ``papertrade_position_list`` 返回的 ``plan_stop_price`` /
+      ``plan_stop_pct`` / ``plan_take_price`` / ``plan_thesis`` 为准**；
+   b. 若持仓中上述计划字段均为空（历史老数据），再通过
+      ``papertrade_trade_list(stock_code=该股, limit=10)``（snapshot）或
+      ``papertrade_decision_list(stock_code=该股, limit=10)``（indicators）补查一次；
+   c. 仍无任何计划时才记「未写结构化计划」，由模式默认止损兜底。
    **卖出纪律**：
-   - 若当时写了止损/止盈价或幅度，本轮 **先按该计划核对现价**，再谈技术/事件改判；
+   - 若有止损/止盈价或幅度，本轮 **先按该计划核对现价**，再谈技术/事件改判；
    - 未触发计划止损却因「本轮重新算了一个完全不同的止损位」而卖 = **禁止**
      （除非出现新的硬风控：模式默认止损线、总回撤熔断、T+1/跌停无法成交等）；
    - 若要**收紧/放宽**原计划，reason 必须写清：原计划是什么 → 新证据是什么 →

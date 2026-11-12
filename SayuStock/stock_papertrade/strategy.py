@@ -41,6 +41,7 @@ def _as_finite_float(value: object) -> float | None:
 
 _STOP_PCT_ALIASES: tuple[str, ...] = ("plan_stop_pct", "stop_pct", "stop_loss_pct")
 _STOP_PRICE_ALIASES: tuple[str, ...] = ("plan_stop_price", "stop_price", "stop_loss_price")
+_TAKE_PRICE_ALIASES: tuple[str, ...] = ("plan_take_price", "take_price", "take_profit_price", "take_profit")
 
 
 def parse_llm_json_object(raw: str) -> dict[str, object]:
@@ -84,6 +85,11 @@ def normalize_plan_indicators(indicators: Mapping[str, object]) -> dict[str, obj
         for alias in _STOP_PRICE_ALIASES[1:]:
             if alias in out:
                 out["plan_stop_price"] = out[alias]
+                break
+    if _as_finite_float(out.get("plan_take_price")) is None:
+        for alias in _TAKE_PRICE_ALIASES[1:]:
+            if alias in out:
+                out["plan_take_price"] = out[alias]
                 break
     return out
 
