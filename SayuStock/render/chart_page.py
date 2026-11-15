@@ -88,6 +88,21 @@ class Callout:
 
 
 @dataclass(slots=True)
+class TagBox:
+    x: float
+    y: float
+    w: float
+    h: float
+    anchor_x: float
+    anchor_y: float
+    attach_x: float
+    attach_y: float
+    lines: tuple[str, ...]
+    color: str
+    line_height: float = 15.0
+
+
+@dataclass(slots=True)
 class Legend:
     label: str
     color: str
@@ -110,6 +125,7 @@ class Panel:
     dots: list[Dot] = field(default_factory=list)
     marks: list[Mark] = field(default_factory=list)
     callouts: list[Callout] = field(default_factory=list)
+    boxes: list[TagBox] = field(default_factory=list)
     legend: list[Legend] = field(default_factory=list)
     empty: str = ""
 
@@ -128,15 +144,16 @@ class ChartPage:
     legend: list[Legend] = field(default_factory=list)
     notes: list[str] = field(default_factory=list)
     width: int = WIDTH
+    right_margin: int = 77
 
 
-def plot_bounds(width: int = WIDTH) -> tuple[int, int]:
+def plot_bounds(width: int = WIDTH, right_margin: int = 77) -> tuple[int, int]:
     plot_width = width - 56
-    return plot_width, plot_width - 77
+    return plot_width, plot_width - right_margin
 
 
 def page_html(page: ChartPage) -> str:
-    plot_width, right = plot_bounds(page.width)
+    plot_width, right = plot_bounds(page.width, page.right_margin)
     return render_template(
         "chart_page.html", page=page, width=page.width, plot_width=plot_width, left=LEFT, right=right, top=TOP
     )
@@ -262,7 +279,7 @@ def add_series(
                 break
 
 
-def add_end_labels(panel: Panel, entries: list[Mark], *, gap: float = 20) -> None:
+def add_end_labels(panel: Panel, entries: list[Mark], *, gap: float = 20, right: float = RIGHT) -> None:
     """Distribute labels along the right rail without moving the data points."""
     if not entries:
         return
@@ -276,5 +293,5 @@ def add_end_labels(panel: Panel, entries: list[Mark], *, gap: float = 20) -> Non
     for i in range(len(ys) - 2, -1, -1):
         ys[i] = min(ys[i], ys[i + 1] - separation)
     for entry, y in zip(entries, ys):
-        panel.rules.append(Rule(entry.x + 5, entry.y, RIGHT + 8, y, entry.color, "2 3", 0.5))
-        panel.marks.append(Mark(RIGHT + 12, y + 4, entry.label, entry.color))
+        panel.rules.append(Rule(entry.x + 5, entry.y, right + 8, y, entry.color, "2 3", 0.5))
+        panel.marks.append(Mark(right + 12, y + 4, entry.label, entry.color))

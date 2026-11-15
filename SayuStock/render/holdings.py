@@ -10,7 +10,7 @@ from ..utils.warn_box import Failure, failure_lines
 
 PAD = 24
 SINGLE_WIDTH, DOUBLE_WIDTH = 760, 1360
-MOOD_WIDTH, MOOD_HEIGHT = 792, 269
+MOOD_WIDTH, MOOD_HEIGHT = 792, 250
 
 
 def holdings_html(

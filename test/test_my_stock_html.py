@@ -59,7 +59,7 @@ def test_full_mood_and_four_indexes_in_single_and_double_layout() -> None:
         assert mood is not None
         width, height = (float(x) for x in mood.groups())
         assert width == watchlist_width(saved_count) - 48
-        assert abs(height / width - 269 / 792) < 1e-4
+        assert abs(height / width - 250 / 792) < 1e-4
         assert "证券ETF国泰" in html and "+0.64%" in html and "1.105" in html
         assert all(name in html for name, _ in WATCH_INDEXES)
 

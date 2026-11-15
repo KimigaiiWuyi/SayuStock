@@ -1,82 +1,157 @@
-{% from "cards.html" import quote_cards, section, footer %}
 <!doctype html>
-<html><head><meta charset="utf-8"><style>
-{% include "theme.css" %}
-{% include "cards.css" %}
-.page { width: {{ width }}px; }
-.overview-top { align-items: stretch; gap: 12px; margin-top: 12px; }
-.overview-top.no-flow { align-items: center; }
-.overview-mood { align-self: center; }
-.market-pulse { flex: 1; min-width: 0; gap: 9px; padding: 12px 14px; }
-.market-flow { align-self: center; }
-.turnover { margin-top: 3px; font-size: 24px; color: {{ TEXT }}; }
-.flow-empty { padding: 16px 0; color: {{ TEXT_SOFT }}; }
-.breadth { padding: 12px 15px; }
-.breadth-grid { margin-top: 9px; display: flex; flex-direction: row; gap: 5px; }
-.breadth-col { flex: 1; min-width: 0; align-items: center; }
-.breadth-lane { height: 132px; justify-content: flex-end; align-items: center; width: 100%; }
-.breadth-num { font-size: 14px; margin-bottom: 3px; }
-.breadth-bar { width: 64%; border-radius: 3px 3px 0 0; }
-.breadth-bar.up { background: {{ UP }}; }
-.breadth-bar.down { background: {{ DOWN }}; }
-.breadth-bar.flat { background: {{ FLAT }}; }
-.breadth-label { font-size: 13px; color: {{ TEXT_SOFT }}; margin-top: 7px; }
-.board-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; align-items: start; }
-.board-col { gap: 5px; }
-.board-title { font-size: 15px; padding: 9px 10px; border-radius: 6px; background: {{ GRID }}; }
-.board-rank { min-height: 49px; padding: 5px 8px; border-radius: 6px; background: {{ SURFACE }}; }
-.board-rank.up { background: {{ UP_CARD_END }}; }
-.board-rank.down { background: {{ DOWN_CARD_END }}; }
-.board-row { gap: 6px; }
-.board-name { min-width: 0; flex: 1; font-size: 14px; color: {{ TEXT }}; }
-.board-member { min-width: 0; flex: 1; font-size: 12px; color: {{ TEXT_SOFT }}; }
-.board-number { font-size: 13px; flex-shrink: 0; }
-</style></head><body>
-<main class="page">
-  <header class="row between header">
-    <div class="column"><span class="eyebrow">A 股市场</span><b class="page-title">大盘概览</b></div>
-    <div class="column summary"><span>{{ date }}</span><b>{{ status }}</b></div>
-  </header>
-  <div class="row overview-top{% if not flow %} no-flow{% endif %}">
-    <img class="overview-mood" src="{{ mood }}" width="682" height="231.64" alt="市场情绪表情包">
-    <div class="column panel market-pulse">
-      <div class="row between"><b>两市成交额</b>{% if trade_date %}<span class="muted">交易日 {{ trade_date }}</span>{% endif %}</div>
-      <div class="row between"><b class="turnover number">{{ turnover }}</b><span class="{{ turnover_tone }}">{{ turnover_delta }}</span></div>
-      <b>主力净流入</b>
-      {% if flow %}<img class="market-flow" src="{{ flow }}" width="400" height="219.2" alt="主力净流入分时">
-      {% else %}<span class="flow-empty">暂缺主力资金图</span>{% endif %}
-    </div>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+  width: {{ width }}px;
+  height: {{ height }}px;
+  background: #07091b;
+  font-family: "MiSans", "Twemoji", sans-serif;
+  color: #e9eef7;
+  position: relative;
+  overflow: hidden;
+}
+.header-title { position: absolute; left: 29px; top: 40px; width: 792px; height: 250px; }
+.em-flow { position: absolute; left: 882px; top: 32px; width: 500px; height: 274px; }
+.em-flow-empty {
+  position: absolute; left: 882px; top: 32px; width: 500px; height: 274px;
+  display: flex; align-items: center; justify-content: center;
+  border: 1px dashed rgba(255, 255, 255, 0.14); border-radius: 6px;
+  color: #8b95a8; font-size: 20px;
+}
+.time-box {
+  position: absolute; left: 1395px; top: 62px; width: 260px; height: 167px;
+  background: {{ time_box_bg }}; border-radius: 4px;
+  display: flex; flex-direction: column; justify-content: center; align-items: center;
+}
+.time-weekday { font-size: 36px; color: {{ weekday_color }}; line-height: 42px; }
+.time-main { font-size: 58px; font-weight: bold; color: {{ time_main_color }}; line-height: 64px; }
+.time-date { font-size: 36px; color: {{ date_color }}; line-height: 42px; }
+.vol-label {
+  position: absolute; left: 1385px; top: 244px; width: 280px; text-align: center;
+  font-size: 24px; color: {{ vol_color }}; font-weight: 500; white-space: nowrap;
+}
+.vol-diff {
+  position: absolute; left: 1385px; top: 280px; width: 280px; text-align: center;
+  font-size: 30px; color: {{ diff_color }}; font-weight: bold; white-space: nowrap;
+}
+.bar1 { position: absolute; left: 0; top: 331px; width: 850px; height: 90px; }
+.bar4 { position: absolute; left: 850px; top: 331px; width: 850px; height: 90px; }
+.bar2 { position: absolute; left: 0; top: 875px; width: 850px; height: 90px; }
+.bar3 { position: absolute; left: 850px; top: 875px; width: 850px; height: 90px; }
+.gold-focus-box {
+  position: absolute; left: 16px; top: 428px; width: 407px; height: 144px;
+  border: 3.5px solid #f6b400; border-radius: 8px; pointer-events: none;
+  box-shadow: 0 0 10px rgba(246, 180, 0, 0.4);
+}
+.index-container {
+  position: absolute; left: 20px; top: 432px; width: 810px; height: 432px;
+  display: grid; grid-template-columns: repeat(4, 1fr); grid-template-rows: repeat(3, 1fr); gap: 12px;
+}
+.idx-card {
+  border-radius: 6px; border: 1px solid rgba(255, 255, 255, 0.08);
+  display: flex; flex-direction: column; justify-content: space-between; align-items: center;
+  padding: 6px 6px 5px 6px; overflow: hidden;
+}
+.idx-name {
+  font-size: 15px; font-weight: 600; color: #ffffff; text-align: center; line-height: 18px;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; width: 100%; margin-bottom: 1px;
+}
+.idx-pct { font-size: 28px; font-weight: 800; line-height: 30px; text-align: center; width: 100%; letter-spacing: -0.5px; }
+.idx-chart { height: 32px; width: 100%; margin: 2px 0; }
+.idx-chart svg { width: 100%; height: 100%; display: block; }
+.idx-chart.empty { border-bottom: 1px dashed rgba(255, 255, 255, 0.15); height: 18px; margin: 7px 0; }
+.idx-price { font-size: 19px; font-weight: 600; line-height: 20px; text-align: center; width: 100%; }
+.breadth-container { position: absolute; left: 850px; top: 420px; width: 850px; height: 500px; }
+.breadth-bg { position: absolute; left: 0; top: 0; width: 850px; height: 500px; }
+.breadth-down-box {
+  position: absolute; left: 20px; top: 0; width: 80px; height: 40px; background: rgba(23, 199, 30, 0.6);
+  display: flex; justify-content: center; align-items: center; color: #ffffff; font-size: 24px; font-weight: bold;
+}
+.breadth-up-box {
+  position: absolute; left: 750px; top: 0; width: 80px; height: 40px; background: rgba(187, 26, 26, 0.6);
+  display: flex; justify-content: center; align-items: center; color: #ffffff; font-size: 24px; font-weight: bold;
+}
+.breadth-bar-rect { position: absolute; width: 36px; }
+.breadth-bar-num { position: absolute; width: 60px; text-align: center; color: #ffffff; font-size: 24px; font-weight: bold; }
+.breadth-empty {
+  position: absolute; left: 0; top: 190px; width: 850px; text-align: center;
+  color: #8b95a8; font-size: 24px;
+}
+.board-cell { position: absolute; width: 425px; height: 90px; }
+.board-strip { position: absolute; left: 23px; top: 2px; width: 380px; height: 55px; }
+.board-name {
+  position: absolute; left: 53px; top: 12px; width: 220px; font-size: 30px; color: #ffffff;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-weight: 500;
+}
+.board-pct { position: absolute; right: 41px; top: 12px; font-size: 30px; color: #ffffff; font-weight: 600; }
+.board-lead {
+  position: absolute; left: 53px; top: 60px; width: 220px; font-size: 24px;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-weight: 500;
+}
+.board-lead-pct { position: absolute; right: 41px; top: 60px; font-size: 24px; font-weight: 600; }
+.source-footer { position: absolute; left: 24px; top: 2795px; font-size: 24px; color: rgb(150, 150, 150); }
+.footer-img { position: absolute; left: 425px; top: 2835px; width: 850px; height: 40px; }
+</style>
+</head>
+<body>
+  <img class="header-title" src="{{ mood }}" width="792" height="250" alt="市场情绪">
+  {% if flow %}<img class="em-flow" src="{{ flow }}" width="500" height="274" alt="主力净流入">{% else %}<div class="em-flow-empty">暂缺主力资金图</div>{% endif %}
+  <div class="time-box">
+    <div class="time-weekday">{{ weekday }}</div>
+    <div class="time-main">{{ time_main }}</div>
+    <div class="time-date">{{ date_str }}</div>
   </div>
-  {{ section("主要指数") }}
-  {{ quote_cards(index_cards, 6, true) }}
-  {{ section("涨跌分布") }}
-  <div class="column panel breadth">
-    {% if breadth %}
-    <div class="row between"><span>上涨 {{ up_count }} · 平 {{ flat_count }} · 下跌 {{ down_count }}</span></div>
-    <div class="breadth-grid">
-      {% for bar in breadth %}
-      <div class="column breadth-col">
-        <div class="column breadth-lane"><b class="breadth-num number {{ bar.tone }}">{{ bar.count }}</b><div class="breadth-bar {{ bar.tone }}" style="height:{{ bar.height }}px"></div></div>
-        <span class="breadth-label">{{ bar.name }}</span>
-      </div>
-      {% endfor %}
-    </div>
-    {% else %}<span class="flow-empty">暂缺涨跌分布</span>{% endif %}
-  </div>
-  {{ section("行业与概念", "各榜前 20") }}
-  <div class="board-grid">
-    {% for title, rows in boards %}
-    <div class="column board-col">
-      <b class="board-title">{{ title }}</b>
-      {% for row in rows %}
-      <div class="column board-rank {{ row.tone }}">
-        <div class="row board-row"><b class="board-name">{{ row.name }}</b><b class="number board-number">{{ row.change }}</b></div>
-        {% if row.member %}<div class="row board-row"><span class="board-member">{{ row.member }}</span><span class="number board-number">{{ row.member_change }}</span></div>{% endif %}
-      </div>
-      {% else %}<span class="flow-empty">暂无数据</span>{% endfor %}
+  <div class="vol-label">{{ vol_label }}</div>
+  <div class="vol-diff">{{ turnover_delta }}</div>
+
+  <img class="bar1" src="{{ bar1 }}" width="850" height="90" alt="主要指数">
+  <img class="bar4" src="{{ bar4 }}" width="850" height="90" alt="涨跌分布">
+  <div class="gold-focus-box"></div>
+  <div class="index-container">
+    {% for card in index_cards %}
+    <div class="idx-card" style="background: {{ card.bg }}">
+      <div class="idx-name">{{ card.name }}</div>
+      <div class="idx-pct" style="color: {{ card.pct_color }}">{{ card.pct }}</div>
+      {% if card.spark %}<div class="idx-chart">{{ card.spark | safe }}</div>{% else %}<div class="idx-chart empty"></div>{% endif %}
+      <div class="idx-price" style="color: {{ card.price_color }}">{{ card.price }}</div>
     </div>
     {% endfor %}
   </div>
-  {{ footer(source, brand) }}
-</main>
-</body></html>
+
+  <div class="breadth-container">
+    <img class="breadth-bg" src="{{ div_bg }}" width="850" height="500" alt="涨跌分布底图">
+    <div class="breadth-down-box">{{ down_count }}</div>
+    <div class="breadth-up-box">{{ up_count }}</div>
+    {% if breadth_available %}
+      {% for bar in breadth %}
+      <div class="breadth-bar-rect" style="left: {{ bar.left }}px; top: {{ bar.top }}px; height: {{ bar.pixel_height }}px; background: {{ bar.color }}"></div>
+      <div class="breadth-bar-num" style="left: {{ bar.left - 12 }}px; top: {{ bar.num_top }}px">{{ bar.count }}</div>
+      {% endfor %}
+    {% else %}
+      <div class="breadth-empty">暂缺涨跌分布</div>
+    {% endif %}
+  </div>
+
+  <img class="bar2" src="{{ bar2 }}" width="850" height="90" alt="行业涨跌榜">
+  <img class="bar3" src="{{ bar3 }}" width="850" height="90" alt="概念涨跌榜">
+  {% for col in board_columns %}
+    {% for row in col.rows %}
+    <div class="board-cell" style="left: {{ col.left }}px; top: {{ row.top }}px">
+      <div class="board-strip" style="background: {{ row.strip_bg }}"></div>
+      <div class="board-name">{{ row.name }}</div>
+      <div class="board-pct">{{ row.change }}</div>
+      {% if row.member %}
+      <div class="board-lead" style="color: {{ row.lead_color }}">{{ row.member }}</div>
+      <div class="board-lead-pct" style="color: {{ row.lead_color }}">{{ row.member_change }}</div>
+      {% endif %}
+    </div>
+    {% endfor %}
+  {% endfor %}
+
+  <div class="source-footer">{{ source }}</div>
+  <img class="footer-img" src="{{ brand }}" width="850" height="40" alt="SayuStock">
+</body>
+</html>

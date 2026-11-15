@@ -59,6 +59,11 @@
         {% for s in panel.series %}<path d="{{ s.path }}" fill="none" stroke="{{ s.color }}" stroke-width="{{ s.width }}" {% if s.dash %}stroke-dasharray="{{ s.dash }}"{% endif %} opacity="{{ s.opacity }}" stroke-linejoin="round" stroke-linecap="round"/>{% endfor %}
         {% for dot in panel.dots %}<circle cx="{{ dot.x }}" cy="{{ dot.y }}" r="{{ dot.radius }}" fill="{{ dot.color }}" stroke="{{ PAGE }}" stroke-width="1"/>{% endfor %}
         {% for mark in panel.marks %}<text x="{{ mark.x }}" y="{{ mark.y }}" fill="{{ mark.color }}" text-anchor="{{ mark.anchor }}" font-size="12" font-weight="650">{{ mark.label }}</text>{% endfor %}
+        {% for box in panel.boxes %}
+        <line x1="{{ box.anchor_x }}" y1="{{ box.anchor_y }}" x2="{{ box.attach_x }}" y2="{{ box.attach_y }}" stroke="{{ box.color }}" stroke-dasharray="3 3" stroke-width="1" opacity="0.72"/>
+        <rect x="{{ box.x }}" y="{{ box.y }}" width="{{ box.w }}" height="{{ box.h }}" rx="4" fill="rgba(11, 14, 19, 0.86)" stroke="{{ box.color }}" stroke-width="1" stroke-opacity="0.75"/>
+        {% for line in box.lines %}<text x="{{ box.x + 6 }}" y="{{ box.y + 14 + loop.index0 * box.line_height }}" fill="{{ box.color if loop.first else '#e6edf3' }}" font-size="11" font-weight="{{ '700' if loop.first else '600' }}">{{ line }}</text>{% endfor %}
+        {% endfor %}
       </svg>
       {% for tick in panel.axis %}<span class="chart-label" style="left: 4px; top: {{ tick.pos - 7 }}px; width: {{ left - 11 }}px; text-align: right">{{ tick.label }}</span>{% endfor %}
       {% for tick in panel.right_axis %}<span class="chart-label" style="left: {{ right + 8 }}px; top: {{ tick.pos - 7 }}px">{{ tick.label }}</span>{% endfor %}

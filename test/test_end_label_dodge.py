@@ -51,7 +51,9 @@ def test_compare_keeps_short_rail_labels_and_full_interval_legend() -> None:
     page = prepare_compare([_series("沪深300ETF", (100, 120, 90, 110))])
     assert isinstance(page, ChartPage)
     panel = page.panels[0]
-    assert [mark.label for mark in panel.marks] == ["+10.00%"]
+    assert [mark.label for mark in panel.marks] == ["沪深300ETF +10.00%"]
+    assert len(panel.boxes) >= 2
+    assert any("涨幅 +20.00%" in "\n".join(box.lines) for box in panel.boxes)
     (item,) = page.legend
     assert item.label == "沪深300ETF"
     assert item.value == "+10.00%"

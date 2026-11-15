@@ -8,9 +8,8 @@ from dataclasses import dataclass
 from .constant import bond, whsc, crypto, i_code, commodity
 from .time_range import now_bjt, is_market_active_now, get_sessions_for_code, has_session_started_today
 from .market.display import DisplayItem, source_footer
-from ..render.palette import UP, BLUE, PINK, TEAL, AMBER, MUTED, ORANGE, VIOLET, YELLOW
 from ..render.templates import render_template
-from ..render.card_widgets import tone, footer_uri
+from ..render.card_widgets import footer_uri
 
 CSS_WIDTH = 1000
 SPARK_W = 168.0
@@ -65,12 +64,13 @@ _SHORT_NAME: dict[str, str] = {
 }
 
 _SEC_COLOR = {
-    "国际市场": BLUE,
-    "大宗商品": VIOLET,
-    "债券市场": AMBER,
-    "外汇市场": TEAL,
-    "加密货币": ORANGE,
+    "国际市场": "rgb(116,41,48)",
+    "大宗商品": "rgb(70,21,77)",
+    "债券市场": "rgb(76,63,19)",
+    "外汇市场": "rgb(22,73,76)",
+    "加密货币": "rgb(122,64,42)",
 }
+_SEC_COLOR_FALLBACK = "rgb(75,85,104)"
 _AXIS_START_MIN = 8 * 60
 _AXIS_SPAN_MIN = 24 * 60
 _TRACK_CODE: dict[str, str] = {
@@ -83,7 +83,7 @@ _TRACK_CODE: dict[str, str] = {
     "加密": "BTC",
 }
 _FALLBACK_EMOJI = "🌐"
-_STALE_PRICE = MUTED
+_STALE_PRICE = "#9aa7bd"
 
 _CODE_BY_NAME: dict[str, str] = {}
 for _table in (i_code, commodity, bond, whsc, crypto):
@@ -124,6 +124,22 @@ def format_price(price: float) -> str:
 def format_change(change_pct: float) -> str:
     sign = "+" if change_pct >= 0 else ""
     return f"{sign}{change_pct:.2f}%"
+
+
+def _tile_colors(change_pct: float) -> tuple[str, str]:
+    """还原原版热力底色（#07091b 叠半透红/绿）与高对比涨红跌绿文字。"""
+    intensity = min(abs(change_pct), 4.0) / 4.0
+    base = 26
+    peak = int(base + intensity * (170 - base))
+    alpha = 150 / 255
+    br, bg0, bb = 7, 9, 27
+
+    def _blend(channel: int, over: int) -> int:
+        return int(channel + alpha * (over - channel))
+
+    if change_pct >= 0:
+        return f"rgb({_blend(br, peak)},{_blend(bg0, base)},{_blend(bb, base)})", "#ce221e"
+    return f"rgb({_blend(br, base)},{_blend(bg0, peak)},{_blend(bb, base)})", "#24ce1e"
 
 
 def em_secid(code: str) -> str:
@@ -189,22 +205,26 @@ def _now_pct(now: datetime) -> float:
 
 
 _TRACK_COLOR = {
-    "A股": UP,
-    "港股": PINK,
-    "日股": ORANGE,
-    "韩股": TEAL,
-    "欧股": VIOLET,
-    "美股": BLUE,
-    "加密": YELLOW,
+    "A股": "#ef4444",
+    "港股": "#d946ef",
+    "日股": "#fb923c",
+    "韩股": "#38bdf8",
+    "欧股": "#a78bfa",
+    "美股": "#60a5fa",
+    "加密": "#fbbf24",
 }
 
 
 @dataclass(frozen=True, slots=True)
 class WeatherTile:
     label: str
+    long_name: bool
     emoji: str
     price: str
+    price_color: str
     change: str
+    change_color: str
+    bg: str
     tone: str
     stale: bool
     spark: str
@@ -245,7 +265,7 @@ def _session_tracks(now: datetime) -> list[SessionTrack]:
             elif right < left:
                 bars.extend((SessionBar(left, 100.0 - left), SessionBar(0.0, right)))
             else:
-                bars.append(SessionBar(left, right - left))
+                bars.append(SessionBar(left, max(0.8, right - left)))
         active = is_market_active_now(code, now_bjt=now) and has_session_started_today(code, now_bjt=now)
         rows.append(SessionTrack(name, _TRACK_COLOR[name], active, bars))
     return rows
@@ -260,39 +280,51 @@ def build_all_weather_html(
 ) -> str:
     clock = now or now_bjt()
     tick_labels = ("08:00", "09:30", "12:00", "15:00", "16:00", "21:30", "00:00", "04:00", "08:00")
-    ticks = [
-        (label if i != len(tick_labels) - 1 else "次日 08:00", _hhmm_pct(label, close=i == len(tick_labels) - 1))
-        for i, label in enumerate(tick_labels)
-    ]
+    ticks = [(label, 93.0 if i == len(tick_labels) - 1 else _hhmm_pct(label)) for i, label in enumerate(tick_labels)]
+    vlines = [_hhmm_pct(label, close=i == len(tick_labels) - 1) for i, label in enumerate(tick_labels)]
     view: list[WeatherSection] = []
     used = list(sources)
     for title, items in sections:
         if not items:
             continue
         used.extend(item.provider for item in items)
-        tiles = [
-            WeatherTile(
-                display_label(item.name),
-                resolve_emoji(item.name),
-                format_price(item.price) + ("%" if "收益率" in item.name else ""),
-                format_change(item.change_pct),
-                tone(item.change_pct),
-                is_stale_quote(item, clock),
-                _spark_for(item, sparklines),
+        tiles: list[WeatherTile] = []
+        for item in items:
+            label = display_label(item.name)
+            stale = is_stale_quote(item, clock)
+            bg, fg = _tile_colors(item.change_pct)
+            tiles.append(
+                WeatherTile(
+                    label=label,
+                    long_name=sum(1.0 if ord(ch) > 127 else 0.6 for ch in label) >= 5.8,
+                    emoji=resolve_emoji(item.name),
+                    price=format_price(item.price) + ("%" if "收益率" in item.name else ""),
+                    price_color=_STALE_PRICE if stale else fg,
+                    change=format_change(item.change_pct),
+                    change_color=fg,
+                    bg=bg,
+                    tone="up" if item.change_pct >= 0 else "down",
+                    stale=stale,
+                    spark=_spark_for(item, sparklines),
+                )
             )
-            for item in items
-        ]
         view.append(
             WeatherSection(
-                title, _SEC_COLOR[title] if title in _SEC_COLOR else MUTED, tiles, any(t.spark for t in tiles)
+                title,
+                _SEC_COLOR[title] if title in _SEC_COLOR else _SEC_COLOR_FALLBACK,
+                tiles,
+                any(t.spark for t in tiles),
             )
         )
     return render_template(
         "all_weather.html",
         width=CSS_WIDTH,
+        spark_w=int(SPARK_W),
+        spark_h=int(SPARK_H),
         stamp=clock.strftime("%Y-%m-%d %H:%M"),
         clock=clock.strftime("%H:%M"),
         now_left=_now_pct(clock),
+        vlines=vlines,
         ticks=ticks,
         tracks=_session_tracks(clock),
         sections=view,
