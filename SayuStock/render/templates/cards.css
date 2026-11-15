@@ -9,15 +9,11 @@ body { margin: 0; }
 .summary b { margin-top: 2px; font-size: 26px; }
 .card-grid { display: grid; gap: 10px; }
 .card {
-  min-width: 0; display: flex; flex-direction: column; gap: 4px; padding: 10px 13px 11px 15px;
+  min-width: 0; display: flex; flex-direction: column; gap: 4px; padding: 10px 14px 11px 14px;
   position: relative; border-radius: 8px; background: {{ SURFACE }}; border: 1px solid {{ BORDER }};
 }
 .card.up { background: linear-gradient(120deg, {{ UP_CARD }}, {{ UP_CARD_END }}); }
 .card.down { background: linear-gradient(120deg, {{ DOWN_CARD }}, {{ DOWN_CARD_END }}); }
-.card-accent { position: absolute; top: 8px; bottom: 8px; left: 0; width: 3px; border-radius: 2px; }
-.up .card-accent { background: {{ UP }}; }
-.down .card-accent { background: {{ DOWN }}; }
-.flat .card-accent { background: {{ DIM }}; }
 .card-name { color: {{ TEXT_SOFT }}; font-size: 14px; font-weight: 640; }
 .card-change { align-self: flex-start; font-size: 14px; font-weight: 700; }
 .card-price { color: {{ WHITE }}; font-size: 21px; font-weight: 730; }

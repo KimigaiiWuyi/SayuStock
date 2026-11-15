@@ -19,7 +19,7 @@
     {% if summary %}<div class="column summary"><span>平均涨跌</span><b class="number {{ summary_tone }}">{{ summary }}</b></div>{% endif %}
   </header>
   <img class="mood" src="{{ mood }}" width="{{ mood_width }}" height="{{ mood_height }}" alt="行情表情包">
-  {% if cards %}{{ quote_cards(cards, 4) }}{% endif %}
+  {% if cards %}{{ quote_cards(cards, 4, sparklines=card_sparklines) }}{% endif %}
   {% if warning_lines %}
   <div class="column warn"><b>{{ warning_title }}</b>{% for line in warning_lines %}<span>{{ line }}</span>{% endfor %}</div>
   {% endif %}

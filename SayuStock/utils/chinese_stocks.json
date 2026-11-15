@@ -2545,7 +2545,7 @@
   },
   "688712": {
     "name": "北芯生命",
-    "industry_l1": "医疗器械",
+    "industry_l1": "医药生物",
     "industry_l2": "医疗器械",
     "industry_l3": "医疗设备"
   },
@@ -4543,7 +4543,7 @@
   },
   "688256": {
     "name": "寒武纪",
-    "industry_l1": "半导体",
+    "industry_l1": "电子",
     "industry_l2": "半导体",
     "industry_l3": "数字芯片设计"
   },
@@ -9973,7 +9973,7 @@
   },
   "603061": {
     "name": "金海通",
-    "industry_l1": "半导体",
+    "industry_l1": "电子",
     "industry_l2": "半导体",
     "industry_l3": "半导体设备"
   },

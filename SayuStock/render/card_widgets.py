@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from collections.abc import Sequence
 
 from . import charts
-from .palette import UP, DOWN, FLAT, rgba
+from .palette import UP, DOWN, FLAT, PAGE, mix, rgba
 from ..utils.utils import number_to_chinese
 from ..utils.render_data import _session_rows_from_intraday
 from ..utils.market.models import Quote, IntradaySeries
@@ -74,6 +74,18 @@ def detail_text(code: str, turnover: float | None, amount: float | None) -> str:
     return " · ".join(parts)
 
 
+def heat_card_bg(change_pct: float | None, *, angle: int = 105) -> str:
+    """根据涨跌幅绝对值混合深浅渐变底色：波动越大，红/绿底色越浓郁。"""
+    if change_pct is None or change_pct == 0:
+        return ""
+    color = UP if change_pct > 0 else DOWN
+    ratio = min(abs(change_pct), 8.0) / 8.0
+    strength = 0.55 * ratio + 0.45 * math.sqrt(ratio)
+    start = mix(color, PAGE, 0.08 + strength * 0.67)
+    end = mix(color, PAGE, 0.03 + strength * 0.29)
+    return f"linear-gradient({angle}deg, {start}, {end})"
+
+
 @dataclass(frozen=True, slots=True)
 class Card:
     name: str
@@ -81,6 +93,7 @@ class Card:
     change: str = ""
     tone: str = "flat"
     spark: str = ""
+    bg: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -95,6 +108,7 @@ class QuoteRow:
     spark: str = ""
     weight: str = ""
     reason: str = ""
+    bg: str = ""
 
 
 def watch_quote_row(quote: Quote, code: str, spark: str = "") -> QuoteRow:
@@ -108,6 +122,7 @@ def watch_quote_row(quote: Quote, code: str, spark: str = "") -> QuoteRow:
         move="" if move is None else _quote_number(move, signed=True),
         market=quote.symbol.sec_type,
         spark=spark,
+        bg=heat_card_bg(quote.change_pct, angle=105),
     )
 
 
@@ -117,13 +132,27 @@ def row_spark(sparks: dict[str, str] | None, *keys: str) -> str:
     return ""
 
 
-def quote_cards(items: Sequence[tuple[str, Quote | None]]) -> list[Card]:
-    return [
-        Card(name, price_text(q.price), signed_pct(q.change_pct), tone(q.change_pct))
-        if q is not None
-        else Card(name, "暂无行情")
-        for name, q in items
-    ]
+def quote_cards(
+    items: Sequence[tuple[str, Quote | None]],
+    sparklines: Sequence[str] | None = None,
+) -> list[Card]:
+    cards: list[Card] = []
+    for index, (name, q) in enumerate(items):
+        spark = sparklines[index] if sparklines is not None and index < len(sparklines) else ""
+        if q is not None:
+            cards.append(
+                Card(
+                    name,
+                    price_text(q.price),
+                    signed_pct(q.change_pct),
+                    tone(q.change_pct),
+                    spark,
+                    bg=heat_card_bg(q.change_pct, angle=120),
+                )
+            )
+        else:
+            cards.append(Card(name, "暂无行情", spark=spark))
+    return cards
 
 
 def _spark_prices(series: IntradaySeries) -> list[float | None]:

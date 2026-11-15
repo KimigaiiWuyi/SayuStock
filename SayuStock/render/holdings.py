@@ -43,6 +43,7 @@ def holdings_html(
         mood_width=mood_width,
         mood_height=round(mood_width * MOOD_HEIGHT / MOOD_WIDTH, 2),
         cards=cards,
+        card_sparklines=any(card.spark for card in cards),
         columns=(rows[:split], rows[split:]) if two_columns else (rows,),
         empty=not rows,
         section_title=section_title,

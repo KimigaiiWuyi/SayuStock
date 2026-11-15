@@ -75,7 +75,39 @@ def test_source_sits_above_footer_and_sparkline_is_optional() -> None:
         sources=("eastmoney", "sina", "tencent"),
     )
     assert 'class="spark"' in html and "<svg" in html
+    assert 'class="card-spark"' not in html
+    assert 'class="card-accent"' not in html
     assert html.index("数据来源：东方财富、新浪财经、腾讯财经") < html.index('class="footer-brand"')
+
+
+def test_index_cards_render_sparklines_without_accent_bar() -> None:
+    q = _quote("512880", "证券ETF国泰", 1.105, 0.64)
+    index_quote = _quote("000001", "上证指数", 3930.12, -0.3)
+    svg = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 160 32"></svg>'
+    html = build_my_stock_html(
+        quotes=[(q, "512880")],
+        index_quotes=[index_quote, index_quote, None, None],
+        saved_count=1,
+        index_sparklines=[svg, svg, "", ""],
+    )
+    assert 'class="card-accent"' not in html
+    assert html.count('class="card-spark"') == 4
+    assert html.count(svg) == 2
+
+
+def test_background_depth_scales_with_change_magnitude() -> None:
+    mild = _quote("600519", "贵州茅台", 1400.0, 0.4)
+    strong = _quote("300750", "宁德时代", 250.0, 8.5)
+    flat = _quote("512880", "证券ETF国泰", 1.1, 0.0)
+    html = build_my_stock_html(
+        quotes=[(mild, "600519"), (strong, "300750"), (flat, "512880")],
+        index_quotes=[mild, None, None, None],
+        saved_count=3,
+    )
+    row_bg = re.findall(r'class="row bar [^"]*"(?: style="background: ([^"]+)")?', html)
+    assert len(row_bg) == 3
+    assert row_bg[0] and row_bg[1] and row_bg[0] != row_bg[1]
+    assert row_bg[2] == ""
 
 
 def test_failed_stocks_render_warning_box_not_silent() -> None:

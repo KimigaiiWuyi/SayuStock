@@ -18,6 +18,8 @@ WATCH_INDEXES = (
 )
 SPARK_W = 130.0
 SPARK_H = 40.0
+INDEX_SPARK_W = 160.0
+INDEX_SPARK_H = 32.0
 TWO_COLUMNS_FROM = 18
 
 
@@ -36,6 +38,7 @@ def build_my_stock_html(
     index_quotes: Sequence[Quote | None],
     saved_count: int,
     sparklines: dict[str, str] | None = None,
+    index_sparklines: Sequence[str] | None = None,
     sources: Sequence[str | None] = (),
     failures: Sequence[Failure] = (),
 ) -> str:
@@ -54,7 +57,7 @@ def build_my_stock_html(
         subtitle=subtitle,
         average=average,
         title_num=mood_number(average),
-        cards=quote_cards(indexes),
+        cards=quote_cards(indexes, index_sparklines),
         rows=[watch_quote_row(q, code, row_spark(sparklines, code, q.symbol.code)) for q, code in quotes],
         section_title="自选股",
         section_note="按自选顺序排列",

@@ -10,6 +10,7 @@ from .chart_page import (
     TOP,
     LEFT,
     RIGHT,
+    WIDTH,
     Dot,
     Fill,
     Mark,
@@ -17,6 +18,7 @@ from .chart_page import (
     Tick,
     Panel,
     Legend,
+    TextSpan,
     ChartPage,
     Rectangle,
     plot_x,
@@ -38,6 +40,8 @@ from ..utils.market.display import source_footer
 
 LINE_HEIGHT = 400
 MONEY_HEIGHT = 168
+MULTI_RIGHT_MARGIN = 197
+MULTI_WIDTH = WIDTH + (MULTI_RIGHT_MARGIN - 77)
 
 
 def _timeline(xs: list[float], dates: list[datetime], positions: list[int], labels: list[str]) -> list[Tick]:
@@ -116,6 +120,14 @@ def _money_bars(
             previous[i] += amount
 
 
+def _zero_split_backdrop(panel: Panel, baseline: float, right: float = RIGHT) -> None:
+    mid = max(float(TOP), min(float(panel.bottom), baseline))
+    if mid > TOP:
+        panel.backdrop.append(Rectangle(LEFT, TOP, right - LEFT, mid - TOP, UP, 0.08))
+    if panel.bottom > mid:
+        panel.backdrop.append(Rectangle(LEFT, mid, right - LEFT, panel.bottom - mid, DOWN, 0.08))
+
+
 def _last_stamp(series: IntradaySeries) -> str:
     stamp = max((point.ts for point in series.points), default=None)
     return stamp.strftime("%Y-%m-%d %H:%M") if stamp is not None else ""
@@ -140,7 +152,9 @@ def prepare_single_intraday(series: IntradaySeries) -> ChartPage | str:
     price.right_axis = [
         Tick(tick.pos, number_text(data.open_price * (1 + float(tick.label[:-1]) / 100), digits)) for tick in price.axis
     ]
-    price.rules.append(Rule(LEFT, scale(0), RIGHT, scale(0)))
+    baseline = scale(0)
+    _zero_split_backdrop(price, baseline)
+    price.rules.append(Rule(LEFT, baseline, RIGHT, baseline))
     for panel in (price, money):
         _day_rules(panel, xs, data.day_starts)
     _intraday_curve(price, dates, xs, values, scale, TEXT, area=True)
@@ -221,7 +235,9 @@ def prepare_multi_intraday(series_list: list[IntradaySeries]) -> ChartPage | str
     price = Panel("涨跌幅", LINE_HEIGHT, [])
     money = Panel("成交额 · 分标的堆叠", MONEY_HEIGHT, [], _timeline(xs, dates, tick_positions, tick_labels))
     scale = panel_scale(price, data.y_axis_min, data.y_axis_max, lambda value: f"{value:g}%")
-    price.rules.append(Rule(LEFT, scale(0), RIGHT, scale(0)))
+    baseline = scale(0)
+    _zero_split_backdrop(price, baseline)
+    price.rules.append(Rule(LEFT, baseline, RIGHT, baseline))
     for panel in (price, money):
         _day_rules(panel, xs, starts)
     legend: list[Legend] = []
@@ -233,11 +249,23 @@ def prepare_multi_intraday(series_list: list[IntradaySeries]) -> ChartPage | str
         if last is None:
             continue
         pos, change = last
-        entries.append(Mark(xs[pos], scale(change), percent_text(change), color))
+        pct_str = percent_text(change)
+        entries.append(
+            Mark(
+                xs[pos],
+                scale(change),
+                f"{item.name} {pct_str}",
+                color,
+                spans=(
+                    TextSpan(item.name, color, bold=True),
+                    TextSpan(f" {pct_str}", _change_color(change), bold=True),
+                ),
+            )
+        )
         detail = f"基准 {number_text(item.baseline, 3)} → {number_text(px[pos], 3)}"
         if ndays > 1:
             detail += f" · 今日 {percent_text(item.today_change)}"
-        legend.append(Legend(item.name, color, percent_text(change), detail))
+        legend.append(Legend(item.name, color, percent_text(change), detail, value_color=_change_color(change)))
         if item.source is not None:
             providers.append(item.source.provider)
             if item.source.quote is not None:
@@ -255,4 +283,6 @@ def prepare_multi_intraday(series_list: list[IntradaySeries]) -> ChartPage | str
         [price, money],
         source_footer(*providers),
         legend,
+        width=MULTI_WIDTH,
+        right_margin=MULTI_RIGHT_MARGIN,
     )

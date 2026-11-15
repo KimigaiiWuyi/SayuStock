@@ -7,7 +7,17 @@ from dataclasses import dataclass
 from .market import DisplayItem
 from .market.display import source_footer
 from ..render.holdings import SINGLE_WIDTH, holdings_html
-from ..render.card_widgets import Card, QuoteRow, tone, row_spark, price_text, signed_pct, detail_text, mood_number
+from ..render.card_widgets import (
+    Card,
+    QuoteRow,
+    tone,
+    row_spark,
+    price_text,
+    signed_pct,
+    detail_text,
+    mood_number,
+    heat_card_bg,
+)
 
 PAGE_W = SINGLE_WIDTH
 SPARK_W = 130.0
@@ -47,6 +57,7 @@ def _row(item: FundHoldingRow, sparklines: dict[str, str] | None) -> QuoteRow:
         tone=tone(item.change_pct),
         spark=row_spark(sparklines, item.code, item.name),
         weight=weight,
+        bg=heat_card_bg(item.change_pct, angle=105),
     )
 
 
@@ -69,7 +80,16 @@ def build_fund_holdings_html(
         subtitle=subtitle,
         average=average,
         title_num=mood_number(average),
-        cards=[Card(i.name, price_text(i.price), signed_pct(i.change_pct), tone(i.change_pct)) for i in index_items],
+        cards=[
+            Card(
+                i.name,
+                price_text(i.price),
+                signed_pct(i.change_pct),
+                tone(i.change_pct),
+                bg=heat_card_bg(i.change_pct, angle=120),
+            )
+            for i in index_items
+        ],
         rows=[_row(row, sparklines) for row in rows],
         section_title="重仓股",
         section_note="当日分时 · 基金持仓权重 · 涨跌幅",

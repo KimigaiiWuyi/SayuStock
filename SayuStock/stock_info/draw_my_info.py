@@ -13,6 +13,8 @@ from ..render.card_widgets import watch_sparkline
 from ..utils.my_stock_html import (
     SPARK_H,
     SPARK_W,
+    INDEX_SPARK_H,
+    INDEX_SPARK_W,
     WATCH_INDEXES,
     watchlist_width,
     watchlist_average,
@@ -25,6 +27,25 @@ from ..utils.database.models import SsBind
 async def _watch_index_quotes(market: MarketDataPort) -> list[Quote | None]:
     results = await market.quotes([code for _, code in WATCH_INDEXES])
     return [None if is_market_error(result) else result for result in results]
+
+
+async def _watch_index_sparks(
+    market: MarketDataPort,
+    index_quotes: list[Quote | None],
+) -> tuple[list[str], list[str | None]]:
+    async def fetch(code: str, quote: Quote | None) -> tuple[str, str | None]:
+        if quote is None:
+            return "", None
+        series = await market.intraday(code)
+        if is_market_error(series):
+            return "", None
+        spark = watch_sparkline(replace(series, quote=quote), quote, width=INDEX_SPARK_W, height=INDEX_SPARK_H)
+        return spark, series.provider if spark else None
+
+    pairs = await asyncio.gather(
+        *(fetch(code, quote) for (_, code), quote in zip(WATCH_INDEXES, index_quotes, strict=True))
+    )
+    return [spark for spark, _ in pairs], [provider for _, provider in pairs]
 
 
 async def draw_my_stock_img(ev: Event) -> str | bytes:
@@ -52,11 +73,15 @@ async def draw_my_stock_img(ev: Event) -> str | bytes:
         spark = watch_sparkline(replace(series, quote=q), q, width=SPARK_W, height=SPARK_H)
         return q, spark, series.provider if spark else None
 
+    (index_sparks, index_sources), stock_results = await asyncio.gather(
+        _watch_index_sparks(market, index_quotes),
+        asyncio.gather(*(load(code) for code in uid)),
+    )
     quotes: list[tuple[Quote, str]] = []
     failures: list[Failure] = []
     sparks: dict[str, str] = {}
-    sources: list[str | None] = []
-    for code, result in zip(uid, await asyncio.gather(*(load(code) for code in uid)), strict=True):
+    sources: list[str | None] = [*index_sources]
+    for code, result in zip(uid, stock_results, strict=True):
         if isinstance(result, Failure):
             failures.append(result)
             continue
@@ -75,6 +100,7 @@ async def draw_my_stock_img(ev: Event) -> str | bytes:
         index_quotes=index_quotes,
         saved_count=saved_count,
         sparklines=sparks,
+        index_sparklines=index_sparks,
         sources=sources,
         failures=failures,
     )

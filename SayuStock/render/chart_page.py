@@ -72,12 +72,20 @@ class Dot:
 
 
 @dataclass(slots=True)
+class TextSpan:
+    text: str
+    color: str = ""
+    bold: bool = False
+
+
+@dataclass(slots=True)
 class Mark:
     x: float
     y: float
     label: str
     color: str
     anchor: str = "start"
+    spans: tuple[TextSpan, ...] = ()
 
 
 @dataclass(slots=True)
@@ -100,6 +108,7 @@ class TagBox:
     lines: tuple[str, ...]
     color: str
     line_height: float = 15.0
+    styled_lines: tuple[tuple[TextSpan, ...], ...] = ()
 
 
 @dataclass(slots=True)
@@ -108,6 +117,8 @@ class Legend:
     color: str
     value: str = ""
     detail: str = ""
+    value_color: str = ""
+    detail_lines: tuple[tuple[TextSpan, ...], ...] = ()
 
 
 @dataclass(slots=True)
@@ -185,12 +196,12 @@ def timestamps(column: pd.Series) -> list[datetime]:
     return [value.to_pydatetime() for value in column if isinstance(value, pd.Timestamp)]
 
 
-def bounds(values: Sequence[float | None], *, minimum: float = 0.01) -> tuple[float, float]:
+def bounds(values: Sequence[float | None], *, minimum: float = 0.01, pad_ratio: float = 0.09) -> tuple[float, float]:
     actual = [value for value in values if value is not None]
     if not actual:
         return -minimum, minimum
     lo, hi = min(actual), max(actual)
-    pad = max((hi - lo) * 0.09, minimum)
+    pad = max((hi - lo) * pad_ratio, minimum)
     return lo - pad, hi + pad
 
 
@@ -294,4 +305,4 @@ def add_end_labels(panel: Panel, entries: list[Mark], *, gap: float = 20, right:
         ys[i] = min(ys[i], ys[i + 1] - separation)
     for entry, y in zip(entries, ys):
         panel.rules.append(Rule(entry.x + 5, entry.y, right + 8, y, entry.color, "2 3", 0.5))
-        panel.marks.append(Mark(right + 12, y + 4, entry.label, entry.color))
+        panel.marks.append(Mark(right + 12, y + 4, entry.label, entry.color, entry.anchor, entry.spans))

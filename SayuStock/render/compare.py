@@ -7,7 +7,7 @@ import pandas as pd
 
 from ..utils import indicators as ind
 from .charts import Scale
-from .palette import UP, DOWN, SERIES
+from .palette import UP, DOWN, TEXT, MUTED, SERIES, TEXT_SOFT
 from .chart_page import (
     TOP,
     LEFT,
@@ -17,6 +17,7 @@ from .chart_page import (
     Panel,
     Legend,
     TagBox,
+    TextSpan,
     ChartPage,
     Rectangle,
     bounds,
@@ -37,8 +38,8 @@ from ..utils.render_data import build_compare_render_data
 from ..utils.market.models import KlineSeries
 from ..utils.market.display import source_footer
 
-COMPARE_WIDTH = 1440
-COMPARE_RIGHT_MARGIN = 195
+COMPARE_WIDTH = 1680
+COMPARE_RIGHT_MARGIN = 190
 _, COMPARE_RIGHT = plot_bounds(COMPARE_WIDTH, COMPARE_RIGHT_MARGIN)
 
 
@@ -58,6 +59,7 @@ class _BoxCandidate:
     lines: tuple[str, ...]
     color: str
     above: bool
+    styled_lines: tuple[tuple[TextSpan, ...], ...] = ()
 
 
 def _trace(series: KlineSeries) -> Trace | None:
@@ -132,8 +134,25 @@ def _place_tag_boxes(panel: Panel, candidates: list[_BoxCandidate], right: int) 
         attach_x = max(bx, min(bx + w, item.anchor_x))
         attach_y = max(by, min(by + h, item.anchor_y))
         panel.boxes.append(
-            TagBox(bx, by, w, h, item.anchor_x, item.anchor_y, attach_x, attach_y, item.lines, item.color, line_h)
+            TagBox(
+                bx,
+                by,
+                w,
+                h,
+                item.anchor_x,
+                item.anchor_y,
+                attach_x,
+                attach_y,
+                item.lines,
+                item.color,
+                line_h,
+                item.styled_lines,
+            )
         )
+
+
+def _tone(value: float) -> str:
+    return UP if value > 0 else DOWN if value < 0 else TEXT_SOFT
 
 
 def _range_marks(
@@ -145,62 +164,121 @@ def _range_marks(
     actual: dict[datetime, float],
     color: str,
     candidates: list[_BoxCandidate],
-) -> str:
+) -> tuple[str, list[tuple[TextSpan, ...]]]:
     stamps = list(actual)
     values = list(actual.values())
     swing = ind.swing_points(pd.Series(values, index=pd.DatetimeIndex(stamps)))
     detail: list[str] = []
+    rows: list[tuple[TextSpan, ...]] = []
     positions = {stamp: i for i, stamp in enumerate(dates)}
     date_format = "%Y-%m-%d" if dates[0].year != dates[-1].year else "%m-%d"
 
     max_idx = max(range(len(values)), key=lambda i: values[i])
     min_idx = min(range(len(values)), key=lambda i: values[i])
-    max_lines = [name, f"涨幅 {percent_text(values[max_idx])}"]
-    min_lines = [name, f"跌幅 {percent_text(values[min_idx])}"]
+    max_pct = percent_text(values[max_idx])
+    min_pct = percent_text(values[min_idx])
+    max_date = f"{stamps[max_idx]:{date_format}}"
+    min_date = f"{stamps[min_idx]:{date_format}}"
+    max_lines = [name, f"涨幅 {max_pct} · {max_date}"]
+    min_lines = [name, f"跌幅 {min_pct} · {min_date}"]
+    max_styled: list[tuple[TextSpan, ...]] = [
+        (TextSpan(name, color, bold=True),),
+        (
+            TextSpan("涨幅 ", MUTED),
+            TextSpan(max_pct, _tone(values[max_idx]), bold=True),
+            TextSpan(f" · {max_date}", MUTED),
+        ),
+    ]
+    min_styled: list[tuple[TextSpan, ...]] = [
+        (TextSpan(name, color, bold=True),),
+        (
+            TextSpan("跌幅 ", MUTED),
+            TextSpan(min_pct, _tone(values[min_idx]), bold=True),
+            TextSpan(f" · {min_date}", MUTED),
+        ),
+    ]
 
-    runup_extra: tuple[int, str, str] | None = None
-    drawdown_extra: tuple[int, str, str] | None = None
-    for kind, label, start, end, change in (
-        ("up", "最大涨幅", swing.runup_start, swing.runup_end, swing.max_runup),
-        ("down", "最大回撤", swing.drawdown_start, swing.drawdown_end, swing.max_drawdown),
+    runup_extra: tuple[int, str, str, str, str] | None = None
+    drawdown_extra: tuple[int, str, str, str, str] | None = None
+    for kind, label, tone_color, start, end, change in (
+        ("up", "最大涨幅", UP, swing.runup_start, swing.runup_end, swing.max_runup),
+        ("down", "最大回撤", DOWN, swing.drawdown_start, swing.drawdown_end, swing.max_drawdown),
     ):
+        pct_str = percent_text(change)
         if start < 0 or end < 0:
-            detail.append(f"{label} {percent_text(change)}")
+            detail.append(f"{label} {pct_str}")
+            rows.append((TextSpan(f"{label} ", MUTED, bold=True), TextSpan(pct_str, tone_color, bold=True)))
             continue
         first, last = stamps[start], stamps[end]
         span = f"{first:{date_format}}→{last:{date_format}}"
-        detail.append(f"{label} {percent_text(change)} · {span}")
+        detail.append(f"{label} {pct_str} · {span}")
+        rows.append(
+            (
+                TextSpan(f"{label} ", MUTED, bold=True),
+                TextSpan(pct_str, tone_color, bold=True),
+                TextSpan(f" · {span}", MUTED),
+            )
+        )
+        box_row = (
+            TextSpan(f"{label} ", MUTED),
+            TextSpan(pct_str, tone_color, bold=True),
+            TextSpan(f" · {span}", MUTED),
+        )
         x0, x1 = xs[positions[first]], xs[positions[last]]
         y0, y1 = scale(values[start]), scale(values[end])
         if start != end:
             panel.rules.append(Rule(x0, y0, x1, y1, color, "4 4", 0.65))
             panel.dots.extend([Dot(x0, y0, color, 2.6), Dot(x1, y1, color, 3.6)])
         if kind == "up" and end == max_idx:
-            max_lines.append(f"{label} {percent_text(change)} · {span}")
+            max_lines.append(f"{label} {pct_str} · {span}")
+            max_styled.append(box_row)
         elif kind == "up":
-            runup_extra = (end, f"{label} {percent_text(change)}", span)
+            runup_extra = (end, label, pct_str, tone_color, span)
         elif kind == "down" and end == min_idx:
-            min_lines.append(f"{label} {percent_text(change)} · {span}")
+            min_lines.append(f"{label} {pct_str} · {span}")
+            min_styled.append(box_row)
         else:
-            drawdown_extra = (end, f"{label} {percent_text(change)}", span)
+            drawdown_extra = (end, label, pct_str, tone_color, span)
 
     if len(values) >= 2:
         mx, my = xs[positions[stamps[max_idx]]], scale(values[max_idx])
         nx, ny = xs[positions[stamps[min_idx]]], scale(values[min_idx])
         panel.dots.extend([Dot(mx, my, color, 3.2), Dot(nx, ny, color, 3.2)])
-        candidates.append(_BoxCandidate(mx, my, tuple(max_lines), color, above=True))
-        candidates.append(_BoxCandidate(nx, ny, tuple(min_lines), color, above=False))
+        candidates.append(_BoxCandidate(mx, my, tuple(max_lines), color, above=True, styled_lines=tuple(max_styled)))
+        candidates.append(_BoxCandidate(nx, ny, tuple(min_lines), color, above=False, styled_lines=tuple(min_styled)))
         if runup_extra is not None:
-            idx, head, span = runup_extra
+            idx, label, pct_str, tone_color, span = runup_extra
             candidates.append(
-                _BoxCandidate(xs[positions[stamps[idx]]], scale(values[idx]), (name, head, span), color, above=True)
+                _BoxCandidate(
+                    xs[positions[stamps[idx]]],
+                    scale(values[idx]),
+                    (name, f"{label} {pct_str}", span),
+                    color,
+                    above=True,
+                    styled_lines=(
+                        (TextSpan(name, color, bold=True),),
+                        (TextSpan(f"{label} ", MUTED), TextSpan(pct_str, tone_color, bold=True)),
+                        (TextSpan(span, MUTED),),
+                    ),
+                )
             )
         if drawdown_extra is not None:
-            idx, head, span = drawdown_extra
+            idx, label, pct_str, tone_color, span = drawdown_extra
             candidates.append(
-                _BoxCandidate(xs[positions[stamps[idx]]], scale(values[idx]), (name, head, span), color, above=False)
+                _BoxCandidate(
+                    xs[positions[stamps[idx]]],
+                    scale(values[idx]),
+                    (name, f"{label} {pct_str}", span),
+                    color,
+                    above=False,
+                    styled_lines=(
+                        (TextSpan(name, color, bold=True),),
+                        (TextSpan(f"{label} ", MUTED), TextSpan(pct_str, tone_color, bold=True)),
+                        (TextSpan(span, MUTED),),
+                    ),
+                )
             )
-    return "；".join(detail)
+    return "；".join(detail), rows
 
 
 def prepare_compare(series_list: list[KlineSeries]) -> ChartPage | str:
@@ -209,8 +287,8 @@ def prepare_compare(series_list: list[KlineSeries]) -> ChartPage | str:
         return ErroText["notData"]
     dates = sorted({stamp for trace in traces for stamp in trace.values})
     xs = plot_x(len(dates), right=COMPARE_RIGHT)
-    panel = Panel("累计涨跌幅 · %", 540, [], date_ticks(dates, xs))
-    lo, hi = bounds([0, *(value for trace in traces for value in trace.values.values())], minimum=0.1)
+    panel = Panel("累计涨跌幅 · %", 740, [], date_ticks(dates, xs))
+    lo, hi = bounds([0, *(value for trace in traces for value in trace.values.values())], minimum=0.1, pad_ratio=0.14)
     scale = panel_scale(panel, lo, hi, lambda value: f"{value:g}%")
     baseline = scale(0)
     panel.backdrop.extend(
@@ -234,12 +312,34 @@ def prepare_compare(series_list: list[KlineSeries]) -> ChartPage | str:
             values.append(last if stamp <= last_stamp else None)
         assert last is not None
         add_series(panel, xs, values, scale, color, width=2, end_dot=True)
-        entries.append(Mark(xs[dates.index(last_stamp)], scale(last), f"{trace.name} {percent_text(last)}", color))
-        extrema = _range_marks(panel, xs, scale, dates, trace.name, trace.values, color, candidates)
-        detail = f"{number_text(trace.first_close, 3)} → {number_text(trace.last_close, 3)}"
-        if extrema:
-            detail += f" · {extrema}"
-        legend.append(Legend(trace.name, color, percent_text(last), detail))
+        pct_str = percent_text(last)
+        entries.append(
+            Mark(
+                xs[dates.index(last_stamp)],
+                scale(last),
+                f"{trace.name} {pct_str}",
+                color,
+                spans=(TextSpan(trace.name, color, bold=True), TextSpan(f" {pct_str}", _tone(last), bold=True)),
+            )
+        )
+        extrema, swing_rows = _range_marks(panel, xs, scale, dates, trace.name, trace.values, color, candidates)
+        price_span = f"{number_text(trace.first_close, 3)} → {number_text(trace.last_close, 3)}"
+        detail = f"{price_span} · {extrema}" if extrema else price_span
+        detail_lines: tuple[tuple[TextSpan, ...], ...] = (
+            (TextSpan("区间 ", MUTED, bold=True), TextSpan(price_span, TEXT_SOFT, bold=True)),
+            *swing_rows,
+        )
+        val_color = UP if last > 0 else (DOWN if last < 0 else TEXT)
+        legend.append(
+            Legend(
+                trace.name,
+                color,
+                percent_text(last),
+                detail,
+                value_color=val_color,
+                detail_lines=detail_lines,
+            )
+        )
     _place_tag_boxes(panel, candidates, COMPARE_RIGHT)
     add_end_labels(panel, entries, right=COMPARE_RIGHT)
     return ChartPage(

@@ -23,6 +23,8 @@ import argparse
 from typing import Any
 from pathlib import Path
 from datetime import datetime
+from collections import Counter, defaultdict
+from collections.abc import Set, Mapping
 
 import pandas as pd
 
@@ -378,6 +380,46 @@ def show_diff(new_mapping: dict[str, dict[str, str]], old_path: str) -> None:
         print()
 
 
+def merge_industry_levels(
+    base_mapping: Mapping[str, str],
+    f100_map: Mapping[str, str],
+    l1_map: Mapping[str, str],
+    l2_map: Mapping[str, str],
+    l3_map: Mapping[str, str],
+    *,
+    allowed_l1: Set[str] = frozenset(),
+) -> dict[str, dict[str, str]]:
+    """融合一/二/三级行业映射，防止 f100 细分类越级污染 industry_l1。"""
+    valid_l1 = allowed_l1 or frozenset(l1_map.values())
+    l2_votes: dict[str, Counter[str]] = defaultdict(Counter)
+    for code, l1 in l1_map.items():
+        if code in l2_map:
+            l2_votes[l2_map[code]][l1] += 1
+    l2_to_l1 = {l2: votes.most_common(1)[0][0] for l2, votes in l2_votes.items() if votes}
+
+    final_mapping: dict[str, dict[str, str]] = {}
+    for code, name in base_mapping.items():
+        l2 = l2_map.get(code) or f100_map.get(code) or ""
+        if code in l1_map:
+            l1 = l1_map[code]
+        elif l2 and l2 in l2_to_l1:
+            l1 = l2_to_l1[l2]
+        elif code in f100_map and (not valid_l1 or f100_map[code] in valid_l1):
+            l1 = f100_map[code]
+        else:
+            l1 = "未知"
+        if not l2:
+            l2 = l1
+        l3 = l3_map.get(code) or l2
+        final_mapping[code] = {
+            "name": name,
+            "industry_l1": l1,
+            "industry_l2": l2,
+            "industry_l3": l3,
+        }
+    return final_mapping
+
+
 async def async_main() -> None:
     parser = argparse.ArgumentParser(description="用东财 API 更新中国 A 股及行业映射文件")
     parser.add_argument(
@@ -411,31 +453,8 @@ async def async_main() -> None:
     if not args.skip_industry_boards:
         l1_map, l2_map, l3_map = await fetch_industry_maps()
 
-    # 3. 融合：flag 分级优先，缺省退回 clist f100 / 「未知」
-    final_mapping: dict[str, dict[str, str]] = {}
-    for code, name in base_mapping.items():
-        if code in l1_map:
-            l1 = l1_map[code]
-        elif code in f100_map:
-            l1 = f100_map[code]
-        else:
-            l1 = "未知"
-        if code in l2_map:
-            l2 = l2_map[code]
-        elif code in f100_map:
-            l2 = f100_map[code]
-        else:
-            l2 = l1
-        if code in l3_map:
-            l3 = l3_map[code]
-        else:
-            l3 = l2
-        final_mapping[code] = {
-            "name": name,
-            "industry_l1": l1,
-            "industry_l2": l2,
-            "industry_l3": l3,
-        }
+    # 3. 融合：flag 分级优先，缺省按 l2→l1 多数映射回补，仅在白名单内退回 clist f100
+    final_mapping = merge_industry_levels(base_mapping, f100_map, l1_map, l2_map, l3_map)
 
     def _industry(code: object, field: str) -> str:
         if not isinstance(code, str) or not code:
