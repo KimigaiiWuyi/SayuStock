@@ -89,33 +89,40 @@ def match_sector_menu(query: str, menu: dict[str, str]) -> tuple[str, str] | Non
     return best[3], best[4]
 
 
+def _codes_by_industry_name(needle: str, *, normalize_fields: bool) -> list[str] | None:
+    """三级行业命中取并集，不逐级早退。
+
+    上游表一旦被污染出伪 l1 小簇（f100 细分名灌进 industry_l1），逐级早退
+    会让 2 只伪命中遮蔽 188 只真实 l2 成分；并集下污染行通常也被其自身
+    l2 覆盖，结果自愈。
+    """
+
+    def _eq(value: str) -> bool:
+        if normalize_fields:
+            return normalize_sector_query(value) == needle
+        return value == needle
+
+    levels = (
+        [code for code, info in chinese_stocks.items() if _eq(info["industry_l1"])],
+        [code for code, info in chinese_stocks.items() if _eq(info["industry_l2"])],
+        [code for code, info in chinese_stocks.items() if "industry_l3" in info and _eq(info["industry_l3"])],
+    )
+    hit = [codes for codes in levels if codes]
+    if len(hit) > 1:
+        logger.warning(f"[SayuStock] 行业名 {needle!r} 命中多个级别，成分已并集（上游表可能存在脏行业字段）")
+    merged = list(dict.fromkeys(code for codes in hit for code in codes))
+    return merged or None
+
+
 def local_industry_member_codes(canonical_name: str) -> list[str] | None:
     """申万一/二/三级用仓库内 chinese_stocks，不打东财成分接口。"""
-    l1_codes = [code for code, info in chinese_stocks.items() if info["industry_l1"] == canonical_name]
-    if l1_codes:
-        return l1_codes
-    l2_codes = [code for code, info in chinese_stocks.items() if info["industry_l2"] == canonical_name]
-    if l2_codes:
-        return l2_codes
-    l3_codes = [
-        code for code, info in chinese_stocks.items() if "industry_l3" in info and info["industry_l3"] == canonical_name
-    ]
-    if l3_codes:
-        return l3_codes
+    exact = _codes_by_industry_name(canonical_name, normalize_fields=False)
+    if exact is not None:
+        return exact
     needle = normalize_sector_query(canonical_name)
     if not needle:
         return None
-    fuzzy_l2 = [code for code, info in chinese_stocks.items() if normalize_sector_query(info["industry_l2"]) == needle]
-    if fuzzy_l2:
-        return fuzzy_l2
-    fuzzy_l3 = [
-        code
-        for code, info in chinese_stocks.items()
-        if "industry_l3" in info and normalize_sector_query(info["industry_l3"]) == needle
-    ]
-    if fuzzy_l3:
-        return fuzzy_l3
-    return None
+    return _codes_by_industry_name(needle, normalize_fields=True)
 
 
 def _codes_from_payload(payload: object) -> list[str] | None:

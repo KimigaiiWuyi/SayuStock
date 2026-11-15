@@ -93,9 +93,12 @@ async def fetch_clist_pages(
     fid: str = "f12",
     label: str = "",
     quiet: bool = False,
-) -> list[dict[str, Any]]:
-    """按 fs 表达式分页拉取 clist 全量行。"""
+    page_pause_s: float = 0.05,
+) -> tuple[list[dict[str, Any]], bool]:
+    """按 fs 表达式分页拉取 clist 全量行；第二返回值为「拉全了 total」。"""
     all_rows: list[dict[str, Any]] = []
+    complete = True
+    total = 0
     for pn in range(1, max_pages + 1):
         params: list[tuple[str, str]] = [
             ("pz", str(pz)),
@@ -111,6 +114,7 @@ async def fetch_clist_pages(
         resp = await EASTMONEY_REQUESTER.stock_request(CLIST_URL, "GET", params=params)
         if isinstance(resp, int) or not isinstance(resp, dict):
             logger.warning(f"[update_stocks] clist 失败 {label} pn={pn} resp={resp}")
+            complete = False
             break
         data = resp["data"] if "data" in resp and isinstance(resp["data"], dict) else {}
         page = _as_diff_list(data)
@@ -127,10 +131,12 @@ async def fetch_clist_pages(
             )
         if (total > 0 and len(all_rows) >= total) or len(page) < pz:
             break
-        await asyncio.sleep(0.05)
+        await asyncio.sleep(page_pause_s)
+    if total > 0 and len(all_rows) < total:
+        complete = False
     if not quiet and (label or all_rows):
         print()
-    return all_rows
+    return all_rows, complete
 
 
 def _board_of_code(code: str) -> str:
@@ -193,13 +199,14 @@ def _norm_industry(raw: object) -> str:
 # ──────────────────────────────────────────────
 
 
-async def fetch_all_base_stocks() -> tuple[dict[str, str], pd.DataFrame, dict[str, str]]:
+async def fetch_all_base_stocks(*, page_pause_s: float = 0.05) -> tuple[dict[str, str], pd.DataFrame, dict[str, str]]:
     """抓取全部 A 股：返回 (code→name, 明细 DataFrame, code→f100 行业)。"""
     fs = market_dict["沪深京A"] if "沪深京A" in market_dict else ("m:0 t:6,m:0 t:80,m:1 t:2,m:1 t:23,m:0 t:81 s:2048")
     print("[1/2] 东财 clist 拉取沪深京 A...")
-    rows = await fetch_clist_pages(fs, label="沪深京A", fid="f12")
-    if not rows:
-        print("❌ clist 未返回任何股票，无法继续")
+    rows, complete = await fetch_clist_pages(fs, label="沪深京A", fid="f12", page_pause_s=page_pause_s)
+    # 限流会让分页中途 break 出残表（1900/5921 事故），残表落库等于批量删股票
+    if not rows or not complete:
+        print("❌ clist 基础列表未拉全（可能被限流），放弃写盘以保护现有表")
         sys.exit(1)
 
     name_map: dict[str, str] = {}
@@ -261,14 +268,21 @@ async def fetch_industry_boards_by_level() -> dict[int, list[tuple[str, str]]]:
     return by_flag
 
 
-async def _fill_board_members(boards: list[tuple[str, str]], label: str) -> dict[str, str]:
-    """拉一批板块的成分代码 → 板块名；同股只保留第一次。"""
+async def _fill_board_members(
+    boards: list[tuple[str, str]],
+    label: str,
+    *,
+    concurrency: int = INDUSTRY_CONCURRENCY,
+    pause_s: float = INDUSTRY_PAUSE_S,
+) -> tuple[dict[str, str], list[str]]:
+    """拉一批板块的成分代码 → 板块名；同股只保留第一次。返回 (映射, 失败板块名)。"""
     if not boards:
-        return {}
+        return {}, []
     total = len(boards)
     print(f"       {label} {total} 个板块，开始拉成分...")
     industry_map: dict[str, str] = {}
-    sem = asyncio.Semaphore(INDUSTRY_CONCURRENCY)
+    failed: list[str] = []
+    sem = asyncio.Semaphore(concurrency)
     done = 0
     lock = asyncio.Lock()
 
@@ -276,38 +290,49 @@ async def _fill_board_members(boards: list[tuple[str, str]], label: str) -> dict
         nonlocal done
         fs = code if str(code).startswith("b:") else f"b:{code}"
         async with sem:
-            rows = await fetch_clist_pages(
+            rows, ok = await fetch_clist_pages(
                 fs,
                 fields="f12,f14",
                 max_pages=50,
                 fid="f3",
                 quiet=True,
             )
+            if not ok:
+                failed.append(name)
             for item in rows:
                 stock_code = _norm_code(item["f12"] if "f12" in item else "")
                 if not stock_code:
                     continue
                 if stock_code not in industry_map:
                     industry_map[stock_code] = name
-            await asyncio.sleep(INDUSTRY_PAUSE_S)
+            await asyncio.sleep(pause_s)
             async with lock:
                 done += 1
                 print(f"\r       {label}进度 [{done:03d}/{total}] {name[:12]:<12}", end="", flush=True)
 
     await asyncio.gather(*[_one(n, c) for n, c in boards])
-    print(f"\n       ✅ {label}完成，覆盖 {len(industry_map)} 只")
-    return industry_map
+    print(f"\n       ✅ {label}完成，覆盖 {len(industry_map)} 只，失败 {len(failed)} 个板块")
+    return industry_map, failed
 
 
-async def fetch_industry_maps() -> tuple[dict[str, str], dict[str, str], dict[str, str]]:
-    """分别返回一级 / 二级 / 三级 代码→板块名。"""
+async def fetch_industry_maps(
+    *,
+    concurrency: int = INDUSTRY_CONCURRENCY,
+    pause_s: float = INDUSTRY_PAUSE_S,
+) -> tuple[dict[str, str], dict[str, str], dict[str, str], dict[str, tuple[int, int]]]:
+    """返回 (一级/二级/三级 代码→板块名, 各级 失败数/板块总数)。"""
     print("\n[2/2] 东财行业板块菜单（flag=1/2/3）+ 成分...")
     by_flag = await fetch_industry_boards_by_level()
     print(f"       一级 {len(by_flag[1])} / 二级 {len(by_flag[2])} / 三级 {len(by_flag[3])}")
-    l1_map = await _fill_board_members(by_flag[1], "一级")
-    l2_map = await _fill_board_members(by_flag[2], "二级")
-    l3_map = await _fill_board_members(by_flag[3], "三级")
-    return l1_map, l2_map, l3_map
+    l1_map, l1_failed = await _fill_board_members(by_flag[1], "一级", concurrency=concurrency, pause_s=pause_s)
+    l2_map, l2_failed = await _fill_board_members(by_flag[2], "二级", concurrency=concurrency, pause_s=pause_s)
+    l3_map, l3_failed = await _fill_board_members(by_flag[3], "三级", concurrency=concurrency, pause_s=pause_s)
+    failures = {
+        "一级": (len(l1_failed), len(by_flag[1])),
+        "二级": (len(l2_failed), len(by_flag[2])),
+        "三级": (len(l3_failed), len(by_flag[3])),
+    }
+    return l1_map, l2_map, l3_map, failures
 
 
 # ──────────────────────────────────────────────
@@ -435,6 +460,8 @@ async def async_main() -> None:
         action="store_true",
         help="跳过行业板块成分遍历，仅用 clist f100 填行业",
     )
+    parser.add_argument("--concurrency", type=int, default=INDUSTRY_CONCURRENCY, help="板块成分拉取并发数")
+    parser.add_argument("--pause", type=float, default=INDUSTRY_PAUSE_S, help="每个板块请求后的节流秒数")
     args = parser.parse_args()
 
     script_dir = os.path.dirname(os.path.abspath(__file__))
@@ -444,14 +471,23 @@ async def async_main() -> None:
     print(f"🚀 开始抓取（东财 API）— {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
 
     # 1. 基础列表
-    base_mapping, detail_df, f100_map = await fetch_all_base_stocks()
+    base_mapping, detail_df, f100_map = await fetch_all_base_stocks(page_pause_s=max(args.pause, 0.05))
 
     # 2. 行业板块映射（可选）
     l1_map: dict[str, str] = {}
     l2_map: dict[str, str] = {}
     l3_map: dict[str, str] = {}
     if not args.skip_industry_boards:
-        l1_map, l2_map, l3_map = await fetch_industry_maps()
+        l1_map, l2_map, l3_map, failures = await fetch_industry_maps(concurrency=args.concurrency, pause_s=args.pause)
+        for label, (f, t) in failures.items():
+            if f:
+                print(f"⚠️  {label}板块成分失败 {f}/{t}")
+        # l1 空表会让 f100 细分名整体灌进 industry_l1；任一级大面积失败
+        # （-400016 限流常见）则产出残表。宁可不更新也别写脏表。
+        worst = max((f / t for f, t in failures.values() if t), default=0.0)
+        if not l1_map or worst > 0.05:
+            print("❌ 板块成分拉取不完整（可能限流），放弃写盘以保护现有表")
+            sys.exit(1)
 
     # 3. 融合：flag 分级优先，缺省按 l2→l1 多数映射回补，仅在白名单内退回 clist f100
     final_mapping = merge_industry_levels(base_mapping, f100_map, l1_map, l2_map, l3_map)

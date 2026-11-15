@@ -1,79 +1,29 @@
 # AGENTS.md
 
-> 本文件遵循 [AGENTS.md](https://agents.md/)：给编码 Agent 的仓库说明（README for agents）。
-> 人类用户说明见 [README.md](./README.md)。**源码是唯一事实源**。
->
-> 行情 / 出图 / 模拟盘 / AI：按需读
-> [`.agents/skills/sayustock-development/SKILL.md`](.agents/skills/sayustock-development/SKILL.md)，
-> **不要**一次把所有 `references/` 塞进上下文。
+> 给编码 Agent 的仓库说明；人类文档见 [README.md](./README.md)，业务细节按需读 [`.agents/skills/sayustock-development/SKILL.md`](.agents/skills/sayustock-development/SKILL.md)（勿一次塞入全部 `references/`）。**源码是唯一事实源**。
 
-本仓库是 **GsCore 业务插件**，独立 git。放到 `gsuid_core/plugins/SayuStock/` 安装。
+## Overview & Layout
 
-## Project overview
+**GsCore 股票业务插件**（Python `==3.12.*`，版本以 `SayuStock/version.py` 为准）：`Plugins(name="SayuStock", force_prefix=["a", "股票"], allow_empty_prefix=True)`。
 
-行情出图、自选、技术/估值、AI 研究代理、模拟盘。
+- 运行时配置与数据：`{get_res_path()}/SayuStock/config.json` 与 `data/`（不进 git）。
+- 核心架构：命令 → `data` 服务 → `get_market()` → `adapters/**` → 领域模型 → `render_data` / `render_text` → `render.render_html`。
+- `SayuStock/__init__.py` 显式导入：`stock_agent`、`stock_macro`、`stock_analysis`、`stock_papertrade`、`stock_holdings_analysis`。
 
-- `Plugins(name="SayuStock", force_prefix=["a", "股票"], allow_empty_prefix=True)`。
-- 行情只走 `get_market()` 领域模型；业务代码禁止解析东财 `f*`。
-- 有图必有文字：`ai_return` 必须在图片缓存判断**之前**。
-- 版本：`SayuStock/version.py`（当前 `0.9`）。`pyproject.toml` 的 `[project]` / poetry 版本可能不一致。Python `==3.12.*`。
+| 目录/子包 | 职责 |
+|-----------|------|
+| `stock_cloudmap/` / `stock_stockinfo/` / `stock_info/` | 云图、分时/K 线/对比、大盘/自选/基金持仓/全天候（Jinja + Core Takumi） |
+| `render/` | 共享模板、调色板、SVG 几何及 Core `render_html_to_bytes` 适配 |
+| `stock_user/` / `stock_sina/` / `stock_analysis/` / `stock_holdings_analysis/` | 自选（`SsBind`）、估值、技术选股、持仓分析 |
+| `stock_ai_func/` / `stock_ai/` / `stock_agent/` / `stock_macro/` | `@ai_tools`、Kronos 预测、`stock_agent` 研究代理、宏观事件表与三档提示词 |
+| `stock_papertrade/` | 模拟盘撮合、风控、候选池、策略与自愈 |
+| `stock_news/` / `_help/` / `_config/` / `_status/` | 快讯订阅（默认东财→华尔街见闻→新浪→金十）、帮助、配置、状态 |
+| `utils/` | `market/`（`MarketDataPort`）、`news/`（`NewsPort`）、`indicators.py`、`render_data.py`、`warn_box.py` |
+| `Kronos/` | vendored 模型代码（ruff / pyright 均排除，勿当业务代码修改） |
 
-## Repository map
+## Setup & CI Gates
 
-```
-.
-├── AGENTS.md / README.md / ICON.png
-├── pyproject.toml / ruff.toml / pyrightconfig.json
-├── __init__.py / __nest__.py
-├── test/                               # pytest（不是 tests/）
-├── doc/  docs/  examples/  plans/
-├── .agents/skills/sayustock-development/
-└── SayuStock/
-    ├── __init__.py                     # Plugins + 显式 import 五包
-    ├── __full__.py / version.py
-    ├── stock_*/                        # 功能子包（下表）
-    ├── skills/                         # 运行时 AI Skill（ai_skill 注册；非 .agents/skills 开发文档）
-    ├── utils/                          # market / news / render_data / indicators / db
-    ├── Kronos/                         # vendored，pyright exclude
-    └── tools/gen_A.py
-```
-
-内层 `__init__.py` 显式 import：`stock_agent`、`stock_macro`、`stock_analysis`、`stock_papertrade`、`stock_holdings_analysis`。
-
-| 子包 | 职责 |
-|------|------|
-| `stock_cloudmap/` | 大盘/行业/概念云图，Jinja HTML + Takumi PNG |
-| `stock_stockinfo/` | 个股分时 / K 线 / 对比，保留原命令入口 |
-| `stock_info/` | 大盘概览、自选列表、基金持仓、全天候，Jinja + Takumi |
-| `render/` | 共享 Jinja 模板、调色板、SVG 几何与 Core 公开绘图接口适配 |
-| `stock_user/` | 自选增删（`SsBind`） |
-| `stock_sina/` | PB/PE/PS |
-| `stock_analysis/` | 技术分析、卡片、选股、组合 |
-| `stock_holdings_analysis/` | 持仓分析 |
-| `stock_ai_func/` | `@ai_tools` |
-| `stock_ai/` | Kronos 预测出图 |
-| `stock_agent/` | `stock_agent` AgentNode |
-| `stock_macro/` | 宏观事件表 `SayuMacroEvent` + 宏观三问/三档提示词 + 知识库/技能注册 + 定时联网复核 |
-| `stock_papertrade/` | 模拟盘 SQLModel |
-| `stock_news/` / `_help/` / `_config/` / `_status/` | 财经快讯订阅（任务名仍是「雪球新闻订阅」）、帮助、配置、状态 |
-| `utils/market/` | MarketDataPort + eastmoney / okx / vix |
-| `utils/news/` | NewsPort；默认东财 → 华尔街见闻 → 新浪 → 金十，失败或空列表顺延 |
-
-运行时：`{get_res_path()}/SayuStock/config.json` 与 `data/`。不进 git。
-
-## Skills
-
-| 任务 | 读 |
-|------|-----|
-| 本插件 | [sayustock-development](.agents/skills/sayustock-development/SKILL.md) |
-| 代码红线 | Core 根 [`AGENTS.md`](../../../AGENTS.md) §1–§4、§1.9 |
-| 行情速查 / 模拟盘用户说明 | [`doc/market_data_port.md`](./doc/market_data_port.md)、[`docs/papertrade.md`](./docs/papertrade.md) |
-
-单独 clone 时打开宿主 Core 的 `AGENTS.md`。
-
-## Setup commands
-
-在**本插件目录**执行。解释器优先 Core 根 `.venv`。
+在本插件根目录执行（解释器优先宿主 Core `.venv`，CI 四门全部阻塞合并）：
 
 ```sh
 uv run ruff check SayuStock test
@@ -82,81 +32,39 @@ uv run pytest test -q
 basedpyright --pythonpath <Core venv>/python
 ```
 
-- `testpaths = ["test"]`，`pythonpath = [".", "test"]`。
-- `ruff.toml`：120 列，排除 `Kronos`、`pyproject.toml`。
-- `pyrightconfig.json` **不要**写死本机 `venvPath`。
-- 图片调用 Core 公开 `render_html_to_bytes`，复用其渲染实例与缓存；依赖与实图验收见 [`docs/rendering.md`](docs/rendering.md)。Playwright 仍用于雪球 Cookie。不要改 `Kronos/` 当业务代码。
+- 配置：`pyproject.toml`（`testpaths = ["test"]`、`pythonpath = [".", "test"]`）、`ruff.toml`（120 列）、`pyrightconfig.json`（勿写死本机 `venvPath`）。
+- 图片统一调用 Core 公开 `render_html_to_bytes`，不另建浏览器或线程渲染链；Playwright 仅用于雪球 Cookie。
 
-## Code style
+## Code Style & Constraints
 
-新代码与 Core 根 `AGENTS.md` **编号一致**，正反例以那份为准。
+同步遵循 Core 根 [`AGENTS.md`](../../../AGENTS.md) §1–§4 与 §1.9（`try/except` 仅限不可信外部 JSON 与 `_ai_return_*`；禁 `cast` / `Any` / `type: ignore` / `getattr`·`dict.get` 兜底；`#` 注释 ≤2 行且每行 ≤88 字；函数全标注；`@with_session` + `col()`、无 `__tablename__`；全异步），并叠加本插件红线：
 
-| 编号 | 要求 |
-|------|------|
-| §1.1 | 禁止 try-except 兜底。例外：不可信行情 JSON；`_ai_return_*` |
-| §1.2–1.4 | 禁止 `cast` / 自身 `type: ignore` / `getattr`·`dict.get` 兜底 |
-| §1.6 | `#` 最多两行、每行 ≤88 字 |
-| §1.7 | 不改 Core `system_prompt` |
-| §1.8 | 禁止 `Any` |
-| §1.9 | 股票 / 模拟盘 / 研报词只出现在本插件 `covers` / `aliases` / 代理 prompt |
-| §2 | 函数全标注；领域模型用 TypedDict / dataclass，禁止业务侧裸 EM dict |
-| §3 | `SsBind` 与 papertrade 表：无 `__tablename__`，`@with_session`，`col()` |
-| §4 | 全异步；绘图统一 `render.render_html`，不要另建浏览器或线程渲染链 |
+- **行情与快讯**：业务侧只读 `get_market()` 与 `get_news_port()` 模型；禁读东财 `f*`，禁依赖 `utils/market/compat.py`（仅测试）；Port 错误是 `str`，禁传给 `build_*_render_data`；禁止 `web_search` 替代实时价。
+- **有图必有文字与显式告警**：`ai_return` / `_emit_ai_text` 必须在缓存命中 `return` 之前；HTML 页取数失败须经 `utils/warn_box.py` 标出并写入 `ai_return`。
+- **单源与注册**：指标单源 `utils/indicators.py`；渲染计算单源 `utils/render_data.py`；宏观提示词单源 `stock_macro/prompts.py`；模拟盘单源写 SQLModel（禁第二套账本）；新 `@sv` / `@ai_tools` 须在包 `__init__.py` 显式导入且 docstring 紧贴 `def`。
+- **代理边界**：`stock_agent` 仅做研究、严禁下单；宏观事件表全局一张；决策代理 prompt/工具为注册期常量，`prompt_block` 为建树快照。
 
-行宽 120。本插件额外：
+## Testing & 单元测试添加标准
 
-- 禁止读东财 `f*`；解析只在 `utils/market/adapters/**`。
-- 禁止依赖 `utils/market/compat.py`（仅测试）。
-- `ai_return` / `_emit_ai_text` 在缓存命中 return **之前**。
-- 取数失败不许静默：HTML 页（我的自选 / 基金持仓 / 模拟盘自选）用 `utils/warn_box.py` 的黄色警告框标出每一条失败，并写进 `ai_return` 文字。
-- 指标单源 `utils/indicators.py`；渲染计算单源 `utils/render_data.py`。
-- 快讯只走 `get_news_port()`；供应商字段只在 `utils/news/adapters/`。
-- 模拟盘只写 SQLModel，禁止 `record_*` / `state_set` 第二套账本。
-- 宏观提示词单源 `stock_macro/prompts.py`（决策 / 持仓 / 研究代理共用）；宏观事件表全局一张，不按盘分区。
-- 决策代理 prompt / 工具清单是注册期常量（重启对所有老盘生效）；`prompt_block` 是建树快照（重建心跳树才更新）。
-- 新 `@sv` / `@ai_tools` 必须在包 `__init__.py` 显式 import。
-- `@ai_tools` docstring 紧贴 `def`。
+- **规模上限**：`test/` 总用例严格控制在 **≤ 160 条**，按业务域收敛在现有核心单测文件中（指标、行情路由/解析、文字/分时对齐、渲染运行与实图证据、功能特性、模拟盘核心/策略迁徙）。
+- **一次性验证脚本即测即删**：排查 bug、验证单次修复或临时冒烟写的 `test_*.py` / 探针脚本，**测试通过后必须删除，严禁提交入库**。
+- **只守核心契约，合并大于新建**：禁止为单个修复单或微调新建独立 `test_*.py`；确有长期回归价值的契约，将关键断言合并进对应的现有核心单测文件，并同步保持精简。
+- **环境与门禁约束**：
+  - `test/conftest.py` 须同时兼容扁平（无 Core）与嵌套布局，且不触发 `Plugins` 初始化链。
+  - `test/test_indicators.py`、`test/test_papertrade_indicators.py`、`test/test_render_text.py` 须保持无 Core 可独立运行（对应 CI `indicators` 任务）。
+  - 图表/模板改动须在 `SAYUSTOCK_REQUIRE_RENDER_RUNTIME=1` 下向 `SAYUSTOCK_RENDER_EVIDENCE_DIR` 输出真实 PNG（不以旧渲染器像素完全一致为标准，JPEG 沿用 Core `PicQuality`）。
+  - 价列标注用 `Sequence[float | None]`（规避 `list` 不变性报错）；禁把真人 Cookie 写入 fixture；清理测后 `DATA_PATH` 产物。
 
-## Testing
+## Critical Pitfalls
 
-- 扁平（无 Core）与嵌套（`plugins/SayuStock`）都要能 collection。
-- `test/conftest.py` 包壳：不要执行 `SayuStock/__init__.py` 的 Plugins 链。
-- 改 `ai_return`：`test_ai_text_delivery.py`。分时：`test_intraday_align.py`。模拟盘：`test_papertrade_*.py`。
-- 图表变化同时验证标签几何、指标/文字一致性和实际 PNG；CI 强制真实出图，不因缺绘图依赖而跳过。
-- CI 四门全挡合并：ruff、indicators、full pytest、**basedpyright**。本地类型检查：`basedpyright --pythonpath <Core venv>/python`。
-- `list` 不变：`list[float]` 不能当 `list[float | None]` 传入；价列用 `Sequence[float | None]`。
-- 禁止把真人东财 Cookie 写进 fixture。测完 `DATA_PATH` 要 `unlink`。
-- `test_offline_card_render` 是本地出图冒烟：空 `DATA_PATH`（`resource_path` 会 mkdir）不算有缓存，CI 应 skip。
+1. **字段与数据口径**：`f45` 是最低价、`f170` 才是涨跌幅 %；对比图默认 `D1_YEAR`（365 天）；名称含 `(板块)` 须展开成分股；行业云图用 `chinese_stocks` 申万三级成分+大盘热图（禁翻页拉 BK 行情）。
+2. **缓存与文字**：图片使用独立版本缓存键、不覆盖行情 JSON；热缓存命中仍须先走 `ai_return`。
+3. **模拟盘账本与自愈**：
+   - 交易日由上证 `1.000001` 分时/日 K 自证；`holiday_heal` 中 `text()` 返回的 datetime 列是字符串，解析失败须跳过并告警（**绝不能兜底 `now()`**）。
+   - 持仓与流水必须**双向对账**（补缺仓 + 删幽灵仓），遍历范围须含**只有持仓、零流水**的盘，且逻辑必须排在 `if not dirty` 早退之前。
+   - `get_quote` 返回 `None`（如限流 `-400016`）时 `record_trade` 必须**就地 `return` 拒绝入库**并配短 `QUOTE_FAIL_TTL`（兼顾 None 收窄）。
+   - `async_maker()` 退出 `with` 不自动提交：所有落库路径确认显式 `commit()`，核验持久化须另开独立连接复查。
 
-## 本仓库结构约定
+## Security
 
-- 取数：命令 → data 服务 → `get_market()` → adapter → 模型 → `render_data` / `render_text` → chart。
-- Port 错误是 `str`，禁止再喂 `build_*_render_data`。
-- `STOCK_CONFIG`；`papertrade_multi_group` / `papertrade_broadcast_group` 已废弃。
-- `stock_agent` 做研究、不执行模拟盘。报价以插件工具为准，禁止用 `web_search` 代替实时价。
-
-## 坑点
-
-完整清单：技能 [§09](.agents/skills/sayustock-development/references/09-developer-pitfalls.md)。
-
-1. `f45` 是最低价；`f170` 才是涨跌幅 %。
-2. 热缓存导致 `ai_return` 没跑。
-3. 兄弟模块没 import → 命令/工具未注册。
-4. pytest rootdir 上浮到 Core → `No module named 'SayuStock'`。
-5. 对比图默认 `D1_YEAR`（365 天）。
-6. 名称含 `(板块)` 要展开成分股。
-7. 行业云图：`chinese_stocks` 申万三级成分 + 大盘 hotmap；禁止每次翻页拉 BK 行情。
-8. 新图使用独立版本命名的图片缓存，不覆盖行情 JSON；热缓存也必须先发 AI 文字。
-9. 价序列类型用 `Sequence`，不要让 `list[float]` 与 `list[float | None]` 互赋。
-10. 离线出图测：空 `DATA_PATH` 不是缓存；要有 `*_single-stock*_data.json`。
-11. 模拟盘交易日**自证**（上证 `1.000001` 分时/日 K），别再维护人工假期表——旧表只到 2026-02 就过期，长假照常撮合写脏流水；`holiday_heal` 会自动清。`text()` 查询回来的 datetime 列是**字符串**，解析失败要跳过并告警，**兜底 `now()` 会把整个账本当脏数据删光**。
-12. 持仓要跟流水**双向**对账，且**不许挂在"有没有脏成交"的早退后面**。2026-10-01 美的集团就是反方向损坏：卖出播报了、钱少了、库无流水——旧代码让 LLM 直接 `position_upsert(qty=0)` 删掉持仓行，`trade_insert` 因持仓不足被拒，于是持仓没了、钱没进、流水没有。只有"流水有 → 补持仓"和"持仓有 → 删幽灵仓"都做，且遍历范围要含**只有持仓、零流水**的盘（只遍历 `by_acc` 会整类漏掉），才算自愈。
-13. 东财限流（`-400016`）时 `get_quote` 返回 `None`，**不许当成"跳过校验"放行**。`record_trade` 的偏差校验早先是 `_live is not None and ...`——限流恰好落进"跳过"分支，等于风控期完全失守，任意价格都能落库。拿不到实时价必须**拒绝入库**。且失败缓存 TTL 要短（`QUOTE_FAIL_TTL`，别沿用 60s 成功 TTL），否则一次限流把该票锁死一分钟。注意：拒绝要**就地 return**，不能先把判断结果存进 flag 再在下一段用，否则 `_live` 丢 None 收窄，basedpyright 会报算术运算符类型错。
-14. `async_maker()` 是**普通 AsyncSession，退出 `with` 不自动提交**（实测：不 commit 时 INSERT 离开会话后查不到）。`holiday_heal` 把持仓写入放在「无脏成交」的早退分支里，所以**每条 return 前都要确认该 commit 的 commit 了**，否则"重启即自动修复"只是看起来成立：日志写着已对账，库里什么都没有。验证这类"以为落库了"的改动必须**另开独立连接复查**——同一个 session 会命中未提交事务，骗过自己。
-15. 默认出图为 PNG；分析页、模拟盘账户与排行沿用 Core `PicQuality` 的 JPEG 输出。精确像素断言只检查本地原始 PNG，有损输出用容差并实际看图；模板适配 Core，不以旧渲染器像素一致为验收标准。
-
-## Security notes
-
-- `eastmoney_cookie` 只放运行时配置。
-- 模拟盘不是实盘；`stock_agent` 禁止下单。
-- 公网 Core：`WS_TOKEN` / WebConsole。
+- `eastmoney_cookie` 仅存运行时配置；公网部署 Core 须配 `WS_TOKEN` / WebConsole；模拟盘非实盘。

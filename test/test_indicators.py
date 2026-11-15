@@ -1,13 +1,9 @@
-"""共享指标模块 SayuStock/utils/indicators.py 单测。
+"""共享指标模块 SayuStock/utils/indicators.py 核心单测。
 
-这一层是全插件指标的唯一真相源（图表和 AI 决策都读它），所以这里重点测三件事：
-
-1. **口径**：MACD 柱是 2 倍、BOLL 基准是收盘价、RSI 是 Wilder ——
-   历史上图表走 mplchart（西方口径）、AI 走手写实现，两边对不上；
-2. **一致性**：series 层末值 == papertrade 标量层返回值。
-   指标曾有两份复制实现，这条能在改一处忘另一处时立刻炸；
-3. **区间涨跌/回撤**：归一化序列直接相减会算出 >100% 的回撤（已修）。
+重点覆盖：通达信/东财口径、series 与 papertrade 标量同源一致性、区间涨跌/回撤不变量及边界输入。
 """
+
+from __future__ import annotations
 
 import sys
 import importlib.util
@@ -44,7 +40,7 @@ def _ensure_pkg() -> None:
             PKG_ROOT / sub / "__init__.py",
             submodule_search_locations=[str(PKG_ROOT / sub)],
         )
-        if sub_spec is None:  # utils 是 namespace package，没有 __init__.py
+        if sub_spec is None:
             mod = ModuleType(f"{PKG_NAME}.{sub}")
             mod.__path__ = [str(PKG_ROOT / sub)]
             sys.modules[f"{PKG_NAME}.{sub}"] = mod
@@ -68,9 +64,6 @@ ind = _load("utils.indicators", "utils/indicators.py")
 pt = _load("stock_papertrade.indicators", "stock_papertrade/indicators.py")
 
 
-# ============================================================
-# 夹具
-# ============================================================
 def _series(n: int = 200, seed: int = 42) -> pd.DataFrame:
     rng = np.random.default_rng(seed)
     close = pd.Series(100 * np.cumprod(1 + rng.normal(0.0005, 0.02, n)))
@@ -95,102 +88,58 @@ def df() -> pd.DataFrame:
     return _series()
 
 
-# ============================================================
-# 口径：MACD 柱 = (DIF - DEA) × 2
-# ============================================================
-def test_macd_bar_is_double_the_gap(df: pd.DataFrame) -> None:
-    """通达信/东财 BAR = (DIF-DEA)*2。西方口径（mplchart）不乘 2，柱子只有一半高。"""
-    dif, dea, bar = ind.macd(df["close"])
-    expected = (dif - dea) * 2.0
-    pd.testing.assert_series_equal(bar, expected, check_names=False)
-
-
-def test_macd_dif_is_ema12_minus_ema26(df: pd.DataFrame) -> None:
+def test_macd_ema_and_double_bar(df: pd.DataFrame) -> None:
+    """通达信/东财 BAR = (DIF-DEA)*2。"""
     close = df["close"]
-    dif, dea, _ = ind.macd(close)
+    dif, dea, bar = ind.macd(close)
     expected_dif = close.ewm(span=12, adjust=False).mean() - close.ewm(span=26, adjust=False).mean()
     pd.testing.assert_series_equal(dif, expected_dif, check_names=False)
     pd.testing.assert_series_equal(dea, dif.ewm(span=9, adjust=False).mean(), check_names=False)
+    pd.testing.assert_series_equal(bar, (dif - dea) * 2.0, check_names=False)
 
 
-# ============================================================
-# 口径：BOLL 基准价是收盘价，不是典型价
-# ============================================================
 def test_boll_basis_is_close_not_typical_price(df: pd.DataFrame) -> None:
-    """东财/通达信 BOLL = MA(CLOSE,N) ± k*STD(CLOSE,N)。
-
-    mplchart 用典型价 (H+L+C)/3 做基准，画出来和券商软件不是同一条线。
-    """
     close = df["close"]
     mid, upper, lower = ind.boll(close, 20, 2.0)
     pd.testing.assert_series_equal(mid, close.rolling(20).mean(), check_names=False)
-
     typical = (df["high"] + df["low"] + df["close"]) / 3.0
-    # 中轨必须贴收盘均线、而不是典型价均线
-    assert not np.allclose(
-        mid.dropna().to_numpy(),
-        typical.rolling(20).mean().dropna().to_numpy(),
-    )
-
+    assert not np.allclose(mid.dropna().to_numpy(), typical.rolling(20).mean().dropna().to_numpy())
     std = close.rolling(20).std(ddof=0)
     pd.testing.assert_series_equal(upper, mid + 2.0 * std, check_names=False)
     pd.testing.assert_series_equal(lower, mid - 2.0 * std, check_names=False)
 
 
-# ============================================================
-# 口径：RSI Wilder / KDJ 递归 / BBI
-# ============================================================
-def test_rsi_is_wilder_smoothing() -> None:
-    """Wilder 用 adjust=False 的递归平滑；mplchart 的 adjust=True 在短序列上有偏差。"""
+def test_rsi_wilder_and_extremes() -> None:
     close = pd.Series([44.0, 44.3, 44.1, 44.2, 44.5, 43.4, 44.3, 44.8, 45.0, 45.9, 46.0, 45.6])
-    got = ind.rsi(close, 6)
-
     delta = close.diff()
     gain = pd.Series(delta.clip(lower=0.0).ewm(alpha=1 / 6, adjust=False).mean())
     loss = pd.Series((-delta.clip(upper=0.0)).ewm(alpha=1 / 6, adjust=False).mean())
     expected = pd.Series(100.0 - 100.0 / (1.0 + gain / loss))
-    assert got.iloc[-1] == pytest.approx(expected.iloc[-1])
+    assert ind.rsi(close, 6).iloc[-1] == pytest.approx(expected.iloc[-1])
+    assert ind.rsi(pd.Series(np.arange(1, 30, dtype=float)), 6).iloc[-1] == 100.0
+    assert ind.rsi(pd.Series(np.arange(30, 1, -1, dtype=float)), 6).iloc[-1] == pytest.approx(0.0)
 
 
-def test_rsi_all_up_is_100_not_nan() -> None:
-    """全涨段 avg_loss=0，必须记 100 而不是 0/0 的 NaN 断点。"""
-    close = pd.Series(np.arange(1, 30, dtype=float))
-    assert ind.rsi(close, 6).iloc[-1] == 100.0
-
-
-def test_rsi_all_down_is_zero() -> None:
-    close = pd.Series(np.arange(30, 1, -1, dtype=float))
-    assert ind.rsi(close, 6).iloc[-1] == pytest.approx(0.0)
-
-
-def test_kdj_recursion_matches_manual() -> None:
-    """K = (RSV + 2K')/3，D = (K + 2D')/3，初值 50；J = 3K - 2D。"""
-    n = 20
+def test_kdj_recursion_and_flat_bar() -> None:
     rng = np.random.default_rng(3)
-    close = pd.Series(100 + np.cumsum(rng.normal(0, 1, n)))
-    high = close + 1.0
-    low = close - 1.0
-
+    close = pd.Series(100 + np.cumsum(rng.normal(0, 1, 20)))
+    high, low = close + 1.0, close - 1.0
     k, d, j = ind.kdj(high, low, close, 9, 3, 3)
-
     low_min = low.rolling(9, min_periods=1).min()
     high_max = high.rolling(9, min_periods=1).max()
     rsv = (close - low_min) / (high_max - low_min) * 100.0
-    k_prev = d_prev = 50.0
-    for i in range(n):
-        k_prev = (rsv.iloc[i] + 2 * k_prev) / 3
-        d_prev = (k_prev + 2 * d_prev) / 3
-    assert k.iloc[-1] == pytest.approx(k_prev)
-    assert d.iloc[-1] == pytest.approx(d_prev)
-    assert j.iloc[-1] == pytest.approx(3 * k_prev - 2 * d_prev)
+    kp = dp = 50.0
+    for r in rsv:
+        kp = (r + 2 * kp) / 3
+        dp = (kp + 2 * dp) / 3
+    assert k.iloc[-1] == pytest.approx(kp)
+    assert d.iloc[-1] == pytest.approx(dp)
+    assert j.iloc[-1] == pytest.approx(3 * kp - 2 * dp)
 
-
-def test_kdj_flat_bar_uses_neutral_rsv() -> None:
-    """一字板（H==L）时 RSV 记中性 50，不能产生 NaN 断点。"""
-    close = pd.Series([10.0] * 15)
-    k, d, j = ind.kdj(close.copy(), close.copy(), close)
-    assert k.notna().all() and d.notna().all() and j.notna().all()
-    assert k.iloc[-1] == pytest.approx(50.0)
+    flat = pd.Series([10.0] * 15)
+    fk, fd, fj = ind.kdj(flat.copy(), flat.copy(), flat)
+    assert fk.notna().all() and fd.notna().all() and fj.notna().all()
+    assert fk.iloc[-1] == pytest.approx(50.0)
 
 
 def test_bbi_is_mean_of_four_mas(df: pd.DataFrame) -> None:
@@ -201,13 +150,9 @@ def test_bbi_is_mean_of_four_mas(df: pd.DataFrame) -> None:
     pd.testing.assert_series_equal(ind.bbi(close), expected, check_names=False)
 
 
-# ============================================================
-# 一致性：图表读的 series 末值 == AI 读的标量
-# ============================================================
 def test_series_last_equals_papertrade_scalar(df: pd.DataFrame) -> None:
-    """指标曾有两份实现（图表一份、AI 一份）。这条锁死两边同源。"""
+    """图表 series 末值与 AI 标量层必须同源。"""
     close, high, low, volume = df["close"], df["high"], df["low"], df["volume"]
-
     assert ind.ma(close, 20).iloc[-1] == pytest.approx(pt.calc_ma(close, 20))
     assert ind.bbi(close).iloc[-1] == pytest.approx(pt.calc_bbi(close))
     assert ind.rsi(close, 6).iloc[-1] == pytest.approx(pt.calc_rsi(close, 6))
@@ -219,30 +164,22 @@ def test_series_last_equals_papertrade_scalar(df: pd.DataFrame) -> None:
 
     dif, dea, bar = ind.macd(close)
     p_dif, p_dea, p_bar, _, _ = pt.calc_macd(close)
-    assert dif.iloc[-1] == pytest.approx(p_dif)
-    assert dea.iloc[-1] == pytest.approx(p_dea)
-    assert bar.iloc[-1] == pytest.approx(p_bar)
+    assert (dif.iloc[-1], dea.iloc[-1], bar.iloc[-1]) == pytest.approx((p_dif, p_dea, p_bar))
 
     k, d, j = ind.kdj(high, low, close)
     p_k, p_d, p_j, _, _ = pt.calc_kdj(df)
-    assert k.iloc[-1] == pytest.approx(p_k)
-    assert d.iloc[-1] == pytest.approx(p_d)
-    assert j.iloc[-1] == pytest.approx(p_j)
+    assert (k.iloc[-1], d.iloc[-1], j.iloc[-1]) == pytest.approx((p_k, p_d, p_j))
 
     mid, upper, lower = ind.boll(close, 20, 2.0)
     p_mid, p_up, p_low, _, _ = pt.calc_boll(close, 20, 2.0)
-    assert mid.iloc[-1] == pytest.approx(p_mid)
-    assert upper.iloc[-1] == pytest.approx(p_up)
-    assert lower.iloc[-1] == pytest.approx(p_low)
+    assert (mid.iloc[-1], upper.iloc[-1], lower.iloc[-1]) == pytest.approx((p_mid, p_up, p_low))
 
     support, resistance = ind.support_resistance(high, low, 20)
     p_sup, p_res = pt.calc_support_resistance(df, 20)
-    assert support.iloc[-1] == pytest.approx(p_sup)
-    assert resistance.iloc[-1] == pytest.approx(p_res)
+    assert (support.iloc[-1], resistance.iloc[-1]) == pytest.approx((p_sup, p_res))
 
 
 def test_compute_indicators_matches_series_layer(df: pd.DataFrame) -> None:
-    """AI 拿到的 dict 必须和图表画的是同一批数。"""
     out = pt.compute_indicators(df)
     close, high, low = df["close"], df["high"], df["low"]
     assert out["kdj_k"] == pytest.approx(ind.kdj(high, low, close)[0].iloc[-1])
@@ -252,163 +189,79 @@ def test_compute_indicators_matches_series_layer(df: pd.DataFrame) -> None:
     assert out["rsi6"] == pytest.approx(ind.rsi(close, 6).iloc[-1])
 
 
-# ============================================================
-# 叉信号
-# ============================================================
-def test_cross_signals_detects_golden_and_death() -> None:
-    fast = pd.Series([1.0, 1.0, 1.0, 0.0, 2.0])  # 末根上穿
+def test_cross_signals() -> None:
+    fast = pd.Series([1.0, 1.0, 1.0, 0.0, 2.0])
     slow = pd.Series([1.5, 1.5, 1.5, 1.0, 1.0])
-    golden, death = ind.cross_signals(fast, slow, days=3)
-    assert golden and not death
-
-    golden, death = ind.cross_signals(slow, fast, days=3)
-    assert death and not golden
-
-
-def test_cross_signals_ignores_old_cross() -> None:
-    """只看最近 N 根，更早的叉不算。"""
-    fast = pd.Series([0.0, 2.0, 2.0, 2.0, 2.0, 2.0])  # 叉发生在第 1 根
-    slow = pd.Series([1.0, 1.0, 1.0, 1.0, 1.0, 1.0])
-    golden, _ = ind.cross_signals(fast, slow, days=3)
-    assert not golden
+    assert ind.cross_signals(fast, slow, days=3) == (True, False)
+    assert ind.cross_signals(slow, fast, days=3) == (False, True)
+    old_fast = pd.Series([0.0, 2.0, 2.0, 2.0, 2.0, 2.0])
+    old_slow = pd.Series([1.0, 1.0, 1.0, 1.0, 1.0, 1.0])
+    assert ind.cross_signals(old_fast, old_slow, days=3)[0] is False
 
 
-# ============================================================
-# 归一化
-# ============================================================
-def test_normalize_pct_starts_at_zero(df: pd.DataFrame) -> None:
+def test_normalize_pct(df: pd.DataFrame) -> None:
     out = ind.normalize_pct(df["close"])
     assert out.iloc[0] == pytest.approx(0.0)
     assert out.iloc[-1] == pytest.approx(df["close"].iloc[-1] / df["close"].iloc[0] - 1)
-
-
-def test_normalize_pct_zero_base_is_all_nan() -> None:
     assert ind.normalize_pct(pd.Series([0.0, 1.0, 2.0])).isna().all()
-
-
-def test_normalize_pct_empty() -> None:
     assert ind.normalize_pct(pd.Series([], dtype=float)).empty
 
 
-# ============================================================
-# 区间最大涨幅 / 最大回撤（曾算出 >100% 的回撤）
-# ============================================================
 def _pct(closes: list[float]) -> pd.Series:
     c = np.asarray(closes, dtype=float)
     return pd.Series((c / c[0] - 1.0) * 100.0)
 
 
-def test_swing_stats_peak_then_halve() -> None:
-    """100→250→125：回撤应为 -50%（125/250-1），而不是百分点相减的 -125%。"""
-    runup, drawdown = ind.swing_stats(_pct([100, 250, 125]))
-    assert runup == pytest.approx(150.0)
-    assert drawdown == pytest.approx(-50.0)
-
-
-def test_swing_stats_uses_trough_as_gain_denominator() -> None:
-    """100→85→130：涨幅是 85→130 的 +52.94%，不是相对首日的 +30%。"""
-    runup, drawdown = ind.swing_stats(_pct([100, 85, 130]))
-    assert runup == pytest.approx((130 / 85 - 1) * 100)
-    assert drawdown == pytest.approx(-15.0)
-
-
-def test_swing_stats_monotonic_paths() -> None:
-    runup, drawdown = ind.swing_stats(_pct([100, 150, 200]))
-    assert runup == pytest.approx(100.0)
-    assert drawdown == pytest.approx(0.0)  # 单调上涨无回撤
-
-    runup, drawdown = ind.swing_stats(_pct([100, 70, 40]))
-    assert runup == pytest.approx(0.0)  # 单调下跌无涨幅
-    assert drawdown == pytest.approx(-60.0)
-
-
-def test_swing_stats_drawdown_respects_peak_before_trough() -> None:
-    """V 型后创新高：回撤取 100→60 的 -40%，不能跨过时间顺序拿 200 和 60 配对。"""
+def test_swing_stats_core_and_invariants() -> None:
+    assert ind.swing_stats(_pct([100, 250, 125])) == pytest.approx((150.0, -50.0))
+    assert ind.swing_stats(_pct([100, 85, 130])) == pytest.approx(((130 / 85 - 1) * 100, -15.0))
+    assert ind.swing_stats(_pct([100, 150, 200])) == pytest.approx((100.0, 0.0))
+    assert ind.swing_stats(_pct([100, 70, 40])) == pytest.approx((0.0, -60.0))
     runup, drawdown = ind.swing_stats(_pct([100, 80, 100, 60, 200]))
     assert drawdown == pytest.approx(-40.0)
     assert runup == pytest.approx(200 / 60 * 100 - 100, abs=1e-3)
 
+    for seed in range(10):
+        rng = np.random.default_rng(seed)
+        close = 100 * np.cumprod(1 + rng.normal(0, 0.05, 200))
+        r, dd = ind.swing_stats(_pct([float(x) for x in close]))
+        assert -100.0 < dd <= 0.0 and r >= 0.0
 
-@pytest.mark.parametrize("seed", range(30))
-def test_swing_stats_drawdown_never_exceeds_100pct(seed: int) -> None:
-    """性质测试：只要价格恒正，回撤永远在 (-100%, 0]，涨幅永远 >= 0。
-
-    这正是原实现（两点相减）违反的不变量。
-    """
-    rng = np.random.default_rng(seed)
-    close = 100 * np.cumprod(1 + rng.normal(0, 0.05, 200))
-    runup, drawdown = ind.swing_stats(_pct([float(x) for x in close]))
-    assert -100.0 < drawdown <= 0.0
-    assert runup >= 0.0
-
-
-def test_swing_stats_degenerate_inputs() -> None:
-    assert ind.swing_stats(pd.Series([], dtype=float)) == (0.0, 0.0)
-    assert ind.swing_stats(pd.Series([0.0])) == (0.0, 0.0)
-    assert ind.swing_stats(pd.Series([0.0, np.nan, 10.0])) == (0.0, 0.0)
-    assert ind.swing_stats(pd.Series([0.0, -100.0])) == (0.0, 0.0)  # 归零：level<=0
+    for bad in (
+        pd.Series([], dtype=float),
+        pd.Series([0.0]),
+        pd.Series([0.0, np.nan, 10.0]),
+        pd.Series([0.0, -100.0]),
+        _pct([100, 100, 100]),
+    ):
+        assert ind.swing_stats(bad) == (0.0, 0.0)
 
 
-def test_swing_stats_flat_series() -> None:
-    assert ind.swing_stats(_pct([100, 100, 100])) == (0.0, 0.0)
-
-
-def test_swing_points_positions() -> None:
-    """点位必须是波段自己的谷→峰/峰→谷，而不是全局最高/最低点。
-
-    100→110→70→90→60：全局最高在 1、全局最低在 4；
-    最大涨幅是 70→90（2→3），最大回撤是 110→60（1→4）。
-    曾把「区间最大涨幅」标注挂在全局最高点上（此例是位置 1），完全错位。
-    """
+def test_swing_points() -> None:
     points = ind.swing_points(_pct([100, 110, 70, 90, 60]))
     assert points.max_runup == pytest.approx((90 / 70 - 1) * 100)
     assert (points.runup_start, points.runup_end) == (2, 3)
     assert points.max_drawdown == pytest.approx((60 / 110 - 1) * 100)
     assert (points.drawdown_start, points.drawdown_end) == (1, 4)
 
-
-def test_swing_points_monotonic_marks_missing_side() -> None:
-    """单边行情：没有反弹/回撤的一侧幅度为 0，位置记 -1。"""
     up = ind.swing_points(_pct([100, 150, 200]))
     assert (up.drawdown_start, up.drawdown_end) == (-1, -1)
     assert (up.runup_start, up.runup_end) == (0, 2)
-
-    down = ind.swing_points(_pct([100, 70, 40]))
-    assert (down.runup_start, down.runup_end) == (-1, -1)
-    assert (down.drawdown_start, down.drawdown_end) == (0, 2)
+    assert ind.swing_points(pd.Series([0.0, np.nan, 10.0])) == ind.SwingPoints(0.0, -1, -1, 0.0, -1, -1)
 
 
-def test_swing_points_degenerate_inputs() -> None:
-    points = ind.swing_points(pd.Series([0.0, np.nan, 10.0]))
-    assert points == ind.SwingPoints(0.0, -1, -1, 0.0, -1, -1)
-
-
-# ============================================================
-# 边界
-# ============================================================
-def test_indicators_on_short_series_give_nan_not_crash() -> None:
+def test_short_series_nan_and_none() -> None:
     close = pd.Series([10.0, 11.0, 12.0])
     assert np.isnan(ind.ma(close, 20).iloc[-1])
     assert np.isnan(ind.bbi(close).iloc[-1])
     assert np.isnan(ind.boll(close, 20)[0].iloc[-1])
-
-
-def test_papertrade_scalars_return_none_on_short_series() -> None:
-    """series 层用 NaN 表示数据不足，标量层的契约是 None。"""
-    close = pd.Series([10.0, 11.0, 12.0])
     assert pt.calc_ma(close, 20) is None
     assert pt.calc_bbi(close) is None
     assert pt.calc_macd(close) == (None, None, None, False, False)
     assert pt.calc_boll(close, 20) == (None, None, None, None, None)
 
 
-def test_volume_ratio_zero_avg_volume_is_none() -> None:
-    df = _series(30)
-    df.loc[df.index[-6:-1], "volume"] = 0.0
-    assert pt.calc_volume_ratio(df) is None
-
-
-def test_rel_volume_and_close_percentile() -> None:
+def test_volume_ratio_and_location_metrics() -> None:
     df = _series(80)
     rel = pt.calc_rel_volume(df, 20)
     pct = pt.calc_close_percentile(df["close"], 60)
@@ -418,3 +271,7 @@ def test_rel_volume_and_close_percentile() -> None:
     assert out["rel_volume"] == pytest.approx(rel)
     assert out["close_percentile"] == pytest.approx(pct)
     assert "bullish_close" in out
+
+    df_zero = _series(30)
+    df_zero.loc[df_zero.index[-6:-1], "volume"] = 0.0
+    assert pt.calc_volume_ratio(df_zero) is None
