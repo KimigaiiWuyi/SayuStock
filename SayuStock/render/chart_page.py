@@ -81,6 +81,13 @@ class Mark:
 
 
 @dataclass(slots=True)
+class Callout:
+    y: float
+    label: str
+    color: str
+
+
+@dataclass(slots=True)
 class Legend:
     label: str
     color: str
@@ -102,6 +109,7 @@ class Panel:
     rules: list[Rule] = field(default_factory=list)
     dots: list[Dot] = field(default_factory=list)
     marks: list[Mark] = field(default_factory=list)
+    callouts: list[Callout] = field(default_factory=list)
     legend: list[Legend] = field(default_factory=list)
     empty: str = ""
 
@@ -119,18 +127,25 @@ class ChartPage:
     footer: str
     legend: list[Legend] = field(default_factory=list)
     notes: list[str] = field(default_factory=list)
+    width: int = WIDTH
+
+
+def plot_bounds(width: int = WIDTH) -> tuple[int, int]:
+    plot_width = width - 56
+    return plot_width, plot_width - 77
 
 
 def page_html(page: ChartPage) -> str:
+    plot_width, right = plot_bounds(page.width)
     return render_template(
-        "chart_page.html", page=page, width=WIDTH, plot_width=PLOT_WIDTH, left=LEFT, right=RIGHT, top=TOP
+        "chart_page.html", page=page, width=page.width, plot_width=plot_width, left=LEFT, right=right, top=TOP
     )
 
 
 async def render_chart(page: ChartPage | str) -> bytes | str:
     if isinstance(page, str):
         return page
-    return await render_html(page_html(page), width=WIDTH, label=page.eyebrow)
+    return await render_html(page_html(page), width=page.width, label=page.eyebrow)
 
 
 def frame_column(frame: pd.DataFrame, name: str) -> pd.Series:

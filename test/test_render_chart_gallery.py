@@ -171,7 +171,8 @@ def test_ninety_daily_candles_show_both_years_on_date_axis() -> None:
     series = _kline_across_year()
     chart = prepare_kline(series)
     assert not isinstance(chart, str), chart
-    assert len(series.bars) == len(chart.panels[0].rects) == 90
+    # 90 volume bars overlaid + 90 candle bodies
+    assert len(chart.panels[0].rects) == 180
     assert "90 根" in chart.subtitle
     ticks = [tick.label for tick in chart.panels[-1].x_ticks]
     assert ticks[0] == "2025-10-13" and ticks[-1] == "2026-02-13"
@@ -188,16 +189,19 @@ def test_kline_indicators_and_period_match_upstream() -> None:
     assert "季K线" in chart.title
     close = data.chart_df["close"]
     assert len(close) == 134
-    main, volume, turnover, rsi, kdj, macd = chart.panels
+    main, turnover, rsi, kdj, macd = chart.panels
     main_legend = {entry.label: entry.value for entry in main.legend}
     for period in (5, 10, 20, 60):
         assert main_legend[f"MA{period}"] == f"{ind.ma(close, period).iloc[-1]:.2f}"
     assert main_legend["BBI"] == f"{ind.bbi(close).iloc[-1]:.2f}"
-    assert set(main_legend) >= {"BOLL60 · 2σ", "BOLL60 · 3σ"}
-    assert len(main.fills) == 2 and volume.rects
+    assert set(main_legend) >= {"BOLL60 · 2σ", "BOLL60 · 3σ", "成交量"}
+    assert len(main.fills) == 2 and len(main.rects) == 268 and main.right_axis
     assert turnover.right_axis and {item.label for item in turnover.legend} == {"换手率", "CMF20"}
+    assert len(turnover.marks) == 2 and len(turnover.dots) == 2
     assert [entry.label for entry in rsi.legend] == ["RSI6", "RSI12", "RSI24"]
+    assert len(rsi.callouts) == 2 and "超买区" in rsi.callouts[0].label and "超卖区" in rsi.callouts[1].label
     assert [entry.label for entry in kdj.legend] == ["K", "D", "J"]
+    assert len(kdj.rules) == 3  # 20, 80, 50 midline
     dif, dea, hist = ind.macd(close)
     assert [entry.value for entry in macd.legend] == [f"{item.iloc[-1]:.2f}" for item in (dif, dea, hist)]
 

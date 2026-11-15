@@ -39,8 +39,10 @@ async def _artifact(
     sector = result.sector
     _ai_return_cloudmap(raw_data, market, sector)
 
-    width = int(STOCK_CONFIG.get_config("mapcloud_viewport").data)
-    scale = int(STOCK_CONFIG.get_config("mapcloud_scale").data)
+    raw_width = int(STOCK_CONFIG.get_config("mapcloud_viewport").data)
+    raw_scale = int(STOCK_CONFIG.get_config("mapcloud_scale").data)
+    width = raw_width if raw_width > 0 else 2500
+    scale = raw_scale if raw_scale > 0 else 2
     minutes = int(STOCK_CONFIG.get_config("mapcloud_refresh_minutes").data)
     layer = 2 if market == "大盘云图" else 1
     file = get_render_file(

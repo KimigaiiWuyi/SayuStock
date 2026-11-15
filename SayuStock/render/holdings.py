@@ -10,6 +10,7 @@ from ..utils.warn_box import Failure, failure_lines
 
 PAD = 24
 SINGLE_WIDTH, DOUBLE_WIDTH = 760, 1360
+MOOD_WIDTH, MOOD_HEIGHT = 792, 269
 
 
 def holdings_html(
@@ -40,7 +41,7 @@ def holdings_html(
         summary_tone=tone(average),
         mood=mood_uri(title_num),
         mood_width=mood_width,
-        mood_height=round(mood_width * 400 / 850, 2),
+        mood_height=round(mood_width * MOOD_HEIGHT / MOOD_WIDTH, 2),
         cards=cards,
         columns=(rows[:split], rows[split:]) if two_columns else (rows,),
         empty=not rows,
