@@ -101,13 +101,17 @@ def probe(monkeypatch: pytest.MonkeyPatch) -> tuple[list[str], list[str]]:
     async def no_index(names: list[str]) -> list[object]:
         return []
 
+    async def no_watch_index(market: _FakeMarket) -> list[Quote | None]:
+        return [None] * 4
+
     df = _module("SayuStock.stock_info.draw_fund_info")
     dmi = _module("SayuStock.stock_info.draw_my_info")
 
     for mod in (df, dmi):
         monkeypatch.setattr(mod, "ai_return", ai_texts.append)
-        monkeypatch.setattr(mod, "render_html_to_bytes", fake_render)
-        monkeypatch.setattr(mod, "quote_index_items", no_index)
+        monkeypatch.setattr(mod, "render_html", fake_render)
+    monkeypatch.setattr(df, "quote_index_items", no_index)
+    monkeypatch.setattr(dmi, "_watch_index_quotes", no_watch_index)
     return ai_texts, htmls
 
 
@@ -123,10 +127,11 @@ def test_fund_partial_failure_renders_image_with_warning(
 
     async def fake_pos(fcode: str) -> dict[str, object]:
         return {
+            "Expansion": "2026-09-30",
             "Datas": [
                 {"ShareCode": "600519", "ShareName": "贵州茅台", "ShareProportion": "8.50"},
                 {"ShareCode": "300750", "ShareName": "宁德时代", "ShareProportion": "6.20"},
-            ]
+            ],
         }
 
     monkeypatch.setattr(df, "get_code_id", fake_code_id)
@@ -137,11 +142,14 @@ def test_fund_partial_failure_renders_image_with_warning(
     assert out == b"\x89PNG", "部分失败也必须出图，不许回一句文字"
     html = htmls[-1]
     # 失败写在自己那一行：涨跌幅格写「失败」，原因写在那行折线位置，不另挂横幅
-    assert 'class="warn"' not in html
+    assert 'class="column warn"' not in html
     assert "失败" in html
     assert "⚠ 东方财富未找到标的" in html
     # 成功的行照常画
     assert "名称600519" in html
+    assert "报告期 2026-09-30" in html
+    assert "前十占比 14.70%" in html
+    assert "+1.20%" in html
     assert ai_texts, "失败必须写进 AI 文字"
     assert "宁德时代" in ai_texts[-1]
 
@@ -177,19 +185,19 @@ def test_my_stock_partial_failure_renders_image_with_warning(
     dmi = _module("SayuStock.stock_info.draw_my_info")
 
     async def fake_uid_list(user_id: str, bot_id: str, game_name: str | None = None) -> list[str]:
-        return ["600519", "300750", "000858"]
+        return ["1.600519", "0.300750", "0.000858"]
 
     monkeypatch.setattr(dmi.SsBind, "get_uid_list_by_game", staticmethod(fake_uid_list))
-    monkeypatch.setattr(dmi, "get_market", lambda: _FakeMarket({"600519"}))
+    monkeypatch.setattr(dmi, "get_market", lambda: _FakeMarket({"1.600519"}))
 
     ev = SimpleNamespace(at=None, user_id="u1", bot_id="b1")
     out = asyncio.run(dmi.draw_my_stock_img(ev))
     assert out == b"\x89PNG", "部分失败也必须出图，不许悄悄少画一张卡"
     html = htmls[-1]
-    assert 'class="warn"' in html
+    assert 'class="column warn"' in html
     assert "300750" in html
     assert "000858" in html
-    assert "600519" in html
+    assert 'class="row bar up"' in html
     assert ai_texts and "行情获取失败" in ai_texts[-1]
 
 
@@ -201,7 +209,7 @@ def test_my_stock_all_failed_still_renders_warning(
     dmi = _module("SayuStock.stock_info.draw_my_info")
 
     async def fake_uid_list(user_id: str, bot_id: str, game_name: str | None = None) -> list[str]:
-        return ["600519", "300750"]
+        return ["1.600519", "0.300750"]
 
     monkeypatch.setattr(dmi.SsBind, "get_uid_list_by_game", staticmethod(fake_uid_list))
     monkeypatch.setattr(dmi, "get_market", lambda: _FakeMarket(set()))
@@ -210,6 +218,6 @@ def test_my_stock_all_failed_still_renders_warning(
     out = asyncio.run(dmi.draw_my_stock_img(ev))
     assert out == b"\x89PNG", "全失败也要出图（警告页），不许回「暂无自选行情」"
     html = htmls[-1]
-    assert 'class="warn"' in html
+    assert 'class="column warn"' in html
     assert "600519" in html
     assert "300750" in html

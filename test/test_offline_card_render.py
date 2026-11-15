@@ -1,7 +1,8 @@
-"""用本地 data 缓存渲染全天候 / 我的自选到 test_output，不请求东财。"""
+"""用本地 data 缓存渲染，不请求东财。"""
 
 from __future__ import annotations
 
+import os
 import asyncio
 from pathlib import Path
 from datetime import datetime
@@ -11,26 +12,28 @@ import pytest
 from offline_cache import cache_dir, load_series, load_board_items
 from test_sparkline import make_crypto_series
 
+from SayuStock.render import render_html
 from SayuStock.utils.constant import bond, whsc, crypto, i_code, commodity
 from SayuStock.utils.sparkline import build_sparkline_svg, sparkline_from_series
-from SayuStock.utils.my_stock_html import SPARK_H, SPARK_W, build_my_stock_html, my_stock_canvas_size
+from SayuStock.render.card_widgets import watch_sparkline
+from SayuStock.utils.market.models import Quote
+from SayuStock.utils.my_stock_html import SPARK_H, SPARK_W, WATCH_INDEXES, watchlist_width, build_my_stock_html
 from SayuStock.utils.market.display import DisplayItem, from_quote, pick_display_items
 from SayuStock.utils.all_weather_html import (
     SPARK_H as AW_SPARK_H,
     SPARK_W as AW_SPARK_W,
+    CSS_WIDTH as WEATHER_WIDTH,
     em_secid,
     build_all_weather_html,
-    all_weather_canvas_size,
 )
 from SayuStock.utils.paper_holdings_html import (
     SPARK_H as PH_SPARK_H,
     SPARK_W as PH_SPARK_W,
+    PAPER_HOLDINGS_WIDTH,
     HoldingBarRow,
     build_paper_holdings_html,
-    paper_holdings_canvas_size,
 )
 
-_TEST_OUTPUT = Path(__file__).resolve().parent.parent / "test_output"
 _WATCH = [
     "1.512880",
     "0.159996",
@@ -42,18 +45,6 @@ _WATCH = [
     "1.517900",
     "0.159745",
 ]
-_DIFF_MAP: dict[float, str] = {
-    3.3: "1",
-    2.7: "2",
-    2: "3",
-    1: "4",
-    0: "5",
-    -0.5: "6",
-    -1.3: "7",
-    -2.1: "8",
-    -3.1: "9",
-    -4: "10",
-}
 _JP_FALLBACK: dict[str, tuple[float, float]] = {
     "JP 30Y": (4.06, 1.3),
     "JP 10Y": (2.87, 0.77),
@@ -83,24 +74,15 @@ def _skip_no_cache() -> Path:
     return data
 
 
-def _render(html: str, width: int, height: int) -> bytes:
-    pytest.importorskip("pytakumi")
-    from gsuid_core.utils.html_render import render_html_to_bytes
+def _render(html: str, width: int, label: str) -> bytes:
+    return asyncio.run(render_html(html, width=width, label=label))
 
-    async def _go() -> bytes:
-        return await render_html_to_bytes(
-            html,
-            max_width=float(width * 2),
-            dpi=192.0,
-            device_height=float(height * 2),
-            default_font_size=15.0,
-            allow_refit=False,
-            image_format="png",
-            lang="zh",
-            root_max_width=float(width),
-        )
 
-    return asyncio.run(_go())
+def _write_evidence(name: str, image: bytes) -> None:
+    if "SAYUSTOCK_RENDER_EVIDENCE_DIR" in os.environ:
+        directory = Path(os.environ["SAYUSTOCK_RENDER_EVIDENCE_DIR"])
+        directory.mkdir(parents=True, exist_ok=True)
+        (directory / name).write_bytes(image)
 
 
 def test_all_weather_crypto_sparks_without_cache() -> None:
@@ -206,65 +188,42 @@ def test_offline_all_weather_png() -> None:
     assert 'class="sec-title"' in html
     assert "data:image/jpeg" not in html
     assert sparks["BTC"]
-    width, height = all_weather_canvas_size(sections, sparks)
-    png = _render(html, width, height)
+    png = _render(html, WEATHER_WIDTH, "全天候")
     assert png[:8] == b"\x89PNG\r\n\x1a\n"
-    _TEST_OUTPUT.mkdir(parents=True, exist_ok=True)
-    (_TEST_OUTPUT / "all_weather_spark.png").write_bytes(png)
+    _write_evidence("all_weather_spark.png", png)
 
 
 def test_offline_my_stock_png() -> None:
     data = _skip_no_cache()
-    zs = load_board_items(data, "主要指数")
-    wanted = ["上证指数", "深证成指", "中证A500", "中证2000"]
-    index_items: list[DisplayItem] = []
-    for name in wanted:
-        for item in zs:
-            if name != item.name.split("(")[0].strip() and name not in item.name:
-                continue
-            index_items.append(item)
-            break
+    indices: list[Quote | None] = []
+    for _, secid in WATCH_INDEXES:
+        series = load_series(data, secid)
+        indices.append(series.quote if series is not None else None)
 
-    quotes = []
+    quotes: list[tuple[Quote, str]] = []
     sparks: dict[str, str] = {}
-    all_p = 0.0
     for secid in _WATCH:
         series = load_series(data, secid)
         if series is None or series.quote is None:
             continue
         q = series.quote
         quotes.append((q, secid))
-        all_p += float(q.change_pct) if q.change_pct is not None else 0.0
-        svg = sparkline_from_series(series, width=SPARK_W, height=SPARK_H)
+        svg = watch_sparkline(series, q, width=SPARK_W, height=SPARK_H)
         if svg:
             sparks[secid] = svg
-            sparks[q.symbol.code] = svg
     if len(quotes) < 4:
         pytest.skip("自选缓存不足")
 
-    avg_p = all_p / len(quotes)
-    title_num = "11"
-    for i in _DIFF_MAP:
-        if avg_p >= i:
-            title_num = _DIFF_MAP[i]
-            break
-
-    html_base = build_my_stock_html(quotes=quotes, index_items=index_items, title_num=title_num)
-    html_spark = build_my_stock_html(
-        quotes=quotes,
-        index_items=index_items,
-        title_num=title_num,
-        sparklines=sparks,
-    )
-    assert 'class="bar"' in html_base
+    html_base = build_my_stock_html(quotes=quotes, index_quotes=indices, saved_count=len(_WATCH))
+    html_spark = build_my_stock_html(quotes=quotes, index_quotes=indices, saved_count=len(_WATCH), sparklines=sparks)
+    assert 'class="row bar ' in html_base
     assert 'class="spark"' not in html_base
     assert 'class="spark"' in html_spark
-    width, height, _ = my_stock_canvas_size(len(quotes))
-    png_base = _render(html_base, width, height)
-    png_spark = _render(html_spark, width, height)
-    _TEST_OUTPUT.mkdir(parents=True, exist_ok=True)
-    (_TEST_OUTPUT / "my_stock.png").write_bytes(png_base)
-    (_TEST_OUTPUT / "my_stock_spark.png").write_bytes(png_spark)
+    width = watchlist_width(len(_WATCH))
+    png_base = _render(html_base, width, "我的自选")
+    png_spark = _render(html_spark, width, "我的自选")
+    _write_evidence("my_stock.png", png_base)
+    _write_evidence("my_stock_spark.png", png_spark)
     assert png_base[:8] == b"\x89PNG\r\n\x1a\n"
     assert png_spark[:8] == b"\x89PNG\r\n\x1a\n"
 
@@ -324,13 +283,10 @@ def test_offline_paper_holdings_png() -> None:
         initial_cash=1_000_000.0,
         holdings=rows,
         index_items=index_items,
-        title_num="5",
         sparklines=sparks,
     )
     assert "图例" in html
     assert 'class="donut-svg"' in html
-    width, height = paper_holdings_canvas_size(len(rows))
-    png = _render(html, width, height)
-    _TEST_OUTPUT.mkdir(parents=True, exist_ok=True)
-    (_TEST_OUTPUT / "paper_holdings.png").write_bytes(png)
+    png = _render(html, PAPER_HOLDINGS_WIDTH, "模拟盘自选")
+    _write_evidence("paper_holdings.png", png)
     assert png[:8] == b"\x89PNG\r\n\x1a\n"

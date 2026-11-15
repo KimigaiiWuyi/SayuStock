@@ -13,6 +13,7 @@ from SayuStock.utils.constant import ErroText
 from SayuStock.utils.render_data import CloudmapRenderData, build_cloudmap_render_data
 from SayuStock.utils.market.enums import BoardKind
 from SayuStock.utils.market.models import BoardRow, BoardSnapshot
+from SayuStock.utils.update_stocks import merge_industry_levels
 from SayuStock.utils.sector_resolve import (
     INDUSTRY_MEMBER_CACHE_MINUTES,
     match_sector_menu,
@@ -124,7 +125,7 @@ def test_industry_cloudmap_keeps_l2_constituents() -> None:
     """成分股所属行业仍是一级名时，行业云图也不能再按 sector 过滤掉。"""
     data = build_cloudmap_render_data(_cement_snap(), "行业云图", "水泥", layer=1)
     assert isinstance(data, CloudmapRenderData)
-    assert list(data.df["name"]) == ["海螺水泥"]
+    assert [leaf.name for leaf in data.leaves] == ["海螺水泥"]
 
 
 class _MenuPort:
@@ -216,3 +217,28 @@ def test_industry_cloudmap_fetch_requires_name() -> None:
         assert "水泥" in result.raw_data
 
     asyncio.run(_run())
+
+
+def test_local_l2_semiconductor_and_medical_devices_are_not_short_circuited() -> None:
+    semi = local_industry_member_codes("半导体")
+    assert semi is not None
+    assert len(semi) >= 180
+    assert {"688256", "603061", "688981", "002371"}.issubset(semi)
+    med = local_industry_member_codes("医疗器械")
+    assert med is not None
+    assert len(med) >= 130
+    assert "688712" in med
+
+
+def test_merge_industry_levels_backfills_l1_without_f100_pollution() -> None:
+    merged = merge_industry_levels(
+        base_mapping={"688981": "中芯国际", "688256": "寒武纪", "688000": "同业新股", "688001": "未知细类"},
+        f100_map={"688981": "半导体", "688256": "半导体", "688000": "半导体", "688001": "冷门细分"},
+        l1_map={"688981": "电子"},
+        l2_map={"688981": "半导体", "688256": "半导体"},
+        l3_map={"688981": "集成电路制造", "688256": "数字芯片设计"},
+    )
+    assert merged["688256"]["industry_l1"] == "电子"
+    assert merged["688256"]["industry_l2"] == "半导体"
+    assert merged["688000"]["industry_l1"] == "电子"
+    assert merged["688001"]["industry_l1"] == "未知"

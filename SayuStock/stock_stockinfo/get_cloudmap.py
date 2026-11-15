@@ -1,7 +1,4 @@
-"""stock_stockinfo 对外渲染入口。
-
-个股分时、K 线和个股对比默认使用 matplotlib/mplchart 渲染实现。
-"""
+"""个股分时、K 线和对比图的 Takumi 渲染入口。"""
 
 from .render_mpl import (
     render_image,

@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<style>
+html, body { margin: 0; padding: 0; background: #000000; }
+* { box-sizing: border-box; }
+.treemap { width: {{ page.width }}px; padding: {{ 4 * page.unit }}px; background: #000000; color: #ffffff; font-family: "MiSans", sans-serif; display: flex; flex-direction: column; }
+.map-title-bar { display: flex; flex-direction: row; align-items: baseline; justify-content: center; gap: {{ 12 * page.unit }}px; padding: {{ 8 * page.unit }}px {{ 8 * page.unit }}px {{ 6 * page.unit }}px; }
+.map-title { font-size: {{ 24 * page.unit }}px; line-height: 1.15; font-weight: 750; color: #ffffff; }
+.map-meta { font-size: {{ 12 * page.unit }}px; color: #9ca3af; }
+.map { position: relative; width: {{ page.plot_width }}px; height: {{ page.plot_height }}px; background: #000000; }
+.map-group { position: absolute; display: flex; align-items: center; justify-content: center; padding: 0 {{ 4 * page.unit }}px; color: #ffffff; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; text-align: center; }
+.map-tile { position: absolute; display: flex; flex-direction: column; align-items: center; justify-content: center; overflow: hidden; color: #ffffff; font-weight: 650; line-height: 1.12; text-shadow: 0 1px 2px rgba(0, 0, 0, 0.82); }
+.map-tile b { text-align: center; width: 95%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 700; }
+.map-tile span { font-size: 0.86em; font-weight: 600; opacity: 0.96; white-space: nowrap; }
+.map-foot { padding: {{ 6 * page.unit }}px {{ 8 * page.unit }}px {{ 4 * page.unit }}px; color: rgba(180, 180, 180, 0.72); font-size: {{ 11 * page.unit }}px; }
+</style>
+</head>
+<body>
+<main class="treemap">
+  {% if not page.full_bleed %}
+  <div class="map-title-bar">
+    <span class="map-title">{{ page.title }}</span>
+    <span class="map-meta">{{ page.subtitle }}</span>
+  </div>
+  {% endif %}
+  <div class="map">
+    <svg width="{{ page.plot_width }}" height="{{ page.plot_height }}" viewBox="0 0 {{ page.plot_width }} {{ page.plot_height }}">
+      {% for group in page.groups %}<rect x="{{ group.x }}" y="{{ group.y }}" width="{{ group.w }}" height="{{ group.h }}" fill="#3d3d3b"/>{% endfor %}
+      {% for tile in page.tiles %}<rect x="{{ tile.x }}" y="{{ tile.y }}" width="{{ tile.w }}" height="{{ tile.h }}" fill="{{ tile.color }}"/>{% endfor %}
+    </svg>
+    {% for group in page.groups %}
+    {% if group.show_title %}
+    <span class="map-group" style="left: {{ group.x }}px; top: {{ group.y }}px; width: {{ group.w }}px; height: {{ group.header_h }}px; font-size: {{ group.header_font }}px">{{ group.name }}</span>
+    {% endif %}
+    {% endfor %}
+    {% for tile in page.tiles %}
+    {% if tile.show_text %}
+    <div class="map-tile" style="left: {{ tile.x }}px; top: {{ tile.y }}px; width: {{ tile.w }}px; height: {{ tile.h }}px; font-size: {{ tile.font_size }}px">
+      <b>{{ tile.name }}</b>
+      {% if tile.show_change %}<span>{{ tile.change }}</span>{% endif %}
+    </div>
+    {% endif %}
+    {% endfor %}
+  </div>
+  {% if page.footer %}
+  <div class="map-foot">{{ page.footer }}</div>
+  {% endif %}
+</main>
+</body>
+</html>

@@ -4,13 +4,11 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta
 
-from PIL import Image
-
+from SayuStock.render.compare import prepare_compare
 from SayuStock.utils.constant import ErroText
 from SayuStock.utils.render_data import build_compare_render_data
 from SayuStock.utils.market.enums import AssetClass, KlinePeriod
 from SayuStock.utils.market.models import Bar, SymbolRef, KlineSeries
-from SayuStock.stock_stockinfo.chart_compare import draw_compare_chart
 from SayuStock.utils.market.convert.dataframe import kline_to_df
 
 
@@ -131,7 +129,8 @@ def test_compare_chart_renders_mixed_okx_and_etf() -> None:
         closes=[4.0 + i * 0.01 for i in range(12)],
         hour=0,
     )
-    fig = draw_compare_chart([crypto, etf])
-    assert fig != ErroText["notData"]
-    assert isinstance(fig, Image.Image)
-    assert fig.size[0] > 100
+    page = prepare_compare([crypto, etf])
+    assert page != ErroText["notData"]
+    assert not isinstance(page, str)
+    assert len(page.panels[0].series) == 2
+    assert len(page.legend) == 2

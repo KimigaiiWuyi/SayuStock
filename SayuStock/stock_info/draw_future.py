@@ -3,9 +3,9 @@ import asyncio
 from dataclasses import replace
 
 from gsuid_core.logger import logger
-from gsuid_core.utils.html_render import render_html_to_bytes
 from gsuid_core.ai_core.trigger_bridge import ai_return
 
+from ..render import RenderError, render_html
 from ..utils.market import (
     DisplayItem,
     from_quote,
@@ -22,7 +22,6 @@ from ..utils.all_weather_html import (
     CSS_WIDTH,
     em_secid,
     build_all_weather_html,
-    all_weather_canvas_size,
 )
 
 ItemMap = dict[str, DisplayItem]
@@ -178,21 +177,10 @@ async def draw_future_img() -> str | bytes:
         return board_message or "全天候没有可展示的行情"
     _ai_return_all_weather(data_gz, data2, data3, data4, data5)
     html = build_all_weather_html(visible, sparklines=sparks, sources=tuple(extra_sources))
-    _, height = all_weather_canvas_size(sections, sparks)
     try:
-        return await render_html_to_bytes(
-            html,
-            max_width=float(CSS_WIDTH * 2),
-            dpi=192.0,
-            device_height=float(height * 2),
-            default_font_size=15.0,
-            allow_refit=False,
-            image_format="png",
-            lang="zh",
-            root_max_width=float(CSS_WIDTH),
-        )
-    except (RuntimeError, OSError, ValueError) as e:
-        logger.exception(f"[SayuStock] 全天候 HTML 出图失败: {e}")
+        return await render_html(html, width=CSS_WIDTH, label="全天候")
+    except RenderError as e:
+        logger.warning(f"[SayuStock] 全天候出图失败: {e}")
         return "全天候出图失败"
 
 

@@ -1,0 +1,15 @@
+.tech-hero { display: flex; justify-content: space-between; align-items: center; gap: 16px;
+  padding: 2px 0 12px; }
+.tech-score { display: flex; align-items: baseline; gap: 7px; }
+.tech-score b { font-size: 54px; line-height: 1.1; }
+.tech-track { width: 190px; height: 5px; margin-top: 7px; background: {{ GRID }}; border-radius: 3px; }
+.tech-fill { height: 5px; border-radius: 3px; background: {{ BLUE }}; }
+.tech-fill.up { background: {{ UP }}; }
+.tech-fill.down { background: {{ DOWN }}; }
+.tech-fill.warn { background: {{ YELLOW }}; }
+.tech-levels { margin-top: 14px; }
+.tech-levels .ex-grid { margin-top: 6px; }
+.tech-evidence { display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px; }
+
+
+.tech-summary .ex-item { margin-top: 8px; }

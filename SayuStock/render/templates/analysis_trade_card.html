@@ -1,0 +1,40 @@
+{% extends "extras_base.html" %}
+{% from "extras_macros.html" import heading, metrics %}
+{% from "analysis_macros.html" import technical_readings, technical_evidence %}
+{% block style %}
+{% include "analysis_technical.css" %}
+.card-quote { display: flex; gap: 12px; align-items: baseline; }
+.card-quote b { font-size: 38px; }
+.card-change { font-size: 22px; font-weight: 710; }
+.card-industry { margin-top: 12px; font-size: 15px; color: {{ TEXT_SOFT }}; }
+
+{% endblock %}
+{% block content %}
+{{ heading("股票卡片", stock_name, code) }}
+<section class="panel ex-panel">
+  <div class="ex-note">现价</div>
+  <div class="card-quote ex-num"><b>{{ price }}</b><span class="card-change {{ tone }}">{{ change }}</span></div>
+  {{ metrics(quotes, "six") }}
+  <div class="card-industry">行业 · {{ industry }}{% if industry_change %} {{ industry_change }}{% endif %}</div>
+  {{ metrics(valuation, "three") }}
+</section>
+<section class="panel ex-panel">
+  <div class="row between">
+    <h2 class="ex-h2">技术面</h2>
+    {% if technical %}<span class="{{ 'ex-warn' if technical.tone == 'warn' else technical.tone }}"><b>{{ technical.score }}</b> / 100</span>{% endif %}
+  </div>
+  {% if technical %}
+    {{ technical_readings(technical, true) }}
+  {% else %}
+    <div class="ex-empty">技术面数据暂缺</div>
+  {% endif %}
+</section>
+{% if technical %}{{ technical_evidence(technical) }}{% endif %}
+<section class="panel ex-panel">
+  <div class="row between">
+    <h2 class="ex-h2">财务快照</h2>
+    {% if report_date %}<span class="ex-note">报告期 {{ report_date }}</span>{% endif %}
+  </div>
+  {% if finance %}{{ metrics(finance, "four") }}{% else %}<div class="ex-empty">暂无财务数据</div>{% endif %}
+</section>
+{% endblock %}

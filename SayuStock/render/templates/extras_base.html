@@ -1,0 +1,17 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<style>
+{% include "theme.css" %}
+{% include "extras_ui.css" %}
+{% block style %}{% endblock %}
+</style>
+</head>
+<body>
+<div class="page">
+{% block content %}{% endblock %}
+<footer class="foot extra-foot">{{ footer }}</footer>
+</div>
+</body>
+</html>

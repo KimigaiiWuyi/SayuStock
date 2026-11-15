@@ -1,0 +1,46 @@
+* { box-sizing: border-box; }
+body { margin: 0; }
+.page { width: {{ width }}px; padding: 28px 30px 24px; gap: 12px; }
+.ex-head { display: flex; justify-content: space-between; gap: 20px; align-items: flex-start; margin-bottom: 8px; }
+.ex-kicker { margin-bottom: 7px; font-size: 13px; font-weight: 700; letter-spacing: 1.2px; color: {{ BLUE }}; }
+.ex-title { margin: 0; font-size: 32px; line-height: 1.25; font-weight: 750; }
+.ex-sub { margin-top: 7px; font-size: 15px; line-height: 1.45; color: {{ MUTED }}; }
+.ex-badge { flex: none; margin-top: 24px; height: 31px; display: flex; align-items: center; padding: 0 11px; background: {{ SURFACE }};
+  border: 1px solid {{ BORDER }}; border-radius: 7px; font-size: 14px; font-weight: 680; }
+.ex-panel { padding: 15px; }
+
+.ex-h2 { margin: 0; font-size: 18px; font-weight: 710; }
+.ex-note { color: {{ MUTED }}; font-size: 13px; line-height: 1.4; }
+.ex-grid { display: grid; gap: 8px; }
+.ex-grid.two { grid-template-columns: repeat(2, 1fr); }
+.ex-grid.three { grid-template-columns: repeat(3, 1fr); }
+.ex-grid.four { grid-template-columns: repeat(4, 1fr); }
+.ex-grid.five { grid-template-columns: repeat(5, 1fr); }
+.ex-grid.six { grid-template-columns: repeat(6, 1fr); }
+.ex-grid.spaced { margin-top: 10px; }
+.ex-metric { min-width: 0; padding: 9px 11px; background: {{ SURFACE }}; border-radius: 7px; }
+.ex-metric-label { font-size: 13px; color: {{ MUTED }}; }
+.ex-metric-value { margin-top: 4px; font-size: 19px; font-weight: 710; }
+.ex-metric-note { margin-top: 4px; font-size: 12px; color: {{ MUTED }}; }
+.ex-num { font-variant-numeric: tabular-nums; }
+.ex-big { font-size: 32px; font-weight: 750; }
+.ex-warn { color: {{ YELLOW }}; }
+.ex-info { color: {{ BLUE }}; }
+.ex-warn-panel { padding: 11px 14px; color: {{ YELLOW }}; background: {{ rgba(AMBER, 0.10) }};
+  border: 1px solid {{ rgba(AMBER, 0.42) }}; border-radius: 8px; }
+.ex-warn-panel .ex-note { margin-top: 4px; color: {{ TEXT_SOFT }}; overflow-wrap: anywhere; }
+.ex-empty { padding: 16px 0 3px; color: {{ MUTED }}; font-size: 15px; }
+.ex-list { margin-top: 8px; }
+.ex-item { margin: 0 0 6px; font-size: 15px; line-height: 1.4; overflow-wrap: anywhere; }
+.ex-item:last-child { margin-bottom: 0; }
+.ex-table { margin-top: 10px; }
+.ex-th, .ex-tr { display: grid; gap: 8px; align-items: center; }
+.ex-th { padding: 3px 10px 8px; font-size: 13px; color: {{ MUTED }}; }
+.ex-tr { padding: 8px 10px; min-height: 40px; border-top: 1px solid {{ GRID }};
+  font-size: 16px; font-variant-numeric: tabular-nums; }
+.ex-tr-striped { background: {{ rgba(SURFACE, 0.60) }}; }
+.ex-right { text-align: right; }
+.ex-name { min-width: 0; overflow-wrap: anywhere; font-weight: 670; }
+.ex-code { color: {{ MUTED }}; font-size: 12px; }
+.extra-foot { display: block; color: {{ MUTED }}; padding-top: 9px; margin-top: 2px;
+  border-top: 1px solid {{ GRID }}; line-height: 1.5; }

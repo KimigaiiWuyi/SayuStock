@@ -1,0 +1,117 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+  width: {{ width }}px;
+  background: #07091b;
+  font-family: "MiSans", "Twemoji", sans-serif;
+  color: #e9eef7;
+}
+.page {
+  width: {{ width }}px;
+  background: #07091b;
+  display: flex;
+  flex-direction: column;
+}
+.head { padding: 36px 70px 10px; }
+.topbar { display: flex; height: 8px; border-radius: 8px; overflow: hidden; }
+.top-l { flex: 1; background: #8b3a42; }
+.top-r { flex: 1; background: #2a6a6a; }
+.gantt { margin-top: 14px; display: flex; align-items: flex-start; }
+.tcol { width: 40px; flex: none; padding-top: 16px; }
+.tname { height: 44px; font-size: 14px; font-weight: 630; line-height: 44px; }
+.tname.on { text-shadow: 0 0 8px currentColor; }
+.tname.off { color: #4b5568; font-weight: 400; }
+.tplot { flex: 1; position: relative; padding-top: 16px; }
+.vline { position: absolute; top: 16px; height: 308px; width: 1px; border-left: 1px dashed #3a4258; }
+.track { position: relative; height: 44px; }
+.tbar { position: absolute; top: 16px; height: 12px; border-radius: 6px; box-sizing: border-box; }
+.track.on .tbar { height: 16px; top: 14px; }
+.now-line { position: absolute; top: 2px; height: 322px; width: 2px; background: #fde68a; z-index: 3; }
+.now-dot { position: absolute; left: -4px; top: 0; width: 10px; height: 10px; border-radius: 5px; background: #fde68a; }
+.now-cap { position: absolute; left: 8px; top: -1px; font-size: 12px; font-weight: 630; color: #fde68a; white-space: nowrap; }
+.ticks { position: relative; height: 22px; margin-top: 4px; }
+.tick { position: absolute; top: 0; font-size: 12px; color: #8b95a8; white-space: nowrap; }
+.body { padding: 0 62px; }
+.sec-title { display: flex; align-items: center; gap: 16px; height: 44px; }
+.sec-bar { flex: 1; height: 20px; }
+.sec-title span { flex: none; font-size: 22px; font-weight: 700; color: #ffffff; letter-spacing: 2px; }
+.grid { display: grid; grid-template-columns: repeat(4, 1fr); column-gap: 9px; }
+.tile {
+  width: 100%; height: 132px; margin: 8px 0; border-radius: 0; padding: 8px 6px;
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px;
+  overflow: hidden; min-width: 0;
+}
+.sec.has-spark .tile { height: 176px; padding: 12px 6px; gap: 12px; }
+.tile .name {
+  display: flex; align-items: center; justify-content: center; gap: 4px;
+  width: 100%; max-width: 100%; min-width: 0; overflow: hidden;
+}
+.tile .emo { font-family: "Twemoji", "MiSans", sans-serif; font-size: 20px; line-height: 1; flex: none; }
+.tile .nm {
+  font-size: 23px; color: #ffffff; font-weight: 700; line-height: 1.2;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0;
+}
+.tile .nm.long { font-size: 17px; font-weight: 630; }
+.tile .rest { font-size: 12px; font-weight: 630; color: #fde68a; flex: none; }
+.tile .chg { font-size: 32px; font-weight: 700; line-height: 1.15; }
+.tile .spark { width: {{ spark_w }}px; height: {{ spark_h }}px; flex: none; overflow: hidden; }
+.tile .spark svg { display: block; width: {{ spark_w }}px; height: {{ spark_h }}px; }
+.tile .price { font-size: 24px; font-weight: 630; line-height: 1.1; }
+.tile.has-spark .chg { font-size: 28px; }
+.tile.has-spark .price { font-size: 22px; }
+.tile.stale { opacity: 0.6; }
+.src { padding: 4px 70px 0; font-size: 13px; line-height: 22px; color: #8b95a8; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.footer { display: block; width: 850px; height: 40px; margin: 16px 75px; }
+</style></head><body>
+<div class="page">
+  <!-- as_of:{{ stamp }} -->
+  <div class="head">
+    <div class="topbar"><div class="top-l"></div><div class="top-r"></div></div>
+    <div class="gantt">
+      <div class="tcol">
+        {% for track in tracks %}<div class="tname {{ 'on' if track.active else 'off' }}"{% if track.active %} style="color:{{ track.color }}"{% endif %}>{{ track.name }}</div>{% endfor %}
+      </div>
+      <div class="tplot">
+        {% for left in vlines %}<div class="vline" style="left:{{ '%.2f' | format(left) }}%"></div>{% endfor %}
+        {% for track in tracks %}
+        <div class="track {{ 'on' if track.active else 'off' }}">
+          {% for bar in track.bars %}
+          <div class="tbar" style="left:{{ '%.2f' | format(bar.left) }}%;width:{{ '%.2f' | format(bar.width) }}%;background:{{ track.color }};{% if track.active %}box-shadow:0 0 10px {{ track.color }},0 0 3px #ffffff;border:1px solid #ffffff;{% else %}opacity:0.22;{% endif %}"></div>
+          {% endfor %}
+        </div>
+        {% endfor %}
+        <div class="now-line" style="left:{{ '%.2f' | format(now_left) }}%">
+          <div class="now-dot"></div><div class="now-cap">{{ clock }}</div>
+        </div>
+        <div class="ticks">
+          {% for label, left in ticks %}<div class="tick" style="left:{{ '%.2f' | format(left) }}%">{{ label }}</div>{% endfor %}
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="body">
+    {% for block in sections %}
+    <section class="sec{% if block.has_spark %} has-spark{% endif %}">
+      <div class="sec-title">
+        <div class="sec-bar" style="background:{{ block.accent }}"></div>
+        <span>{{ block.title }}</span>
+        <div class="sec-bar" style="background:{{ block.accent }}"></div>
+      </div>
+      <div class="grid">
+        {% for tile in block.tiles %}
+        <div class="tile{% if tile.stale %} stale{% endif %}{% if tile.spark %} has-spark{% endif %}" style="background:{{ tile.bg }}">
+          <div class="name"><span class="emo">{{ tile.emoji }}</span><span class="nm{% if tile.long_name %} long{% endif %}">{{ tile.label }}</span>{% if tile.stale %}<span class="rest">[休]</span>{% endif %}</div>
+          <div class="chg {{ tile.tone }}" style="color:{{ tile.change_color }}">{{ tile.change }}</div>
+          {% if tile.spark %}<div class="spark">{{ tile.spark | safe }}</div>{% endif %}
+          <div class="price {{ tile.tone }}" style="color:{{ tile.price_color }}">{{ tile.price }}</div>
+        </div>
+        {% endfor %}
+      </div>
+    </section>
+    {% endfor %}
+  </div>
+  <div class="src">{{ source }}</div>
+  <img class="footer" src="{{ brand }}" width="850" height="40" alt="SayuStock">
+</div>
+</body></html>

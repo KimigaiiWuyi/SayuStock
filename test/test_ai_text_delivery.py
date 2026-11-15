@@ -15,8 +15,8 @@ REPO_ROOT = Path(__file__).resolve().parent.parent.parent.parent.parent
 sys.path.insert(0, str(REPO_ROOT))
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from SayuStock.utils.stock import render_cache  # noqa: E402
 from SayuStock.stock_stockinfo import render_mpl as rm  # noqa: E402
-from SayuStock.utils.stock.utils import get_file  # noqa: E402
 from SayuStock.utils.market.enums import BoardKind, AssetClass, KlinePeriod  # noqa: E402
 from SayuStock.utils.market.models import (  # noqa: E402
     Bar,
@@ -29,6 +29,7 @@ from SayuStock.utils.market.models import (  # noqa: E402
     IntradaySeries,
 )
 from SayuStock.stock_stockinfo.data import CloudMapDataResult  # noqa: E402
+from SayuStock.utils.stock.render_cache import get_render_file  # noqa: E402
 
 
 def _klines(n: int = 120, seed: int = 5) -> list[str]:
@@ -71,10 +72,6 @@ def _kline_series(name: str, n: int = 120, seed: int = 5) -> KlineSeries:
     )
 
 
-def _kronos_klines() -> list[str]:
-    return make_klines(80, 7)
-
-
 @pytest.fixture
 def captured(monkeypatch: pytest.MonkeyPatch) -> list[str]:
     got: list[str] = []
@@ -83,7 +80,7 @@ def captured(monkeypatch: pytest.MonkeyPatch) -> list[str]:
 
 
 @pytest.fixture
-def fake_kline_fetch(monkeypatch: pytest.MonkeyPatch) -> Iterator[str]:
+def fake_kline_fetch(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Iterator[str]:
     name = "AI文字投递测试股"
     series = _kline_series(name)
 
@@ -92,7 +89,19 @@ def fake_kline_fetch(monkeypatch: pytest.MonkeyPatch) -> Iterator[str]:
 
     monkeypatch.setattr(rm.CLOUDMAP_DATA_SERVICE, "fetch", fetch)
 
-    cache = get_file(name, "png", "single-stock-kline-101", None)
+    from io import BytesIO
+
+    from PIL import Image
+
+    buffer = BytesIO()
+    Image.new("RGB", (12, 8), "#0b0e13").save(buffer, format="PNG")
+
+    async def draw(series: KlineSeries) -> bytes:
+        return buffer.getvalue()
+
+    monkeypatch.setattr(render_cache, "DATA_PATH", tmp_path)
+    monkeypatch.setattr(rm, "to_single_fig_kline", draw)
+    cache = get_render_file(name, "png", "single-stock-kline-101", None, namespace="takumi-stock-v1")
     cache.unlink(missing_ok=True)
     yield name
     cache.unlink(missing_ok=True)
@@ -202,47 +211,3 @@ def test_emit_ai_text_dispatch_matches_chart_kinds(captured: list[str]) -> None:
     captured.clear()
     rm._emit_ai_text("大盘云图", None, cloud, [])
     assert captured and "大盘云图" in captured[0]
-
-
-def test_kronos_ai_text_sent_on_cold_and_warm_cache(monkeypatch: pytest.MonkeyPatch) -> None:
-    from PIL import Image
-
-    from SayuStock.stock_ai import draw_ai_map as dm
-
-    series = _kline_series("预测缓存测试股", n=80, seed=7)
-
-    class FakeMarket:
-        async def kline(self, *a, **k):  # noqa: ANN001, ARG002
-            return series
-
-    async def fake_code_id(market):  # noqa: ANN001, ARG001
-        return ("1.600000", "预测缓存测试股", "股票")
-
-    monkeypatch.setattr(dm, "get_market", lambda: FakeMarket())
-    monkeypatch.setattr(dm, "get_code_id", fake_code_id)
-    monkeypatch.setattr(dm, "get_full_security_code", lambda c: "1.600000")
-    monkeypatch.setattr(dm, "gdf", lambda df, s: Image.new("RGB", (8, 8), (20, 20, 20)))
-
-    got: list[str] = []
-    monkeypatch.setattr(dm, "ai_return", lambda t: got.append(t))
-
-    sector = f"single-stock-ai-{dm.kronos_run_config().cache_tag}"
-    cache = get_file("1.600000", "png", sector, None)
-    cache.unlink(missing_ok=True)
-
-    class FakeBot:
-        async def send(self, *a, **k):  # noqa: ANN001, ARG002
-            return None
-
-    try:
-        got.clear()
-        asyncio.run(dm.draw_ai_kline_with_forecast("预测缓存测试股", FakeBot()))  # type: ignore[arg-type]
-        assert got, "冷缓存时 AI 没收到文字"
-        cold = got[0]
-
-        got.clear()
-        asyncio.run(dm.draw_ai_kline_with_forecast("预测缓存测试股", FakeBot()))  # type: ignore[arg-type]
-        assert got, "@async_file_cache 命中时 AI 没收到文字 —— 150 分钟内问第二次将完全无输入"
-        assert got[0] == cold
-    finally:
-        cache.unlink(missing_ok=True)

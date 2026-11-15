@@ -2,7 +2,7 @@
 
 只接受领域模型（``IntradaySeries`` / ``KlineSeries`` / ``BoardSnapshot``），
 转成图表渲染所需的稳定结构，不引入 plotly / matplotlib / mplchart。
-plotly 版（``stock_cloudmap/render.py``）与 mpl 版（``stock_stockinfo``）共用。
+云图与个股图表共用。
 指标数学见 ``utils/indicators.py``。
 """
 
@@ -57,11 +57,11 @@ class SingleStockRenderData:
     df: pd.DataFrame
     stock_name: str
     stock_code: str
-    new_price: Any
+    new_price: float | None
     gained: float
     custom_info: str
-    turnover_rate: Any
-    total_amount: Any
+    turnover_rate: float | None
+    total_amount: str
     open_price: float
     y_axis_max_price: float
     y_axis_min_price: float
@@ -84,6 +84,9 @@ class MultiStockItem:
     df: pd.DataFrame
     total_volume: float
     line_color: str = ""
+    source: IntradaySeries | None = None
+    baseline: float = 0.0
+    today_change: float | None = None
 
 
 @dataclass(slots=True)
@@ -108,11 +111,20 @@ class CompareRenderData:
     items: list[CompareStockItem]
 
 
+@dataclass(frozen=True, slots=True)
+class CloudmapLeaf:
+    category: str
+    name: str
+    value: float
+    diff_val: float
+    code: str
+
+
 @dataclass(slots=True)
 class CloudmapRenderData:
-    df: pd.DataFrame
+    leaves: list[CloudmapLeaf]
     title: str
-    treemap_path: list[str]
+    layer: int
 
 
 def _sort_df(df: pd.DataFrame, by: str, *, ascending: bool = True) -> pd.DataFrame:
@@ -717,15 +729,18 @@ def build_single_stock_render_data(series: IntradaySeries) -> SingleStockRenderD
     # 保留会话补齐后的全部行（含未来空分钟），X 轴才能画到收盘；
     # 有价点画线，无价点占位。与 multi-stock 一致，禁止再滤掉 future NaN。
     if rows:
-        full_data = [{"datetime": r["datetime"], "price": r.get("price"), "money": r.get("money")} for r in rows]
+        full_data = rows
     else:
-        full_data = [{"datetime": p.ts, "price": p.price, "money": p.amount} for p in series.points]
+        full_data = [
+            {"datetime": p.ts, "price": p.price, "money": p.amount, "avg_price": p.avg_price} for p in series.points
+        ]
 
     price_history_pd = pd.DataFrame(
         {
             "datetime": [item["datetime"] for item in full_data],
             "price": [item["price"] for item in full_data],
             "money": [item["money"] for item in full_data],
+            "avg_price": [item["avg_price"] for item in full_data],
         }
     )
     price_history_pd["dt"] = pd.to_datetime(price_history_pd["datetime"], errors="coerce")
@@ -902,6 +917,8 @@ def build_multi_stock_render_data(
             logger.warning(f"[SayuStock] Skipping {series.symbol.name} due to invalid open price.")
             continue
         price_history_pd["percentage_change"] = ((price_history_pd["price"] / open_price) - 1) * 100
+        session_change, _ = _last_session_change_amount(price_history_pd)
+        quote = series.quote
 
         change_column = _frame_column(price_history_pd, "percentage_change")
         current_max = float(change_column.max())
@@ -915,6 +932,9 @@ def build_multi_stock_render_data(
                 name=series.symbol.display_name or "Unknown",
                 df=price_history_pd,
                 total_volume=float(_frame_column(price_history_pd, "money").sum()),
+                source=series,
+                baseline=open_price,
+                today_change=quote.change_pct if quote is not None and quote.change_pct is not None else session_change,
             )
         )
 
@@ -972,93 +992,50 @@ def build_cloudmap_render_data(
     if not isinstance(snap, BoardSnapshot):
         return ErroText["notData"]
 
-    unique_by_code: dict[str, dict[str, Any]] = {}
+    unique_by_code: dict[str, CloudmapLeaf] = {}
     for row in snap.rows:
-        if row.market_cap is None or row.change_pct is None or not row.name:
+        if (
+            row.market_cap is None
+            or row.market_cap <= 0
+            or not math.isfinite(row.market_cap)
+            or row.change_pct is None
+            or not math.isfinite(row.change_pct)
+            or not row.name
+        ):
             continue
-        category_name = row.industry or "-"
-        if row.name.startswith(("ST", "*ST")):
-            category_name = "ST"
-        stock_dict: dict[str, Any] = {
-            "category": category_name,
-            "name": row.name,
-            "value": float(row.market_cap),
-            "diff_val": float(row.change_pct),
-            "code": row.code,
-            "sector": sector,
-        }
-        # 同代码跨页并发抖动去重；无代码时退化按 (分类, 名称) 去重
-        key = row.code if row.code else f"{category_name}_{row.name}"
-        if key not in unique_by_code or float(row.market_cap) > float(unique_by_code[key]["value"]):
-            unique_by_code[key] = stock_dict
+        category = "ST" if row.name.startswith(("ST", "*ST")) else row.industry or "-"
+        leaf = CloudmapLeaf(category, row.name, row.market_cap, row.change_pct, row.code)
+        key = row.code if row.code else f"{category}_{row.name}"
+        if key not in unique_by_code or leaf.value > unique_by_code[key].value:
+            unique_by_code[key] = leaf
 
-    if not unique_by_code:
-        return ErroText["notData"]
-
-    grouped_by_category: dict[str, list[dict[str, Any]]] = defaultdict(list)
-    for stock in unique_by_code.values():
-        grouped_by_category[str(stock["category"])].append(stock)
-
-    # 行业/概念快照已是目标板块成分；hotmap 才按 L1 名过滤，这里不能再筛
-    categories_to_process: list[str] = []
+    grouped: dict[str, list[CloudmapLeaf]] = defaultdict(list)
+    for leaf in unique_by_code.values():
+        grouped[leaf.category].append(leaf)
     if market in {"大盘云图", "概念云图", "行业云图"}:
-        categories_to_process = list(grouped_by_category.keys())
-    elif sector is not None and sector in grouped_by_category:
-        categories_to_process = [sector]
+        categories = list(grouped)
+    elif sector is not None and sector in grouped:
+        categories = [sector]
     else:
-        for cat_key in grouped_by_category.keys():
-            if sector and sector in cat_key:
-                categories_to_process = [cat_key]
-                break
-        if not categories_to_process:
-            return ErroText["notData"]
+        categories = [name for name in grouped if sector and sector in name][:1]
 
-    final_stock_list: list[dict[str, Any]] = []
-    for cat_name in categories_to_process:
-        stock_items = grouped_by_category[cat_name]
-        sorted_stocks = sorted(stock_items, key=lambda x: float(x["value"]), reverse=True)
-        # 同一分类内按 name 去重，避免同名不同代码（如正股与衍生份额）导致 Plotly 叶子节点聚合冲突
-        seen_names: set[str] = set()
-        deduped_stocks: list[dict[str, Any]] = []
-        for s in sorted_stocks:
-            stock_name = str(s["name"])
-            if stock_name in seen_names:
-                continue
-            seen_names.add(stock_name)
-            deduped_stocks.append(s)
-
-        num_items = len(deduped_stocks)
+    selected: list[CloudmapLeaf] = []
+    for category in categories:
+        leaves = sorted(grouped[category], key=lambda leaf: leaf.value, reverse=True)
         if layer == 1:
-            num_to_extract = num_items
+            selected.extend(leaves)
         else:
-            if num_items <= 40:
-                fit = 0.6
-            elif num_items <= 100:
-                fit = 0.4
-            elif num_items <= 200:
-                fit = 0.3
-            else:
-                fit = 0.2
-            ideal_count = math.ceil(num_items * fit)
-            clamped_count = max(3, min(ideal_count, 15))
-            num_to_extract = min(clamped_count, num_items)
-        final_stock_list.extend(deduped_stocks[:num_to_extract])
-
-    if not final_stock_list:
+            count = len(leaves)
+            fit = 0.6 if count <= 40 else 0.4 if count <= 100 else 0.3 if count <= 200 else 0.2
+            limit = max(3, min(math.ceil(count * fit), 15))
+            selected.extend(leaves[:limit])
+    if not selected:
         return ErroText["notData"]
 
-    df = _sort_df(pd.DataFrame(final_stock_list), "value", ascending=False)
-    df = _reset_df(df, drop=True)
-    if layer == 1:
-        treemap_path = ["sector", "category", "name"]
-    else:
-        treemap_path = ["category", "name"]
-
-    title = market if market else "板块云图"
-    if sector and market not in ("大盘云图",):
+    title = market or "板块云图"
+    if sector and market != "大盘云图":
         title = f"{market} - {sector}"
-
-    return CloudmapRenderData(df=df, title=title, treemap_path=treemap_path)
+    return CloudmapRenderData(sorted(selected, key=lambda leaf: leaf.value, reverse=True), title, layer)
 
 
 # ---------------------------------------------------------------------------

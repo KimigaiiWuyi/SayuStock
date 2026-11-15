@@ -31,7 +31,7 @@ STOCK_CONFIG = StringConfig("SayuStock", CONFIG_PATH, CONFIG_DEFAULT)
 |----|------|------|
 | ~~`papertrade_multi_group`~~ | **已废弃**（多盘制后无意义），运行时不再读 | False |
 | ~~`papertrade_broadcast_group`~~ | **已废弃**，只在 v2 迁移时读一次转成 `SayuPaperBroadcastTarget` | `""` |
-| `mapcloud_viewport` | 云图截图分辨率 | 2500 |
+| `mapcloud_viewport` | 云图 CSS 画布宽度 | 2500 |
 | `mapcloud_scale` | 云图放大倍数 | 2 |
 | `mapcloud_refresh_minutes` | 图/数据缓存 TTL | 3 |
 | `stock_cache_retention_days` | 每日清理保留天数 | 7 |
@@ -87,7 +87,8 @@ Referer、Accept、语言由各接口保留；东财 `sec-ch-ua` 根据 UA 的 C
 ### 行情 / 图缓存
 
 - 路径：`DATA_PATH` 下 JSON/PNG/HTML  
-- 键生成：`utils/stock/utils.get_file`、`async_file_cache` 装饰器  
+- 行情键生成：`utils/stock/utils.get_file`、`async_file_cache` 装饰器
+- 图片：`utils/stock/render_cache.py` 使用独立版本命名空间、同键串行和原子写入；不覆盖行情 JSON
 - TTL：`mapcloud_refresh_minutes` 比对 mtime  
 - 行业云图成分代码：`industry-members_{BKxxxx}_*.json`，TTL **30 天**（`INDUSTRY_MEMBER_CACHE_MINUTES`）  
 - 清理：每日 00:20 删超过 `stock_cache_retention_days` 的文件  
@@ -100,7 +101,8 @@ Referer、Accept、语言由各接口保留；东财 `sec-ch-ua` 根据 UA 的 C
 
 ### Kronos
 
-`@async_file_cache(..., minutes=150, suffix="html")` — 仅缓存出图产物，文字在外。
+预测 PNG 缓存 150 分钟，键区分 tokenizer、模型和设备；AI 文字在图片缓存判断前发送。
+同键请求串行，模型推理沿用原耗时契约；绘图交给 Core 公开接口，不新增超时预算。
 
 ## 7.5 常量 `utils/constant.py`
 
@@ -122,7 +124,7 @@ Referer、Accept、语言由各接口保留；东财 `sec-ch-ua` 根据 UA 的 C
 
 ## 7.7 依赖安装
 
-README 建议：`playwright`、`plotly`、`pandas`；并执行 `playwright install`。  
-`pyproject.toml` `[project].dependencies` 含 `mplchart` 等。
-
-Core「自动安装依赖」或手动 pdm/poetry/uv 安装均可。
+Python 依赖以 `pyproject.toml` 的 `[project].dependencies` 为准，由 Core 自动安装依赖功能管理。
+图片复用 Core Python 环境里的 `pytakumi`，不另装绘图运行时。
+Playwright 只用于雪球自动 Cookie，使用该功能时才需要安装浏览器。
+依赖检查和回退见 [rendering.md](../../../../docs/rendering.md)。

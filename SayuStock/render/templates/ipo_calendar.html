@@ -1,0 +1,104 @@
+{% extends "extras_base.html" %}
+{% from "extras_macros.html" import heading %}
+{% block style %}
+.ipo-columns { display: grid; grid-template-columns: 355px 1fr; align-items: center; }
+.ipo-legend { display: flex; flex-wrap: wrap; gap: 14px; padding: 11px 14px; }
+.ipo-key { display: flex; align-items: center; gap: 5px; color: {{ TEXT_SOFT }}; font-size: 13px; }
+.ipo-swatch { width: 12px; height: 8px; border-radius: 2px; }
+.phase-apply { background: {{ BLUE }}; }
+.phase-ballot { background: {{ VIOLET }}; }
+.phase-pay { background: {{ ORANGE }}; }
+.phase-grey { background: {{ TEAL }}; }
+.phase-pending { background: {{ AMBER }}; }
+.phase-listed { background: {{ GREEN }}; }
+.phase-listed-up { background: {{ UP }}; }
+.phase-listed-down { background: {{ DOWN }}; }
+.phase-filed { background: {{ MUTED }}; }
+.phase-window { background: {{ rgba(BLUE, 0.34) }}; }
+.phase-bridge { background: {{ rgba(BLUE, 0.14) }}; }
+.ipo-axis { padding: 0 14px; }
+.ipo-dates { display: grid; grid-template-columns: repeat({{ date_cells|length }}, 1fr); }
+.ipo-axis-day { padding: 5px 0; text-align: center; font-size: 13px; color: {{ TEXT_SOFT }}; }
+.ipo-axis-day span { display: block; margin-top: 2px; color: {{ MUTED }}; font-size: 12px; }
+.ipo-axis-day.today { border-radius: 6px; background: {{ rgba(AMBER, 0.14) }}; color: {{ YELLOW }}; }
+.ipo-axis-day.today span { color: {{ YELLOW }}; }
+.ipo-market { padding: 0 14px; }
+
+.ipo-market-head { padding: 9px 0; }
+.market-cn { color: {{ UP }}; }
+.market-hk { color: {{ LILAC }}; }
+.market-us { color: {{ BLUE }}; }
+.ipo-row { border-top: 1px solid {{ GRID }}; min-height: 84px; }
+.ipo-info { padding: 9px 13px 9px 0; }
+.ipo-row-title { display: flex; align-items: center; flex-wrap: wrap; gap: 7px; }
+.ipo-row-title span { min-width: 0; font-size: 17px; font-weight: 720; overflow-wrap: anywhere; }
+.ipo-state { flex: none; padding: 2px 5px; font-size: 11px; border-radius: 4px; }
+.ipo-state.apply { color: {{ BLUE }}; background: {{ rgba(BLUE, 0.13) }}; }
+.ipo-state.filed { color: {{ TEXT_SOFT }}; background: {{ GRID }}; }
+.ipo-state.pending { color: {{ YELLOW }}; background: {{ rgba(AMBER, 0.13) }}; }
+.ipo-state.listed { color: {{ GREEN }}; background: {{ rgba(GREEN, 0.13) }}; }
+.ipo-detail { margin-top: 3px; font-size: 13px; line-height: 1.3; color: {{ MUTED }}; overflow-wrap: anywhere; }
+.ipo-track { position: relative; height: 40px; background: {{ rgba(PAGE, 0.52) }}; border-radius: 5px; }
+.ipo-grid { position: absolute; inset: 0; }
+.ipo-grid-day { height: 40px; border-left: 1px solid {{ GRID }}; }
+.ipo-grid-day.today { background: {{ rgba(AMBER, 0.13) }}; border-left: 1px solid {{ YELLOW }}; }
+.ipo-bar { position: absolute; top: 10px; height: 12px; border-radius: 4px; }
+.ipo-bar.phase-bridge { top: 12px; height: 8px; }
+.ipo-bar.phase-ballot, .ipo-bar.phase-pay, .ipo-bar.phase-grey, .ipo-bar.phase-filed { top: 26px; height: 7px; }
+.ipo-track-shell { padding: 6px 0; min-width: 0; }
+.ipo-outside { display: flex; justify-content: space-between; gap: 10px; margin-top: 4px; font-size: 12px; color: {{ MUTED }}; }
+.ipo-outside span { max-width: 49%; }
+.ipo-empty { padding: 10px 0 12px; border-top: 1px solid {{ GRID }}; font-size: 14px; color: {{ MUTED }}; }
+.ipo-empty.failed { color: {{ YELLOW }}; }
+{% endblock %}
+{% block content %}
+{{ heading("新股发行 / 上市", "IPO 日历", subtitle) }}
+<div class="panel ipo-legend">
+  {% for phase, label in legend %}<span class="ipo-key"><i class="ipo-swatch phase-{{ phase }}"></i>{{ label }}</span>{% endfor %}
+  <span class="ipo-key muted">‹ / › 窗口外日期</span>
+</div>
+<div class="ipo-columns ipo-axis">
+  <span class="ex-note">发行人与里程碑</span>
+  <div class="ipo-dates">
+    {% for cell in date_cells %}<div class="ipo-axis-day{% if cell.today %} today{% endif %}"><b>{{ cell.date_text }}</b><span>{{ cell.caption }}</span></div>{% endfor %}
+  </div>
+</div>
+{% for group in groups %}
+<section class="panel ipo-market">
+  <div class="row between ipo-market-head">
+    <h2 class="ex-h2 market-{{ group.market }}">{{ group.name }}</h2>
+    {% if not group.failed %}<span class="ex-note">{{ group.rows|length }} 只</span>{% endif %}
+  </div>
+  {% if group.failed %}
+  <div class="ipo-empty failed">市场数据源暂时不可用，未计入</div>
+  {% elif not group.rows %}
+  <div class="ipo-empty">窗口内无发行/上市安排</div>
+  {% else %}
+  {% for row in group.rows %}
+  <div class="ipo-columns ipo-row">
+    <div class="ipo-info">
+      <div class="ipo-row-title"><span>{{ row.display_name }}</span><b class="ipo-state {{ row.stage }}">{{ row.stage_text }}</b></div>
+      {% if row.identity %}<div class="ipo-detail ipo-identity">{{ row.identity }}</div>{% endif %}
+      {% if row.dates %}<div class="ipo-detail ipo-dates-text">{{ row.dates }}</div>{% endif %}
+      {% if row.numbers or row.first_day %}
+      <div class="ipo-detail ipo-numbers">{{ row.numbers }}{% if row.first_day %}{% if row.numbers %} · {% endif %}<b class="{{ row.first_day_tone }}">{{ row.first_day }}</b>{% endif %}</div>
+      {% endif %}
+    </div>
+    <div class="ipo-track-shell">
+      <div class="ipo-track">
+        <div class="ipo-grid ipo-dates">{% for cell in date_cells %}<div class="ipo-grid-day{% if cell.today %} today{% endif %}"></div>{% endfor %}</div>
+        {% for bar in row.timeline.bars %}<div class="ipo-bar phase-{{ bar.phase }}" style="left:{{ bar.x }};width:{{ bar.width }}"></div>{% endfor %}
+      </div>
+      {% if row.timeline.before or row.timeline.after %}
+      <div class="ipo-outside">
+        <span>{% if row.timeline.before %}‹ {{ row.timeline.before|join(" · ") }}{% endif %}</span>
+        <span class="ex-right">{% if row.timeline.after %}{{ row.timeline.after|join(" · ") }} ›{% endif %}</span>
+      </div>
+      {% endif %}
+    </div>
+  </div>
+  {% endfor %}
+  {% endif %}
+</section>
+{% endfor %}
+{% endblock %}

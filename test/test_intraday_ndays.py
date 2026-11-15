@@ -267,33 +267,21 @@ def test_five_day_zero_axis_uses_ref_close() -> None:
     assert "+2.16%" in result.day_tick_labels[0]
 
 
-def test_five_day_chart_xlim_covers_padded_session(monkeypatch: pytest.MonkeyPatch) -> None:
-    from PIL import Image
+def test_five_day_chart_xlim_covers_padded_session() -> None:
+    from SayuStock.render.intraday import prepare_single_intraday
+    from SayuStock.render.chart_page import LEFT, RIGHT, plot_x
 
-    from SayuStock.stock_stockinfo import chart_intraday as ci
-
-    captured: list[tuple[float, float]] = []
-
-    def _capture(fig: object) -> Image.Image:
-        axes = getattr(fig, "axes", [])
-        for ax in axes:
-            label = ax.get_label() if hasattr(ax, "get_label") else ""
-            if label in {"root", "twinx"}:
-                continue
-            captured.append(ax.get_xlim())
-        return Image.new("RGB", (10, 10))
-
-    monkeypatch.setattr(ci, "_fig_to_image", _capture)
     series = _five_day_series()
-    result = ci.draw_single_stock_chart(series)
+    result = prepare_single_intraday(series)
     assert not isinstance(result, str), result
     data = build_single_stock_render_data(series)
     assert not isinstance(data, str)
-    n_points = len(data.df)
-    assert captured
-    for left, right in captured:
-        assert left <= 0.0
-        assert right >= float(n_points) - 1.0 - 1e-6
+    xs = plot_x(len(data.df), bars=True)
+    price, money = result.panels
+    assert len(money.x_ticks) == len(data.day_tick_positions)
+    assert [tick.pos for tick in money.x_ticks] == [xs[i] for i in data.day_tick_positions]
+    assert all(LEFT < dot.x < RIGHT for dot in price.dots)
+    assert max(dot.x for dot in price.dots) < xs[-1], "未到收盘的分钟不能画成成交"
 
 
 def test_emit_ai_text_five_day_sector(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -345,21 +333,20 @@ def test_data_fetch_forwards_ndays() -> None:
 
 
 def test_draw_five_day_chart_is_line_not_error() -> None:
-    from SayuStock.stock_stockinfo.chart_intraday import draw_single_stock_chart
+    from SayuStock.render.intraday import prepare_single_intraday
+    from SayuStock.render.chart_page import page_html
 
-    result = draw_single_stock_chart(_five_day_series())
+    result = prepare_single_intraday(_five_day_series())
     assert not isinstance(result, str), result
-    assert result.size[0] > 100 and result.size[1] > 100
+    assert result.panels[0].series and result.panels[0].dots
+    assert "<svg" in page_html(result)
 
 
 def test_five_day_tick_labels_show_dates() -> None:
-    import matplotlib.pyplot as plt
+    from SayuStock.render.intraday import prepare_single_intraday
 
-    from SayuStock.stock_stockinfo.chart_base import _apply_intraday_day_ticks
-
-    fig, ax = plt.subplots()
-    _apply_intraday_day_ticks(ax, [10, 30, 50], ["08-26\n+1.20%", "08-27\n-0.30%", "08-28\n+0.50%"])
-    texts = [lab.get_text() for lab in ax.get_xticklabels()]
-    assert any("08-26" in text for text in texts)
-    assert any("+" in text or "-" in text for text in texts)
-    plt.close(fig)
+    result = prepare_single_intraday(_five_day_series())
+    assert not isinstance(result, str)
+    ticks = result.panels[1].x_ticks
+    assert ticks[0].label == "08-26"
+    assert any("+" in tick.note or "-" in tick.note for tick in ticks)

@@ -1,22 +1,22 @@
 import asyncio
 from typing import Union
+from datetime import date
 
 from gsuid_core.logger import logger
-from gsuid_core.utils.html_render import render_html_to_bytes
 from gsuid_core.ai_core.trigger_bridge import ai_return
 
-from .draw_info import DIFF_MAP
+from ..render import RenderError, render_html
 from ..utils.market import MarketDataPort, get_market, is_market_error
 from ..utils.warn_box import Failure
 from ..utils.sparkline import sparkline_from_series
 from ..utils.index_quotes import quote_index_items
 from ..utils.market.display import market_error_text
 from ..utils.fund_holdings_html import (
+    PAGE_W,
     SPARK_H,
     SPARK_W,
     FundHoldingRow,
     build_fund_holdings_html,
-    fund_holdings_canvas_size,
 )
 from ..utils.stock.request_utils import get_code_id, get_fund_pos_list
 
@@ -137,7 +137,8 @@ async def _render_page(
     fund_code: str,
     rows: list[FundHoldingRow],
     meta: str,
-    title_num: str,
+    average: float | None,
+    report_period: str,
     sparks: dict[str, str] | None = None,
     sources: tuple[str | None, ...] = (),
 ) -> str | bytes:
@@ -146,26 +147,16 @@ async def _render_page(
         fund_code=fund_code,
         rows=rows,
         index_items=await quote_index_items(["上证指数", "深证成指", "中证A500", "中证2000"]),
-        title_num=title_num,
+        average=average,
+        report_period=report_period,
         sparklines=sparks,
         sources=sources,
         meta=meta,
     )
-    width, height = fund_holdings_canvas_size(len(rows))
     try:
-        return await render_html_to_bytes(
-            html,
-            max_width=float(width * 2),
-            dpi=192.0,
-            device_height=float(height * 2),
-            default_font_size=15.0,
-            allow_refit=False,
-            image_format="png",
-            lang="zh",
-            root_max_width=float(width),
-        )
-    except (RuntimeError, OSError, ValueError) as e:
-        logger.exception(f"[SayuStock] 基金持仓 HTML 出图失败: {e}")
+        return await render_html(html, width=PAGE_W, label="基金持仓")
+    except RenderError as e:
+        logger.warning(f"[SayuStock] 基金持仓出图失败: {e}")
         return "基金持仓出图失败"
 
 
@@ -179,7 +170,7 @@ async def draw_fund_info(fcode: Union[str, int]) -> str | bytes:
     dcode = fund_secid.split(".")[1] if "." in fund_secid else fund_secid
 
     fund_data = await get_fund_pos_list(dcode)
-    holdings_raw = fund_data.get("Datas") if fund_data is not None else None
+    holdings_raw = fund_data["Datas"] if fund_data is not None and "Datas" in fund_data else None
     if not isinstance(holdings_raw, list) or not holdings_raw:
         return _fund_data_failure(fund_name, fund_secid, "东方财富基金持仓接口未返回数据")
     holdings: list[dict[str, object]] = [row for row in holdings_raw if isinstance(row, dict)]
@@ -210,24 +201,31 @@ async def draw_fund_info(fcode: Union[str, int]) -> str | bytes:
     avg_p = 0.0
     for row in ok:
         avg_p += float(row.change_pct) if row.change_pct is not None else 0.0
-    avg_p = avg_p / len(ok) if ok else 0.0
-    title_num = "11"
-    for i in DIFF_MAP:
-        if avg_p >= i:
-            title_num = DIFF_MAP[i]
-            break
-
-    meta = f"持仓 {len(rows)} 只 · 前十占比 {_weight_sum(rows):.2f}% · 平均 {avg_p:+.2f}%"
-    _ai_return_fund_info(fund_name, fund_secid, rows, avg_p, failures)
+    average = avg_p / len(ok) if ok else None
+    meta = f"持仓 {len(rows)} 只 · 前十占比 {_weight_sum(rows):.2f}%"
+    raw_period = fund_data["Expansion"] if fund_data is not None and "Expansion" in fund_data else None
+    report_period = _report_period(raw_period)
+    _ai_return_fund_info(fund_name, fund_secid, rows, average, failures, report_period=report_period)
     return await _render_page(
         fund_name=fund_name,
         fund_code=fund_secid,
         rows=rows,
         meta=meta,
-        title_num=title_num,
+        average=average,
+        report_period=report_period,
         sparks=sparks,
         sources=tuple(sources),
     )
+
+
+def _report_period(value: object) -> str:
+    if not isinstance(value, str):
+        return ""
+    try:
+        period = date.fromisoformat(value.strip())
+    except ValueError:
+        return ""
+    return f"报告期 {period:%Y-%m-%d}"
 
 
 def _fund_data_failure(fund_name: str, fund_code: str, reason: str) -> str:
@@ -249,13 +247,17 @@ def _ai_return_fund_info(
     fund_name: str,
     fund_code: str,
     rows: list[FundHoldingRow],
-    avg_p: float,
+    avg_p: float | None,
     failures: list[Failure] | None = None,
+    *,
+    report_period: str = "",
 ) -> None:
     """从基金持仓数据中提取文本信息，通过 ai_return 返回给 AI 分析"""
     try:
         result = f"【{fund_name}({fund_code}) 持仓信息】\n"
-        result += f"持仓数量: {len(rows)} 只，平均涨跌幅: {avg_p:+.2f}%\n\n"
+        average = f"{avg_p:+.2f}%" if avg_p is not None else "暂无数据"
+        result += f"持仓数量: {len(rows)} 只，平均涨跌幅: {average}\n"
+        result += f"{report_period}\n\n" if report_period else "\n"
         if failures:
             detail = "、".join(f.label for f in failures)
             result += f"⚠ {len(failures)} 只行情获取失败：{detail}\n\n"
