@@ -26,7 +26,7 @@ from ..render.card_widgets import (
     heat_card_bg,
 )
 
-PAPER_HOLDINGS_WIDTH = 720
+PAPER_HOLDINGS_WIDTH = 740
 SPARK_W = 100.0
 SPARK_H = 42.0
 

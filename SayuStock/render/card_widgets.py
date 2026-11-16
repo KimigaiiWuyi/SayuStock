@@ -68,7 +68,7 @@ def price_move(quote: Quote) -> float | None:
 def detail_text(code: str, turnover: float | None, amount: float | None) -> str:
     parts = [code] if code else []
     if turnover is not None:
-        parts.append(f"换手 {turnover:.2f}%")
+        parts.append(f"换 {turnover:.2f}%")
     if amount is not None:
         parts.append(f"额 {number_to_chinese(amount)}")
     return " · ".join(parts)

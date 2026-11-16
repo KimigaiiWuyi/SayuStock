@@ -421,7 +421,7 @@ def test_chart_and_card_gallery_render_with_evidence() -> None:
         assert not isinstance(dense_page, str)
         assert sum(tile.show_text for tile in dense_page.tiles) >= 140
         html_dense = treemap_html(dense_page)
-        assert "font-weight: 500" in html_dense and "font-weight: 300" in html_dense
+        assert "font-weight: 550" in html_dense and "font-weight: 380" in html_dense
         _save_evidence(
             "charts",
             "08-industry-cloudmap",
@@ -468,6 +468,7 @@ def test_chart_and_card_gallery_render_with_evidence() -> None:
             failures=[Failure("000858", "东方财富网络异常")],
         )
         assert ">+0.002<" in watch_html and ">-0.002<" in watch_html
+        assert watchlist_width(18) < watchlist_width(26)
         fund_html = build_fund_holdings_html(
             fund_name="沪深优选成长混合",
             fund_code="012345",
@@ -528,7 +529,7 @@ def test_chart_and_card_gallery_render_with_evidence() -> None:
                 84.36,
                 1.25,
                 4220.0,
-                2.5653,
+                12.5653,
                 168720.0,
                 "tencent",
                 spark_provider="eastmoney",

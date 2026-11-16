@@ -20,7 +20,7 @@ SPARK_W = 100.0
 SPARK_H = 42.0
 INDEX_SPARK_W = 160.0
 INDEX_SPARK_H = 32.0
-TWO_COLUMNS_FROM = 18
+TWO_COLUMNS_FROM = 26
 
 
 def watchlist_width(saved_count: int) -> int:

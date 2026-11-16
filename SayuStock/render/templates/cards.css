@@ -57,7 +57,7 @@ body { margin: 0; }
   color: {{ SKY }}; background: {{ rgba(BLUE, 0.16) }}; border: 1px solid {{ rgba(BLUE, 0.34) }};
 }
 .bar .spark { flex-shrink: 0; width: 100px; height: 42px; }
-.pill { min-width: 92px; padding: 7px 10px; text-align: center; white-space: nowrap; flex-shrink: 0;
+.pill { min-width: 102px; padding: 7px 11px; text-align: center; white-space: nowrap; flex-shrink: 0;
   border-radius: 6px; color: {{ WHITE }}; background: {{ FLAT_PILL }}; font-size: 19px; font-weight: 700; }
 .bar.up .pill { background: {{ UP_PILL }}; }
 .bar.down .pill { background: {{ DOWN_PILL }}; }

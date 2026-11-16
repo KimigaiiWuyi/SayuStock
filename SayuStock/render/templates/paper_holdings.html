@@ -33,17 +33,25 @@
 .hold-head { padding: 0 14px 6px 15px; gap: 9px; font-size: 13px; color: {{ MUTED }}; }
 .hold-head-id { flex: 1; min-width: 0; }
 .hold-head-spark { width: 100px; text-align: center; flex-shrink: 0; }
-.hold-head-pill { width: 88px; text-align: center; flex-shrink: 0; }
+.hold-head-pill { min-width: 104px; text-align: center; flex-shrink: 0; }
 .list-column { gap: 8px; }
-.bar .warn-inline { flex: none; max-width: 145px; font-size: 13px; line-height: 1.25; }
-.bar .pill {
-  width: 88px; min-width: 88px; height: 36px; line-height: 36px;
-  padding: 0 8px; text-align: center; display: block;
+.bar .warn-inline { flex: none; max-width: 140px; font-size: 12.5px; line-height: 1.25; }
+.stat-pill {
+  min-width: 104px; height: 46px; padding: 4px 10px; border-radius: 6px; flex-shrink: 0;
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px;
 }
-.bar .pill.up { background: {{ UP_PILL }}; color: {{ WHITE }}; }
-.bar .pill.down { background: {{ DOWN_PILL }}; color: {{ WHITE }}; }
-.bar .pill.flat { background: {{ FLAT_PILL }}; color: {{ WHITE }}; }
-.bar .pill.is-warn { background: {{ YELLOW }}; color: {{ PAGE }}; }
+.stat-pill-cap { font-size: 10px; font-weight: 600; line-height: 1; letter-spacing: 0.4px; opacity: 0.85; }
+.stat-pill-val { font-size: 17px; font-weight: 700; line-height: 1.05; white-space: nowrap; }
+.stat-pill.today.up { background: {{ UP_PILL }}; color: {{ WHITE }}; }
+.stat-pill.today.down { background: {{ DOWN_PILL }}; color: {{ WHITE }}; }
+.stat-pill.today.flat { background: {{ FLAT_PILL }}; color: {{ WHITE }}; }
+.stat-pill.today.is-warn { background: {{ YELLOW }}; color: {{ PAGE }}; }
+.stat-pill.today.is-warn .stat-pill-cap { opacity: 0.78; }
+.stat-pill.hold { background: {{ rgba(SURFACE, 0.90) }}; border: 1px solid {{ BORDER }}; color: {{ TEXT }}; }
+.stat-pill.hold.up { background: {{ rgba(UP, 0.14) }}; border-color: {{ rgba(UP, 0.45) }}; color: {{ UP_TEXT }}; }
+.stat-pill.hold.down { background: {{ rgba(DOWN, 0.14) }}; border-color: {{ rgba(DOWN, 0.45) }}; color: {{ DOWN_TEXT }}; }
+.stat-pill.hold.flat { background: {{ rgba(FLAT, 0.10) }}; border-color: {{ rgba(FLAT, 0.32) }}; color: {{ TEXT_SOFT }}; }
+.stat-pill.hold .stat-pill-cap { color: {{ MUTED }}; opacity: 1; }
 .empty-state {
   padding: 14px 16px; font-size: 15px; color: {{ TEXT_SOFT }};
   border-radius: 8px; background: {{ SURFACE }}; border: 1px solid {{ BORDER }};
@@ -110,8 +118,14 @@
       {% else %}
       <div class="spark"></div>
       {% endif %}
-      <div class="pill number {{ 'is-warn' if row.day_tone == 'warn' else row.day_tone }}">{{ row.day_text }}</div>
-      <div class="pill number {{ row.hold_tone }}">{{ row.hold_text }}</div>
+      <div class="stat-pill today {{ 'is-warn' if row.day_tone == 'warn' else row.day_tone }}">
+        <span class="stat-pill-cap">今日</span>
+        <span class="stat-pill-val number">{{ row.day_text }}</span>
+      </div>
+      <div class="stat-pill hold {{ row.hold_tone }}">
+        <span class="stat-pill-cap">持仓</span>
+        <span class="stat-pill-val number">{{ row.hold_text }}</span>
+      </div>
     </div>
     {% endfor %}
   </div>

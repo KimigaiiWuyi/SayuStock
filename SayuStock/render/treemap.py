@@ -38,6 +38,7 @@ class Group:
     w: float
     h: float
     name: str
+    color: str
     header_h: float
     header_font: float
     show_title: bool
@@ -66,28 +67,36 @@ def _label_units(text: str) -> float:
     return sum(1.0 if ord(ch) > 127 else 0.62 for ch in text)
 
 
+def _group_color(leaves: list[CloudmapLeaf]) -> str:
+    total = sum(leaf.value for leaf in leaves)
+    if total <= 0:
+        return _CLOUD_NEUTRAL
+    weighted_change = sum(leaf.value * leaf.diff_val for leaf in leaves) / total
+    return mix(_heat(weighted_change), "#111315", 0.30)
+
+
 def _fit_tile_font(w: float, h: float, name: str, change: str, unit: float) -> tuple[float, bool, bool]:
     # Floor in CSS px keeps dense high-res maps (e.g. 2500px) readable without forcing oversized text
-    min_font = max(2.6 * unit, 4.8)
+    min_font = max(2.8 * unit, 5.0)
     if w < min_font * 2.1 or h < min_font * 1.25:
         return min_font, False, False
 
     name_u = max(_label_units(name), 2.0)
     can_two_lines = h >= min_font * 2.25 and w >= min_font * 3.0
     if can_two_lines:
-        chg_u = len(change) * 0.56 * 0.76
-        fit_two = min((w * 0.78) / max(name_u, chg_u), (h * 0.72) / 1.98)
+        chg_u = len(change) * 0.56 * 0.84
+        fit_two = min((w * 0.86) / max(name_u, chg_u), (h * 0.80) / 2.05)
         if fit_two >= min_font * 0.85:
-            return min(28 * unit, fit_two), True, True
-        fit_tight = min((w * 0.90) / max(name_u, chg_u), (h * 0.84) / 1.98)
+            return min(38 * unit, fit_two), True, True
+        fit_tight = min((w * 0.92) / max(name_u, chg_u), (h * 0.86) / 2.05)
         if fit_tight >= min_font * 0.85:
-            return min(28 * unit, fit_tight), True, True
+            return min(38 * unit, fit_tight), True, True
 
-    fit_one = min((w * 0.82) / name_u, (h * 0.76) / 1.15)
+    fit_one = min((w * 0.86) / name_u, (h * 0.80) / 1.15)
     if fit_one >= min_font * 0.85:
-        return min(28 * unit, fit_one), True, False
+        return min(38 * unit, fit_one), True, False
     fit_one_tight = min((w * 0.92) / name_u, (h * 0.86) / 1.15)
-    return min(28 * unit, max(min_font * 0.85, fit_one_tight)), True, False
+    return min(38 * unit, max(min_font * 0.85, fit_one_tight)), True, False
 
 
 def prepare_treemap(
@@ -114,22 +123,22 @@ def prepare_treemap(
     groups: list[Group] = []
     tiles: list[Tile] = []
     names = Counter(leaf.name for leaf in data.leaves)
-    group_gap = 2.2 * unit
-    tile_pad = 2.0 * unit
-    tile_gap = 1.0 * unit
-    min_header_font = max(5.2 * unit, 8.0)
+    group_gap = 1.6 * unit
+    tile_pad = 1.6 * unit
+    tile_gap = 0.9 * unit
+    min_header_font = max(7.0 * unit, 9.0)
 
     for (category, leaves), (gx, gy, gw, gh) in zip(by_category, all_groups, strict=True):
         bw = gw - group_gap
         bh = gh - group_gap
         if bw < 4 or bh < 4:
             continue
-        show_title = bw >= 26 * unit and bh >= 22 * unit
-        header_h = min(24 * unit, max(11 * unit, bh * 0.13)) if show_title else 0.0
+        show_title = bw >= 56 * unit and bh >= 48 * unit
+        header_h = min(15.5 * unit, max(10.0 * unit, bh * 0.055)) if show_title else 0.0
         header_font = min(
-            14.5 * unit, max(min_header_font, min(header_h * 0.65, (bw * 0.92) / max(_label_units(category), 2.0)))
+            11.5 * unit, max(min_header_font, min(header_h * 0.70, (bw * 0.90) / max(_label_units(category), 2.0)))
         )
-        groups.append(Group(gx, gy, bw, bh, category, header_h, header_font, show_title))
+        groups.append(Group(gx, gy, bw, bh, category, _group_color(leaves), header_h, header_font, show_title))
 
         inner_x = gx + tile_pad
         inner_y = gy + header_h + (1.0 * unit if show_title else tile_pad)
