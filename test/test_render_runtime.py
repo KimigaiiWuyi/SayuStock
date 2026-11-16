@@ -25,7 +25,7 @@ from SayuStock.stock_ai import draw_ai_map as dm
 from SayuStock.utils.stock import render_cache
 from SayuStock.render.kline import prepare_kline
 from SayuStock.render.compare import prepare_compare
-from SayuStock.render.treemap import render_treemap
+from SayuStock.render.treemap import treemap_html, render_treemap, prepare_treemap
 from SayuStock.stock_cloudmap import render as cloudmap
 from SayuStock.utils.warn_box import Failure
 from SayuStock.render.intraday import prepare_multi_intraday, prepare_single_intraday
@@ -55,6 +55,11 @@ from SayuStock.utils.market.display import DisplayItem
 from SayuStock.utils.all_weather_html import CSS_WIDTH as WEATHER_WIDTH, build_all_weather_html
 from SayuStock.stock_ai.forecast_chart import draw_forecast_chart
 from SayuStock.utils.fund_holdings_html import PAGE_W as FUND_WIDTH, FundHoldingRow, build_fund_holdings_html
+from SayuStock.utils.paper_holdings_html import (
+    PAPER_HOLDINGS_WIDTH,
+    HoldingBarRow,
+    build_paper_holdings_html,
+)
 from SayuStock.utils.market_overview_html import CSS_WIDTH as OVERVIEW_WIDTH, build_market_overview_html
 from SayuStock.utils.market.adapters.eastmoney.parse_value import parse_value_series_payload
 
@@ -393,6 +398,29 @@ def test_chart_and_card_gallery_render_with_evidence() -> None:
             _save_evidence("charts", name, await render_chart(page))
 
         snap = _board(BoardKind.INDUSTRY)
+        dense_snap = BoardSnapshot(
+            BoardKind.INDUSTRY,
+            "半导体",
+            tuple(
+                BoardRow(
+                    f"688{i:03d}",
+                    f"测试芯片{i}",
+                    20.0,
+                    (i % 19) - 9.0,
+                    1e8,
+                    2e11 / (1 + i * 0.25),
+                    "半导体",
+                    None,
+                    None,
+                )
+                for i in range(150)
+            ),
+            "eastmoney",
+        )
+        dense_page = prepare_treemap(dense_snap, "行业云图", "半导体", 1, width=2500)
+        assert not isinstance(dense_page, str)
+        assert sum(tile.show_text for tile in dense_page.tiles) >= 140
+        assert "font-weight: 380" in treemap_html(dense_page)
         _save_evidence(
             "charts",
             "08-industry-cloudmap",
@@ -484,14 +512,89 @@ def test_chart_and_card_gallery_render_with_evidence() -> None:
             now=datetime(2026, 8, 24, 10, 42),
             sparklines={"上证指数": generic_spark, "BTC": generic_spark},
         )
-        for label, width, html in (
-            ("watchlist-3", watchlist_width(3), watch_html),
-            ("fund", FUND_WIDTH, fund_html),
-            ("overview", OVERVIEW_WIDTH, overview_html),
-            ("all-weather", WEATHER_WIDTH, weather_html),
+        paper_index = [
+            DisplayItem("上证指数", 3930.12, -0.30, provider="tencent"),
+            DisplayItem("深证成指", 11291.05, 0.41, provider="tencent"),
+            DisplayItem("中证A500", 4857.27, 0.00, provider="tencent"),
+            DisplayItem("中证2000", 2846.32, 0.35, provider="tencent"),
+        ]
+        paper_rows = [
+            HoldingBarRow(
+                "600001",
+                "示例科技",
+                2000,
+                82.25,
+                84.36,
+                1.25,
+                4220.0,
+                2.5653,
+                168720.0,
+                "tencent",
+                spark_provider="eastmoney",
+            ),
+            HoldingBarRow(
+                "000002",
+                "示例电气",
+                1800,
+                61.83,
+                58.04,
+                None,
+                -6822.0,
+                -6.129,
+                104472.0,
+                quote_error="东方财富网络异常",
+                price_basis="上次报价",
+            ),
+            HoldingBarRow(
+                "512880",
+                "示例证券ETF",
+                85000,
+                0.987,
+                0.987,
+                None,
+                0.0,
+                0.0,
+                83895.0,
+                quote_error="数据源未返回今日涨跌幅",
+                price_basis="成本估值",
+            ),
+        ]
+        paper_failures = [
+            Failure("示例电气(000002)", "东方财富网络异常"),
+            Failure("示例证券ETF(512880)", "数据源未返回今日涨跌幅"),
+        ]
+        paper_html = build_paper_holdings_html(
+            account_name="示例多因子盘",
+            strategy_id="multi_factor",
+            enabled=True,
+            cash=638_100.0,
+            initial_cash=1_000_000.0,
+            holdings=paper_rows,
+            index_items=paper_index,
+            sparklines={"600001": generic_spark},
+            failures=paper_failures,
+            warn_title="2/3 只持仓今日行情获取失败",
+        )
+        paper_empty_html = build_paper_holdings_html(
+            account_name="示例空仓盘",
+            strategy_id="trend",
+            enabled=False,
+            cash=1_000_000.0,
+            initial_cash=1_000_000.0,
+            holdings=[],
+            index_items=paper_index,
+        )
+        assert 'class="mood"' in paper_html and 'class="mood"' in paper_empty_html
+        for subdir, label, width, html in (
+            (None, "watchlist-3", watchlist_width(3), watch_html),
+            (None, "fund", FUND_WIDTH, fund_html),
+            (None, "overview", OVERVIEW_WIDTH, overview_html),
+            (None, "all-weather", WEATHER_WIDTH, weather_html),
+            ("extras", "paper-holdings", PAPER_HOLDINGS_WIDTH, paper_html),
+            ("extras", "paper-holdings-empty", PAPER_HOLDINGS_WIDTH, paper_empty_html),
         ):
             png = await render_html(html, width=width, label=label)
-            _save_evidence(None, label, png, min_w=round(width * 1.5), min_h=300)
+            _save_evidence(subdir, label, png, min_w=round(width * 1.5), min_h=300)
 
     asyncio.run(_run())
 

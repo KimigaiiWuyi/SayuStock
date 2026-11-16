@@ -63,19 +63,25 @@ def _heat(change: float) -> str:
 
 
 def _label_units(text: str) -> float:
-    return sum(1.0 if ord(ch) > 127 else 0.56 for ch in text)
+    return sum(1.0 if ord(ch) > 127 else 0.62 for ch in text)
 
 
 def _fit_tile_font(w: float, h: float, name: str, change: str, unit: float) -> tuple[float, bool, bool]:
-    if w < 20 * unit or h < 12 * unit:
-        return 6.0 * unit, False, False
-    show_change = h >= 20 * unit and w >= 24 * unit
-    name_u = max(_label_units(name), 2.5)
-    chg_u = len(change) * 0.58 if show_change else 0.0
-    max_w = (w * 0.88) / max(name_u, chg_u)
-    max_h = (h * 0.80) / (2.25 if show_change else 1.25)
-    size = min(46 * unit, max(6.5 * unit, min(max_w, max_h)))
-    return size, True, show_change
+    # Floor in CSS px keeps dense high-res maps (e.g. 2500px) readable without forcing 25px giant text
+    min_font = max(2.8 * unit, 5.0)
+    if w < min_font * 2.1 or h < min_font * 1.25:
+        return min_font, False, False
+
+    name_u = max(_label_units(name), 2.0)
+    can_two_lines = h >= min_font * 2.25 and w >= min_font * 3.0
+    if can_two_lines:
+        chg_u = len(change) * 0.58 * 0.85
+        fit_two = min((w * 0.92) / max(name_u, chg_u), (h * 0.86) / 2.05)
+        if fit_two >= min_font * 0.85:
+            return min(46 * unit, fit_two), True, True
+
+    fit_one = min((w * 0.92) / name_u, (h * 0.86) / 1.15)
+    return min(46 * unit, max(min_font * 0.85, fit_one)), True, False
 
 
 def prepare_treemap(
@@ -102,19 +108,20 @@ def prepare_treemap(
     groups: list[Group] = []
     tiles: list[Tile] = []
     names = Counter(leaf.name for leaf in data.leaves)
-    group_gap = 3.0 * unit
-    tile_pad = 3.0 * unit
-    tile_gap = 1.2 * unit
+    group_gap = 2.2 * unit
+    tile_pad = 2.0 * unit
+    tile_gap = 1.0 * unit
+    min_header_font = max(5.2 * unit, 8.0)
 
     for (category, leaves), (gx, gy, gw, gh) in zip(by_category, all_groups, strict=True):
         bw = gw - group_gap
         bh = gh - group_gap
         if bw < 4 or bh < 4:
             continue
-        show_title = bw >= 52 * unit and bh >= 40 * unit
-        header_h = min(28 * unit, max(16 * unit, bh * 0.14)) if show_title else 0.0
+        show_title = bw >= 26 * unit and bh >= 22 * unit
+        header_h = min(24 * unit, max(11 * unit, bh * 0.13)) if show_title else 0.0
         header_font = min(
-            15.5 * unit, max(9.5 * unit, min(header_h * 0.60, (bw * 0.86) / max(_label_units(category), 2.0)))
+            14.5 * unit, max(min_header_font, min(header_h * 0.65, (bw * 0.92) / max(_label_units(category), 2.0)))
         )
         groups.append(Group(gx, gy, bw, bh, category, header_h, header_font, show_title))
 

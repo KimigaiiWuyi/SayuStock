@@ -12,11 +12,22 @@ from markupsafe import Markup
 from .market import DisplayItem
 from .warn_box import Failure, failure_lines
 from .market.display import source_footer
-from ..render.extras_ui import Tone, Metric, direction, fmt_number
+from ..render.holdings import PAD, MOOD_WIDTH, MOOD_HEIGHT
+from ..render.extras_ui import Metric, direction, fmt_number
 from ..render.templates import render_template
+from ..render.card_widgets import (
+    Card,
+    tone,
+    mood_uri,
+    footer_uri,
+    price_text,
+    signed_pct,
+    mood_number,
+    heat_card_bg,
+)
 
 PAPER_HOLDINGS_WIDTH = 900
-SPARK_W = 134.0
+SPARK_W = 130.0
 SPARK_H = 40.0
 
 PriceBasis = Literal["最新行情", "上次报价", "成本估值"]
@@ -47,10 +58,12 @@ class _HoldingDisplay:
     cost: str
     price: str
     weight: str
+    row_tone: str
+    row_bg: str
     day_text: str
-    day_tone: Tone
+    day_tone: str
     hold_text: str
-    hold_tone: Tone
+    hold_tone: str
     spark: Markup
 
 
@@ -83,15 +96,18 @@ def _allocation_arc(share: float) -> str:
 def _holding_display(holding: HoldingBarRow, equity: float, spark: str) -> _HoldingDisplay:
     day = holding.day_change_pct
     unrealized = holding.unrealized_pnl_pct
+    failed = bool(holding.quote_error)
     return _HoldingDisplay(
         holding=holding,
         cost=format_holding_price(holding.avg_cost),
         price=format_holding_price(holding.current_price),
         weight=f"{holding.market_value / equity if equity else 0:.1%}",
+        row_tone="failed" if failed else tone(day),
+        row_bg="" if failed else heat_card_bg(day, angle=105),
         day_text="未获取" if day is None else fmt_number(day, signed=True, suffix="%"),
-        day_tone="warn" if day is None else direction(day),
+        day_tone="warn" if day is None else tone(day),
         hold_text=fmt_number(unrealized, signed=True, suffix="%"),
-        hold_tone=direction(unrealized),
+        hold_tone=tone(unrealized),
         spark=Markup(spark),
     )
 
@@ -108,6 +124,7 @@ def build_paper_holdings_html(
     sparklines: dict[str, str] | None = None,
     failures: Sequence[Failure] = (),
     warn_title: str = "",
+    title_num: str | None = None,
 ) -> str:
     position_value = sum(row.market_value for row in holdings)
     equity = cash + position_value
@@ -126,33 +143,41 @@ def build_paper_holdings_html(
     )
     day_values = [row.day_change_pct for row in holdings if row.day_change_pct is not None]
     avg_day = sum(day_values) / len(day_values) if day_values else None
-    indices = tuple(
-        Metric(
+    mood_id = title_num or mood_number(avg_day)
+    mood_width = PAPER_HOLDINGS_WIDTH - 2 * PAD
+    cards = [
+        Card(
             item.name.split("(")[0].strip(),
-            str(item.price),
-            direction(item.change_pct),
-            fmt_number(item.change_pct, signed=True, suffix="%"),
+            price_text(item.price),
+            signed_pct(item.change_pct),
+            tone(item.change_pct),
+            bg=heat_card_bg(item.change_pct, angle=120),
         )
         for item in index_items
-    )
+    ]
     sparks = sparklines or {}
     rows = tuple(_holding_display(row, equity, sparks[row.code] if row.code in sparks else "") for row in holdings)
     providers = [item.provider for item in index_items if item.provider]
     providers.extend(provider for row in holdings for provider in (row.provider, row.spark_provider) if provider)
+    source = source_footer(*providers, note="模拟盘持仓") if providers else "数据来源：未标注 | SayuStock · 模拟盘持仓"
     return render_template(
         "paper_holdings.html",
         width=PAPER_HOLDINGS_WIDTH,
         account_name=account_name,
         strategy_id=strategy_id,
         enabled=enabled,
+        mood=mood_uri(mood_id),
+        mood_width=mood_width,
+        mood_height=round(mood_width * MOOD_HEIGHT / MOOD_WIDTH, 2),
         position_share=f"{position_share:.0%}",
         position_arc=_allocation_arc(position_share),
         metrics_values=metrics,
-        average_day=fmt_number(avg_day, signed=True, suffix="%"),
-        average_tone=direction(avg_day),
-        indices=indices,
+        average_day=signed_pct(avg_day) if avg_day is not None else "",
+        average_tone=tone(avg_day),
+        cards=cards,
         rows=rows,
-        warn_title=warn_title or f"行情获取失败（{len(failures)} 条）",
-        failure_lines=failure_lines(failures, per_line=1),
-        footer=source_footer(*providers, note="模拟盘持仓") if providers else "SayuStock · 模拟盘持仓",
+        warn_title=warn_title or f"⚠ {len(failures)}/{len(holdings)} 只持仓今日行情获取失败",
+        warning_lines=failure_lines(failures, per_line=1),
+        source=source,
+        brand=footer_uri(),
     )
