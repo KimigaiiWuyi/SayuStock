@@ -26,9 +26,9 @@ from ..render.card_widgets import (
     heat_card_bg,
 )
 
-PAPER_HOLDINGS_WIDTH = 900
-SPARK_W = 130.0
-SPARK_H = 40.0
+PAPER_HOLDINGS_WIDTH = 720
+SPARK_W = 100.0
+SPARK_H = 42.0
 
 PriceBasis = Literal["最新行情", "上次报价", "成本估值"]
 

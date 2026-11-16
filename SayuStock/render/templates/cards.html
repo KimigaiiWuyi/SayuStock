@@ -18,17 +18,17 @@
 {% macro quote_row(row) %}
 <div class="row bar {{ row.tone }}"{% if row.bg %} style="background: {{ row.bg }}"{% endif %}>
   <div class="column q-identity">
-    <div class="row"><b class="q-name">{{ row.name }}</b>{% if row.market %}<span class="q-market">{{ row.market }}</span>{% endif %}</div>
-    <span class="q-detail number">{{ row.details }}</span>
+    <div class="row q-name-row"><b class="q-name">{{ row.name }}</b>{% if row.market %}<span class="q-market">{{ row.market }}</span>{% endif %}</div>
+    <div class="row q-subrow">
+      {% if row.weight %}<span class="q-weight-badge number">占比 {{ row.weight }}</span>{% endif %}
+      {% if row.price %}<span class="q-inline-price number">现价 <b>{{ row.price }}</b>{% if row.move %} <span class="q-inline-move {{ row.tone }}">{{ row.move }}</span>{% endif %}</span>{% endif %}
+      <span class="q-detail number">{{ row.details }}</span>
+    </div>
   </div>
   {% if row.reason %}
   <span class="warn-inline">⚠ {{ row.reason }}</span>
   {% elif row.spark %}
   <div class="spark">{{ row.spark | safe }}</div>
-  {% endif %}
-  {% if row.weight %}<b class="q-weight number">{{ row.weight }}</b>{% endif %}
-  {% if row.price %}
-  <div class="column q-price number"><b>{{ row.price }}</b>{% if row.move %}<span class="q-move">{{ row.move }}</span>{% endif %}</div>
   {% endif %}
   <b class="pill number">{{ row.change }}</b>
 </div>

@@ -67,21 +67,27 @@ def _label_units(text: str) -> float:
 
 
 def _fit_tile_font(w: float, h: float, name: str, change: str, unit: float) -> tuple[float, bool, bool]:
-    # Floor in CSS px keeps dense high-res maps (e.g. 2500px) readable without forcing 25px giant text
-    min_font = max(2.8 * unit, 5.0)
+    # Floor in CSS px keeps dense high-res maps (e.g. 2500px) readable without forcing oversized text
+    min_font = max(2.6 * unit, 4.8)
     if w < min_font * 2.1 or h < min_font * 1.25:
         return min_font, False, False
 
     name_u = max(_label_units(name), 2.0)
     can_two_lines = h >= min_font * 2.25 and w >= min_font * 3.0
     if can_two_lines:
-        chg_u = len(change) * 0.58 * 0.85
-        fit_two = min((w * 0.92) / max(name_u, chg_u), (h * 0.86) / 2.05)
+        chg_u = len(change) * 0.56 * 0.76
+        fit_two = min((w * 0.78) / max(name_u, chg_u), (h * 0.72) / 1.98)
         if fit_two >= min_font * 0.85:
-            return min(46 * unit, fit_two), True, True
+            return min(28 * unit, fit_two), True, True
+        fit_tight = min((w * 0.90) / max(name_u, chg_u), (h * 0.84) / 1.98)
+        if fit_tight >= min_font * 0.85:
+            return min(28 * unit, fit_tight), True, True
 
-    fit_one = min((w * 0.92) / name_u, (h * 0.86) / 1.15)
-    return min(46 * unit, max(min_font * 0.85, fit_one)), True, False
+    fit_one = min((w * 0.82) / name_u, (h * 0.76) / 1.15)
+    if fit_one >= min_font * 0.85:
+        return min(28 * unit, fit_one), True, False
+    fit_one_tight = min((w * 0.92) / name_u, (h * 0.86) / 1.15)
+    return min(28 * unit, max(min_font * 0.85, fit_one_tight)), True, False
 
 
 def prepare_treemap(

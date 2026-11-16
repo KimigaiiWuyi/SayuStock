@@ -17,33 +17,48 @@ body { margin: 0; }
 .card-name { color: {{ TEXT_SOFT }}; font-size: 14px; font-weight: 640; }
 .card-change { align-self: flex-start; font-size: 14px; font-weight: 700; }
 .card-price { color: {{ WHITE }}; font-size: 21px; font-weight: 730; }
-.card.up .card-change, .bar.up .q-move { color: {{ UP_TEXT }}; }
-.card.down .card-change, .bar.down .q-move { color: {{ DOWN_TEXT }}; }
-.card.flat .card-change, .bar.flat .q-move { color: {{ TEXT_SOFT }}; }
+.card.up .card-change { color: {{ UP_TEXT }}; }
+.card.down .card-change { color: {{ DOWN_TEXT }}; }
+.card.flat .card-change { color: {{ TEXT_SOFT }}; }
 .card-spark { height: 32px; }
 .card-spark svg, .spark svg { display: block; width: 100%; height: 100%; }
 .section { margin: 18px 0 8px; gap: 16px; align-items: baseline; }
-.section b { color: {{ TEXT }}; font-size: 20px; }
-.section span { color: {{ TEXT_SOFT }}; font-size: 13px; }
-.section-title { font-size: 18px; color: {{ TEXT }}; font-weight: 700; }
+.section b { color: {{ TEXT }}; font-size: 21px; }
+.section span { color: {{ TEXT_SOFT }}; font-size: 14px; }
+.section-title { font-size: 19px; color: {{ TEXT }}; font-weight: 700; }
 .bar {
-  padding: 9px 14px 9px 16px; min-height: 68px; border-radius: 8px; gap: 11px;
+  padding: 12px 14px 12px 15px; min-height: 76px; border-radius: 8px; gap: 9px;
   background: {{ SURFACE }}; border: 1px solid {{ BORDER }};
 }
 .bar.up { background: linear-gradient(105deg, {{ UP_CARD }}, {{ UP_CARD_END }}); }
 .bar.down { background: linear-gradient(105deg, {{ DOWN_CARD }}, {{ DOWN_CARD_END }}); }
 .bar.failed { background: {{ rgba(AMBER, 0.15) }}; border-color: {{ rgba(YELLOW, 0.55) }}; }
-.q-identity { flex: 1; min-width: 0; }
-.q-name { font-size: 18px; font-weight: 700; color: {{ TEXT }}; overflow-wrap: break-word; }
-.q-market { margin-left: 6px; font-size: 11px; color: {{ TEXT_SOFT }}; flex-shrink: 0; }
-.q-detail { margin-top: 4px; color: {{ TEXT_SOFT }}; font-size: 12px; }
-.bar .spark { flex-shrink: 0; width: 130px; height: 40px; }
-.q-price { min-width: 79px; align-items: flex-end; flex-shrink: 0; }
-.q-price b { color: {{ WHITE }}; font-size: 19px; white-space: nowrap; }
-.q-move { margin-top: 2px; font-size: 12px; }
-.q-weight { min-width: 65px; font-size: 17px; color: {{ TEXT }}; text-align: right; }
-.pill { min-width: 82px; padding: 5px 7px; text-align: center; white-space: nowrap; flex-shrink: 0;
-  border-radius: 6px; color: {{ WHITE }}; background: {{ FLAT_PILL }}; font-size: 16px; font-weight: 700; }
+.q-identity { flex: 1; min-width: 0; overflow: hidden; }
+.q-name-row { min-width: 0; width: 100%; }
+.q-name {
+  flex: 0 1 auto; min-width: 0; font-size: 20px; font-weight: 700; color: {{ TEXT }};
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.q-market { margin-left: 6px; font-size: 12px; color: {{ TEXT_SOFT }}; flex-shrink: 0; }
+.q-subrow { margin-top: 5px; gap: 6px; min-width: 0; width: 100%; overflow: hidden; }
+.q-detail {
+  flex: 0 1 auto; min-width: 0; color: {{ TEXT_SOFT }}; font-size: 12px;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.q-inline-price { flex-shrink: 0; color: {{ TEXT_SOFT }}; font-size: 12px; white-space: nowrap; }
+.q-inline-price b { color: {{ WHITE }}; font-weight: 700; font-size: 13px; }
+.q-inline-move { font-size: 12px; }
+.q-inline-move.up { color: {{ UP_TEXT }}; }
+.q-inline-move.down { color: {{ DOWN_TEXT }}; }
+.q-inline-move.flat { color: {{ TEXT_SOFT }}; }
+.q-weight-badge {
+  flex-shrink: 0; display: inline-flex; align-items: center; height: 22px; padding: 0 6px; line-height: 1;
+  border-radius: 4px; font-size: 12px; font-weight: 700;
+  color: {{ SKY }}; background: {{ rgba(BLUE, 0.16) }}; border: 1px solid {{ rgba(BLUE, 0.34) }};
+}
+.bar .spark { flex-shrink: 0; width: 100px; height: 42px; }
+.pill { min-width: 92px; padding: 7px 10px; text-align: center; white-space: nowrap; flex-shrink: 0;
+  border-radius: 6px; color: {{ WHITE }}; background: {{ FLAT_PILL }}; font-size: 19px; font-weight: 700; }
 .bar.up .pill { background: {{ UP_PILL }}; }
 .bar.down .pill { background: {{ DOWN_PILL }}; }
 .bar.failed .pill { color: {{ PAGE }}; background: {{ YELLOW }}; }

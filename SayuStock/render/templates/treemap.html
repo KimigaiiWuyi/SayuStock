@@ -7,13 +7,13 @@ html, body { margin: 0; padding: 0; background: #000000; }
 * { box-sizing: border-box; }
 .treemap { width: {{ page.width }}px; padding: {{ 4 * page.unit }}px; background: #000000; color: #ffffff; font-family: "MiSans", sans-serif; display: flex; flex-direction: column; }
 .map-title-bar { display: flex; flex-direction: row; align-items: baseline; justify-content: center; gap: {{ 12 * page.unit }}px; padding: {{ 8 * page.unit }}px {{ 8 * page.unit }}px {{ 6 * page.unit }}px; }
-.map-title { font-size: {{ 24 * page.unit }}px; line-height: 1.15; font-weight: 550; color: #ffffff; }
-.map-meta { font-size: {{ 12 * page.unit }}px; font-weight: 400; color: #9ca3af; }
+.map-title { font-size: {{ 22 * page.unit }}px; line-height: 1.15; font-weight: 600; color: #ffffff; }
+.map-meta { font-size: {{ 12 * page.unit }}px; font-weight: 350; color: #9ca3af; }
 .map { position: relative; width: {{ page.plot_width }}px; height: {{ page.plot_height }}px; background: #000000; }
-.map-group { position: absolute; display: flex; align-items: center; justify-content: center; padding: 0 {{ 3 * page.unit }}px; color: #ffffff; font-weight: 450; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; text-align: center; }
-.map-tile { position: absolute; display: flex; flex-direction: column; align-items: center; justify-content: center; overflow: hidden; color: #ffffff; font-weight: 350; line-height: 1.08; text-shadow: 0 1px 1px rgba(0, 0, 0, 0.55); }
-.map-tile .tile-name { text-align: center; width: 96%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 380; }
-.map-tile .tile-chg { font-size: 0.85em; font-weight: 340; opacity: 0.95; white-space: nowrap; }
+.map-group { position: absolute; display: flex; align-items: center; justify-content: center; padding: 0 {{ 3 * page.unit }}px; color: #ffffff; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; text-align: center; }
+.map-tile { position: absolute; display: flex; flex-direction: column; align-items: center; justify-content: center; overflow: hidden; color: #ffffff; font-weight: 400; line-height: 1.14; text-shadow: 0 1px 1px rgba(0, 0, 0, 0.50); }
+.map-tile .tile-name { text-align: center; width: 96%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 500; }
+.map-tile .tile-chg { font-size: 0.76em; font-weight: 300; opacity: 0.90; white-space: nowrap; }
 .map-foot { padding: {{ 6 * page.unit }}px {{ 8 * page.unit }}px {{ 4 * page.unit }}px; color: rgba(180, 180, 180, 0.72); font-size: {{ 11 * page.unit }}px; }
 </style>
 </head>

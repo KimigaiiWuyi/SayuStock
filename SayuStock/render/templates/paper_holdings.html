@@ -12,32 +12,33 @@
   border: 1px solid {{ BORDER }}; background: {{ SURFACE }}; color: {{ MUTED }};
 }
 .status-badge.on { color: {{ GREEN }}; border-color: {{ rgba(GREEN, 0.45) }}; background: {{ rgba(GREEN, 0.12) }}; }
-.overview-panel { margin-top: 10px; padding: 14px; }
-.hold-overview { display: grid; grid-template-columns: 92px 1fr; align-items: center; gap: 12px; }
-.allocation { width: 92px; height: 92px; position: relative; }
-.allocation .donut-svg { display: block; }
-.allocation-label { position: absolute; left: 0; top: 22px; width: 92px; text-align: center; }
-.allocation-label b { display: block; font-size: 24px; font-weight: 750; }
+.overview-panel { margin-top: 10px; padding: 12px; }
+.hold-overview { display: grid; grid-template-columns: 84px 1fr; align-items: center; gap: 10px; }
+.allocation { width: 84px; height: 84px; position: relative; }
+.allocation .donut-svg { display: block; width: 84px; height: 84px; }
+.allocation-label { position: absolute; left: 0; top: 20px; width: 84px; text-align: center; }
+.allocation-label b { display: block; font-size: 22px; font-weight: 750; }
 .allocation-note { color: {{ MUTED }}; font-size: 12px; }
-.metric-grid { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 8px; }
+.metric-grid { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 6px; }
 .metric-tile {
-  min-width: 0; padding: 9px 11px; background: {{ SURFACE }};
+  min-width: 0; padding: 8px 9px; background: {{ SURFACE }};
   border: 1px solid {{ BORDER }}; border-radius: 7px;
 }
-.metric-label { font-size: 12px; color: {{ MUTED }}; }
-.metric-value { margin-top: 4px; font-size: 19px; font-weight: 720; color: {{ TEXT }}; }
+.metric-label { font-size: 13px; color: {{ MUTED }}; }
+.metric-value { margin-top: 4px; font-size: 20px; font-weight: 720; color: {{ TEXT }}; }
 .metric-value.up { color: {{ UP }}; }
 .metric-value.down { color: {{ DOWN }}; }
 .metric-value.flat { color: {{ FLAT }}; }
-.metric-note { margin-top: 4px; font-size: 12px; color: {{ MUTED }}; }
-.hold-head { padding: 0 14px 5px 16px; gap: 11px; font-size: 12px; color: {{ MUTED }}; }
+.metric-note { margin-top: 4px; font-size: 13px; color: {{ MUTED }}; }
+.hold-head { padding: 0 14px 6px 15px; gap: 9px; font-size: 13px; color: {{ MUTED }}; }
 .hold-head-id { flex: 1; min-width: 0; }
-.hold-head-spark { width: 130px; text-align: center; flex-shrink: 0; }
+.hold-head-spark { width: 100px; text-align: center; flex-shrink: 0; }
 .hold-head-pill { width: 88px; text-align: center; flex-shrink: 0; }
-.list-column { gap: 7px; }
+.list-column { gap: 8px; }
+.bar .warn-inline { flex: none; max-width: 145px; font-size: 13px; line-height: 1.25; }
 .bar .pill {
-  width: 88px; min-width: 88px; height: 32px; line-height: 32px;
-  padding: 0 7px; text-align: center; display: block;
+  width: 88px; min-width: 88px; height: 36px; line-height: 36px;
+  padding: 0 8px; text-align: center; display: block;
 }
 .bar .pill.up { background: {{ UP_PILL }}; color: {{ WHITE }}; }
 .bar .pill.down { background: {{ DOWN_PILL }}; color: {{ WHITE }}; }
@@ -65,7 +66,7 @@
   <section class="panel overview-panel">
     <div class="hold-overview">
       <div class="allocation">
-        <svg class="donut-svg" xmlns="http://www.w3.org/2000/svg" width="92" height="92" viewBox="0 0 36 36">
+        <svg class="donut-svg" xmlns="http://www.w3.org/2000/svg" width="84" height="84" viewBox="0 0 36 36">
           <circle cx="18" cy="18" r="15.9155" fill="none" stroke="{{ BORDER }}" stroke-width="2.5"/>
           {% if position_arc %}
           <path d="{{ position_arc }}" fill="none" stroke="{{ BLUE }}" stroke-width="2.5" stroke-linecap="round"/>
@@ -99,8 +100,8 @@
     {% for row in rows %}
     <div class="row bar {{ row.row_tone }}"{% if row.row_bg %} style="background: {{ row.row_bg }}"{% endif %}>
       <div class="column q-identity">
-        <div class="row"><b class="q-name">{{ row.holding.name }}</b><span class="q-market">{{ row.holding.code }}</span></div>
-        <span class="q-detail number">{{ row.holding.qty }} 股 · 成本 {{ row.cost }} · {{ row.holding.price_basis }} {{ row.price }} · 占 {{ row.weight }}</span>
+        <div class="row q-name-row"><b class="q-name">{{ row.holding.name }}</b><span class="q-market">{{ row.holding.code }}</span></div>
+        <div class="row q-subrow"><span class="q-detail number">{{ row.holding.qty }} 股 · 成本 {{ row.cost }} · {{ row.holding.price_basis }} {{ row.price }} · 占 {{ row.weight }}</span></div>
       </div>
       {% if row.spark %}
       <div class="spark">{{ row.spark }}</div>

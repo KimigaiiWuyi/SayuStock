@@ -420,7 +420,8 @@ def test_chart_and_card_gallery_render_with_evidence() -> None:
         dense_page = prepare_treemap(dense_snap, "行业云图", "半导体", 1, width=2500)
         assert not isinstance(dense_page, str)
         assert sum(tile.show_text for tile in dense_page.tiles) >= 140
-        assert "font-weight: 380" in treemap_html(dense_page)
+        html_dense = treemap_html(dense_page)
+        assert "font-weight: 500" in html_dense and "font-weight: 300" in html_dense
         _save_evidence(
             "charts",
             "08-industry-cloudmap",

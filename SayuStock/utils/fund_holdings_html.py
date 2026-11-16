@@ -20,8 +20,8 @@ from ..render.card_widgets import (
 )
 
 PAGE_W = SINGLE_WIDTH
-SPARK_W = 130.0
-SPARK_H = 40.0
+SPARK_W = 100.0
+SPARK_H = 42.0
 
 
 @dataclass(frozen=True, slots=True)
@@ -92,7 +92,7 @@ def build_fund_holdings_html(
         ],
         rows=[_row(row, sparklines) for row in rows],
         section_title="重仓股",
-        section_note="当日分时 · 基金持仓权重 · 涨跌幅",
+        section_note="当日分时 · 今日涨跌",
         source=source_footer("eastmoney", *sources, *(i.provider for i in index_items), *(r.provider for r in rows)),
         width=PAGE_W,
     )

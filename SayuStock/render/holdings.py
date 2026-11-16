@@ -9,7 +9,7 @@ from .card_widgets import Card, QuoteRow, tone, mood_uri, footer_uri, signed_pct
 from ..utils.warn_box import Failure, failure_lines
 
 PAD = 24
-SINGLE_WIDTH, DOUBLE_WIDTH = 760, 1360
+SINGLE_WIDTH, DOUBLE_WIDTH = 680, 1130
 MOOD_WIDTH, MOOD_HEIGHT = 792, 250
 
 
