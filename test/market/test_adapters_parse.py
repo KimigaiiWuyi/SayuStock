@@ -411,6 +411,42 @@ def test_sina_parse_symbols_quotes_kline_and_breadth() -> None:
     assert isinstance(mt, MarketTurnover) and mt.amount == 500.0 and mt.prev_amount is None
 
 
+def test_etf_disclosure_empty_page_and_shenzhen_creation_basket() -> None:
+    from datetime import date
+
+    from SayuStock.utils.market.adapters.etf_basket import (
+        HolderPage,
+        CreationBasket,
+        parse_holder_page,
+        parse_creation_basket,
+    )
+
+    day = date(2026, 11, 17)
+    assert parse_holder_page({"success": True, "pages": 0, "data": []}, day) == HolderPage((), 0)
+    assert isinstance(parse_holder_page({"success": True, "pages": 4, "data": []}, day), str)
+    xml = b"""<PCF><SecurityID>159843</SecurityID><TradingDay>20261117</TradingDay><TotalRecordNum>3</TotalRecordNum>
+    <Item><UnderlyingSecurityID>600519</UnderlyingSecurityID><UnderlyingSecurityIDSource>101</UnderlyingSecurityIDSource>
+    <ComponentShare>300</ComponentShare></Item>
+    <Item><UnderlyingSecurityID>000001</UnderlyingSecurityID><UnderlyingSecurityIDSource>102</UnderlyingSecurityIDSource>
+    <ComponentShare>200</ComponentShare></Item>
+    <Item><UnderlyingSecurityID>159900</UnderlyingSecurityID><ComponentShare>0</ComponentShare></Item></PCF>"""
+    basket = parse_creation_basket(xml, "159843", day)
+    assert isinstance(basket, CreationBasket)
+    assert [(stock.symbol, stock.quantity) for stock in basket.stocks] == [("sh600519", 300), ("sz000001", 200)]
+    assert not basket.zero_stocks
+    assert isinstance(parse_creation_basket(xml, "159862", day), str)
+
+
+def test_etf_keeps_tracked_index_distinct_from_benchmark() -> None:
+    from SayuStock.utils.market.adapters.etf_basket import parse_tracked_index
+
+    tracked = "<th>跟踪标的</th><td><a>细分食品</a></td>"
+    benchmark = "<th>业绩比较基准</th><td>中证细分食品饮料产业主题指数收益率</td>"
+    assert parse_tracked_index(tracked + benchmark) == "细分食品"
+    assert parse_tracked_index(tracked + benchmark.replace("细分食品饮料产业主题", "白酒")) == "细分食品"
+    assert parse_tracked_index(benchmark) == ""
+
+
 def test_tencent_parse_qt_kline_and_ndays() -> None:
     """腾讯符号映射、qt A股/美股/全天候解析、K 线及分钟拼五日分时。"""
     assert tencent_symbol_from_secid("0.920000") == "bj920000"
@@ -446,6 +482,12 @@ def test_tencent_parse_qt_kline_and_ndays() -> None:
     )
     qc = parse_qt_line(qt_cn, symbol=_sym())
     assert not is_market_error(qc) and qc.volume == 2489100.0 and qc.amount == 3135850000.0 and qc.pb == 6.25
+    assert parse_qt_line(qt_cn, symbol=_sym(), require_price=True) == qc
+    missing = qt_cn.replace("~1257.12~", "~0~", 1)
+    fallback = parse_qt_line(missing, symbol=_sym())
+    assert not is_market_error(fallback) and fallback.price == 1266.98
+    assert is_market_error(parse_qt_line(missing, symbol=_sym(), require_price=True))
+    assert is_market_error(parse_qt_line(qt_cn, symbol=_sym("1.600887"), require_price=True))
 
     qt_us = "~".join(
         ["200", "阿里巴巴", "BABA.N", "110.80", "116.31", "112.00", "12223741", "0", "0"]

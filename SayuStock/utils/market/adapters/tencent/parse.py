@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from math import isfinite
 from typing import Any, Mapping, Sequence
 from datetime import datetime
 
@@ -75,7 +76,7 @@ def _f(parts: Sequence[str], idx: int) -> float | None:
         return None
 
 
-def parse_qt_line(line: str, *, symbol: SymbolRef) -> Quote | MarketError:
+def parse_qt_line(line: str, *, symbol: SymbolRef, require_price: bool = False) -> Quote | MarketError:
     """qt.gtimg.cn ~ 分隔行 → Quote。
 
     列序（~ 分隔）：1 名称, 2 代码, 3 现价, 4 昨收, 5 今开, 30 时间,
@@ -85,10 +86,14 @@ def parse_qt_line(line: str, *, symbol: SymbolRef) -> Quote | MarketError:
     parts = line.split("~")
     if len(parts) < 38:
         return parse_error("腾讯盘口字段不足", provider=PROVIDER)
+    if require_price and parts[2].strip() != symbol.code:
+        return parse_error("腾讯盘口代码与请求不一致", provider=PROVIDER)
     name = parts[1].strip() or symbol.name
     price = _f(parts, 3)
     prev_close = _f(parts, 4)
     open_px = _f(parts, 5)
+    if require_price and (price is None or not isfinite(price) or price <= 0):
+        return empty_error("腾讯盘口缺少有效现价", provider=PROVIDER)
     if price is None or price == 0.0:
         price = prev_close or open_px
     if price is None:

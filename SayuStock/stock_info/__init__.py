@@ -1,3 +1,8 @@
+from time import monotonic
+from itertools import count
+from collections import OrderedDict
+from dataclasses import dataclass
+
 from gsuid_core.sv import SV
 from gsuid_core.aps import scheduler
 from gsuid_core.bot import Bot
@@ -6,12 +11,123 @@ from gsuid_core.models import Event
 
 from .draw_info import draw_info_img
 from .draw_future import draw_future_img
+from .etf_compare import (
+    MAX_COMPARE,
+    SearchResult,
+    load_baskets,
+    resolve_target,
+    expand_fund_theme,
+    search_listed_funds,
+)
 from .draw_my_info import draw_my_stock_img
 from .draw_fund_info import draw_fund_info
+from .draw_etf_compare import draw_etf_search, draw_etf_comparison
+from ..utils.time_range import now_bjt
+from ..utils.market.adapters.etf_basket import is_etf_code, fund_quote_symbol
 
 sv_stock_info = SV("大盘概览")
 sv_my_stock = SV("我的自选")
 sv_fund_info = SV("基金持仓信息")
+sv_etf_compare = SV("场内基金对比")
+
+_SEARCH_TTL = 600.0
+_SEARCH_LIMIT = 128
+_SEARCH_ORDER = count()
+
+
+@dataclass(frozen=True, slots=True)
+class _SearchContext:
+    sequence: int
+    expires_at: float
+    result: SearchResult
+
+
+_SEARCHES: OrderedDict[tuple[str, str], _SearchContext] = OrderedDict()
+
+
+def _fund_search_key(ev: Event) -> tuple[str, str]:
+    return ev.session_id, ev.user_id
+
+
+def _recent_fund_search(ev: Event) -> SearchResult | None:
+    key = _fund_search_key(ev)
+    recent = _SEARCHES[key] if key in _SEARCHES else None
+    if recent is not None and monotonic() >= recent.expires_at:
+        _SEARCHES.pop(key, None)
+        return None
+    return recent.result if recent is not None else None
+
+
+@sv_etf_compare.on_command(("场内找股", "ETF找股"), block=True)
+async def send_listed_fund_search(bot: Bot, ev: Event) -> None:
+    """按目标股票查场内基金，展示当天申赎篮子的主题权重。"""
+    query = ev.text.strip()
+    if not query:
+        await bot.send("用法：ETF找股 工业富联")
+        return
+    sequence = next(_SEARCH_ORDER)
+    stock = await resolve_target(query)
+    if stock is None:
+        await bot.send("未识别到沪深 A 股，请输入股票名称或六位代码。")
+        return
+    result = await search_listed_funds(stock, now_bjt().date())
+    if isinstance(result, str):
+        await bot.send(result)
+        return
+    message = await draw_etf_search(result)
+    key = _fund_search_key(ev)
+    if key in _SEARCHES and sequence < _SEARCHES[key].sequence:
+        return
+    _SEARCHES[key] = _SearchContext(sequence, monotonic() + _SEARCH_TTL, result)
+    _SEARCHES.move_to_end(key)
+    if len(_SEARCHES) > _SEARCH_LIMIT:
+        _SEARCHES.popitem(last=False)
+    await bot.send(message)
+
+
+@sv_etf_compare.on_command(("ETF展开", "展开"), block=False)
+async def send_listed_fund_theme(bot: Bot, ev: Event) -> None:
+    """对比当前成员最近一次找股结果中指定主题的 ETF。"""
+    explicit = ev.command == "ETF展开"
+    theme = "".join(ev.text.split())
+    if not theme:
+        if explicit:
+            await bot.send("用法：ETF展开 食品饮料")
+        return
+    search = _recent_fund_search(ev)
+    if search is None:
+        if explicit:
+            await bot.send("请先发送「ETF找股 股票名称」，再展开结果里的主题。")
+        return
+    result = await expand_fund_theme(search, theme, now_bjt().date())
+    if isinstance(result, str):
+        if explicit:
+            await bot.send(result)
+        return
+    await bot.send(await draw_etf_comparison(result, f"{theme} ETF 申赎篮子对比", search.stock))
+
+
+@sv_etf_compare.on_command(("ETF对比", "etf对比"), block=True)
+async def send_etf_comparison(bot: Bot, ev: Event) -> None:
+    """按代码对比两至四只 ETF，可指定一只关注股票。"""
+    raw_codes, _, query = ev.text.partition("关注")
+    codes: list[str] = []
+    for token in raw_codes.lower().replace(",", " ").replace("，", " ").split():
+        code = token[-6:]
+        if not is_etf_code(code) or token not in (code, fund_quote_symbol(code)):
+            await bot.send(f"「{token}」不是有效的沪深 ETF 代码，请检查代码和交易所前缀。")
+            return
+        if code not in codes:
+            codes.append(code)
+    if not 2 <= len(codes) <= MAX_COMPARE:
+        await bot.send("用法：ETF对比 515170 516900 159843 159862，可追加「关注 贵州茅台」。")
+        return
+    stock = await resolve_target(query) if query.strip() else None
+    if query.strip() and stock is None:
+        await bot.send("未识别到关注的沪深 A 股，请检查名称或代码。")
+        return
+    result = await load_baskets(codes, day=now_bjt().date())
+    await bot.send(await draw_etf_comparison(result, "ETF 申赎篮子对比", stock))
 
 
 @sv_fund_info.on_command(

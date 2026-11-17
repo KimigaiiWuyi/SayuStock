@@ -168,6 +168,30 @@
         "need_ck": false,
         "need_sk": false,
         "need_admin": false
+      },
+      {
+        "name": "ETF找股",
+        "desc": "按股票找 ETF 主题，核验当日申赎篮子",
+        "eg": "ETF找股 工业富联",
+        "need_ck": false,
+        "need_sk": false,
+        "need_admin": false
+      },
+      {
+        "name": "ETF展开",
+        "desc": "对比最近一次找股结果中的指定主题",
+        "eg": "ETF展开 通信与5G",
+        "need_ck": false,
+        "need_sk": false,
+        "need_admin": false
+      },
+      {
+        "name": "ETF对比",
+        "desc": "并排比较重点股和申万二级行业权重",
+        "eg": "ETF对比 515170 516900 159843 159862 关注 贵州茅台",
+        "need_ck": false,
+        "need_sk": false,
+        "need_admin": false
       }
     ]
   },
