@@ -12,7 +12,7 @@ from math import cos, sin
 from types import ModuleType, SimpleNamespace
 from base64 import b64decode
 from pathlib import Path
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from dataclasses import replace
 
 import pytest
@@ -605,6 +605,286 @@ def test_chart_and_card_gallery_render_with_evidence() -> None:
             _save_evidence(subdir, label, png, min_w=round(width * 1.5), min_h=300)
 
     asyncio.run(_run())
+
+
+def test_etf_basket_comparison_render_and_stale_quote(require_render_runtime: None) -> None:
+    """ETF 图同屏比较个股与行业；缺当日报价时整只篮子不估价。"""
+    from SayuStock.stock_info.etf_compare import (
+        UNKNOWN_INDUSTRY,
+        FundValue,
+        TargetStock,
+        BasketResult,
+        value_basket,
+        comparison_stocks,
+    )
+    from SayuStock.stock_info.draw_etf_compare import WIDTH, _industry_pies, build_comparison_html
+    from SayuStock.utils.market.adapters.etf_basket import CreationBasket, parse_creation_basket
+
+    quote = _quote("600519", "贵州茅台", 100, 0, None)
+    stamp = datetime(2026, 8, 24, 10, 42)
+    xml = """<ETF>
+      <FundInstrumentID>515170</FundInstrumentID><TradingDay>20260824</TradingDay><RecordNumber>2</RecordNumber>
+      <Item><InstrumentID>600519</InstrumentID><InstrumentName>贵州茅台</InstrumentName>
+      <Quantity>200</Quantity><UnderlyingSecurityID>101</UnderlyingSecurityID></Item>
+      <Item><InstrumentID>600887</InstrumentID><InstrumentName>伊利股份</InstrumentName>
+      <Quantity>0</Quantity><UnderlyingSecurityID>101</UnderlyingSecurityID></Item>
+    </ETF>""".encode()
+    basket = parse_creation_basket(xml, "515170", stamp.date())
+    assert isinstance(basket, CreationBasket)
+    assert len(basket.stocks) == 1 and basket.zero_stocks == ("600887",)
+    assert isinstance(parse_creation_basket(xml, "515170", stamp.date() - timedelta(days=1)), str)
+    assert isinstance(
+        parse_creation_basket(xml.replace(b"<RecordNumber>2", b"<RecordNumber>3"), "515170", stamp.date()), str
+    )
+    stale = replace(quote, as_of=stamp - timedelta(days=1))
+    assert isinstance(value_basket(basket, "食品饮料ETF华夏", {"sh600519": stale}), str)
+    fund = value_basket(basket, "食品饮料ETF华夏", {"sh600519": quote})
+    assert isinstance(fund, FundValue)
+    assert fund.weight("600519") == 100
+    other = replace(fund, code="516900", name="食品饮料ETF华安")
+    result = BasketResult((fund, other), (Failure("159843", "缺当日报价"),))
+    html, text = build_comparison_html(result, "ETF 持仓对比", TargetStock("600519", "贵州茅台"))
+    assert "重点股票权重" in html and "申万二级行业" in html and html.count('r="54"') == 2
+    assert "本次未纳入的项目" in html and "159843" in text and "100.00%" in text
+    assert "篮子现金和零股数项不计入" in text and "1 只计价股票参与估算" in text
+    assert html.count('class="ring-count">1') == 2
+    png = asyncio.run(render_html(html, width=WIDTH, label="ETF 持仓对比"))
+    _save_evidence("extras", "etf-compare", png, min_w=round(WIDTH * 1.5), min_h=300)
+    industries = {f"行业{i}": 18.0 for i in range(5)}
+    industries.update({"小权重行业": 6.0, UNKNOWN_INDUSTRY: 4.0})
+    comparison = replace(result, funds=(fund, replace(other, industries=industries)))
+    html, text = build_comparison_html(comparison, "ETF 申赎篮子对比", TargetStock("600887", "伊利股份"))
+    assert "其余二级行业" in html and UNKNOWN_INDUSTRY in html and f"{UNKNOWN_INDUSTRY} 4.00%" in text
+    assert "伊利股份：515170 零股数" in text
+    common = replace(fund, industries={"行业0": 100.0})
+    left, right = _industry_pies((common, comparison.funds[1]))
+    assert left[0].label == right[0].label == "行业0" and left[0].color == right[0].color
+    assert [part.label for part in right[-2:]] == ["其余二级行业", UNKNOWN_INDUSTRY]
+    concentrated = replace(fund, stocks={f"60051{i}": ("高权重", 100 / 9) for i in range(9)})
+    diversified = replace(other, stocks={"600887": ("伊利股份", 0.8)})
+    assert "600887" in [stock.code for stock in comparison_stocks((concentrated, diversified), None)[:6]]
+
+
+def test_etf_pcf_cache_shares_downloads_and_refreshes(monkeypatch: pytest.MonkeyPatch) -> None:
+    from collections import OrderedDict
+
+    from SayuStock.utils.market.adapters import etf_basket
+    from SayuStock.utils.market.adapters.etf_basket import BasketStock, CreationBasket, fetch_creation_basket
+
+    day = date(2026, 11, 17)
+    now = 100.0
+    calls: list[date] = []
+    started, release = asyncio.Event(), asyncio.Event()
+
+    async def download(code: str, trade_day: date) -> CreationBasket | str:
+        calls.append(trade_day)
+        started.set()
+        await release.wait()
+        if len(calls) == 3:
+            return "申赎清单接口暂时不可用"
+        return CreationBasket(code, trade_day, (BasketStock("sh600519", "贵州茅台", 100),), ())
+
+    monkeypatch.setattr(etf_basket, "_PCF_CACHE", OrderedDict())
+    monkeypatch.setattr(etf_basket, "monotonic", lambda: now)
+    monkeypatch.setattr(etf_basket, "_download_creation_basket", download)
+
+    async def run() -> None:
+        nonlocal now
+        first = asyncio.create_task(fetch_creation_basket("515170", day))
+        await started.wait()
+        second = asyncio.create_task(fetch_creation_basket("515170", day))
+        await asyncio.sleep(0)
+        first.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await first
+        release.set()
+        result = await second
+        assert isinstance(result, CreationBasket)
+        assert await fetch_creation_basket("515170", day) is result
+        assert calls == [day]
+
+        tomorrow = day + timedelta(days=1)
+        result = await fetch_creation_basket("515170", tomorrow)
+        assert isinstance(result, CreationBasket) and result.day == tomorrow
+        now += etf_basket._PCF_CACHE_TTL_SECONDS + 1
+        assert isinstance(await fetch_creation_basket("515170", day), str)
+        assert isinstance(await fetch_creation_basket("515170", day), CreationBasket)
+        assert calls == [day, tomorrow, day, day]
+
+    asyncio.run(run())
+
+
+def test_etf_quotes_share_in_flight_only(monkeypatch: pytest.MonkeyPatch) -> None:
+    from SayuStock.utils.market.adapters import etf_basket
+    from SayuStock.utils.market.adapters.etf_basket import fetch_batch_quotes
+
+    calls: list[tuple[str, ...]] = []
+    started, release = asyncio.Event(), asyncio.Event()
+
+    async def download(symbols: tuple[str, ...]) -> dict[str, Quote]:
+        calls.append(symbols)
+        started.set()
+        await release.wait()
+        return {symbols[0]: _quote("600519", "贵州茅台", 100, 0, None)}
+
+    monkeypatch.setattr(etf_basket, "_download_batch_quotes", download)
+
+    async def run() -> None:
+        keys = ("sh600519", "sz000001")
+        first = asyncio.create_task(fetch_batch_quotes(keys))
+        await started.wait()
+        second = asyncio.create_task(fetch_batch_quotes(("sz000001", "sh600519", "sh600519")))
+        await asyncio.sleep(0)
+        release.set()
+        left, right = await asyncio.gather(first, second)
+        assert left == right and left is not right and calls == [keys]
+        assert await fetch_batch_quotes(keys) == left and calls == [keys, keys]
+
+    asyncio.run(run())
+
+
+def test_etf_large_basket_values_all_stocks(monkeypatch: pytest.MonkeyPatch) -> None:
+    from SayuStock.stock_info import etf_compare
+    from SayuStock.utils.market.adapters import etf_basket
+    from SayuStock.stock_info.etf_compare import TargetStock, SearchResult, load_baskets
+    from SayuStock.stock_info.draw_etf_compare import build_search_html
+    from SayuStock.utils.market.adapters.etf_basket import ListedFund, CreationBasket, parse_creation_basket
+
+    day = date(2026, 11, 17)
+    codes = [str(600000 + i) for i in range(406)]
+    rows = "".join(
+        f"<Item><InstrumentID>{code}</InstrumentID><Quantity>{1 if i < 100 else 2}</Quantity>"
+        "<UnderlyingSecurityID>101</UnderlyingSecurityID></Item>"
+        for i, code in enumerate(codes)
+    )
+    xml = (
+        "<ETF><FundInstrumentID>562560</FundInstrumentID><TradingDay>20261117</TradingDay>"
+        f"<RecordNumber>406</RecordNumber>{rows}</ETF>"
+    ).encode()
+    basket = parse_creation_basket(xml, "562560", day)
+    assert isinstance(basket, CreationBasket) and len(basket.stocks) == 406
+
+    batch_sizes: list[int] = []
+    missing: set[str] = set()
+
+    async def fetch_quotes(symbols: list[str]) -> dict[str, str]:
+        batch_sizes.append(len(symbols))
+        return {
+            symbol: "~".join(["1", symbol[2:], symbol[2:], "10", *([""] * 26), "20261117150000", *([""] * 7)])
+            for symbol in symbols
+            if symbol not in missing
+        }
+
+    async def fetch_basket(code: str, trade_day: date) -> CreationBasket:
+        assert code == basket.code and trade_day == day
+        return basket
+
+    async def fetch_index(_code: str) -> str:
+        return ""
+
+    monkeypatch.setattr(etf_basket, "fetch_qt_lines", fetch_quotes)
+    monkeypatch.setattr(etf_compare, "fetch_creation_basket", fetch_basket)
+    monkeypatch.setattr(etf_compare, "fetch_tracked_index", fetch_index)
+    stock = TargetStock(codes[0], "目标股")
+    preview = asyncio.run(load_baskets([basket.code], day=day, target=stock, preview=True))
+    assert not batch_sizes and not preview.funds and not preview.failures
+    assert [(item.code, item.stock_count) for item in preview.membership_only] == [(basket.code, 406)]
+    candidates = (ListedFund(basket.code, "中证A500ETF"),)
+    _, text = build_search_html(SearchResult(stock, date(2026, 9, 30), candidates, 1, 1, preview))
+    assert "当日篮子包含目标股 · 仅核验成分" in text and "406 只成分股有正股数" in text
+
+    result = asyncio.run(load_baskets([basket.code], day=day, target=stock))
+    assert batch_sizes == [60] * 6 + [47]
+    assert len(result.funds) == 1 and not result.membership_only and not result.failures
+    value = result.funds[0]
+    assert len(value.stocks) == 406
+    assert value.weight(codes[0]) == pytest.approx(100 / 712)
+    assert value.weight(codes[-1]) == pytest.approx(200 / 712)
+    missing.add(basket.stocks[-1].symbol)
+    result = asyncio.run(load_baskets([basket.code], day=day))
+    assert not result.funds and result.failures == (Failure(basket.code, f"{codes[-1]}缺当日报价"),)
+
+
+@pytest.mark.parametrize("retry_succeeds", [True, False])
+def test_etf_search_retries_page_and_reports_completed_pages(
+    monkeypatch: pytest.MonkeyPatch, retry_succeeds: bool
+) -> None:
+    from contextlib import asynccontextmanager
+    from collections.abc import AsyncIterator
+
+    from aiohttp import ClientTimeout
+
+    from SayuStock.stock_info import etf_compare
+    from SayuStock.utils.market.adapters import etf_basket
+    from SayuStock.stock_info.etf_compare import TargetStock, BasketResult, SearchResult, search_listed_funds
+    from SayuStock.stock_info.draw_etf_compare import build_search_html
+    from SayuStock.utils.market.adapters.etf_basket import ListedFund
+
+    day = date(2026, 11, 17)
+    period = date(2026, 9, 30)
+    stock = TargetStock("601138", "工业富联")
+    first = tuple(ListedFund(f"51588{i}", f"通信ETF{i}") for i in range(10))
+    industrial = ListedFund("159075", "工业互联网ETF")
+    manufacturing = ListedFund("516800", "智能制造ETF")
+    pages = {1: first, 2: (first[0], industrial), 3: (ListedFund("000001", "场外基金"),), 4: (manufacturing,)}
+    requested: list[tuple[int, float | None]] = []
+    sampled: list[list[str]] = []
+
+    class Response:
+        status = 200
+
+        def __init__(self, page: int) -> None:
+            self.page = page
+
+        async def json(self, *, content_type: None) -> dict[str, object]:
+            assert content_type is None
+            return {
+                "success": True,
+                "pages": 12,
+                "data": [
+                    {"HOLDER_CODE": f.code, "HOLDER_NAME": f.name, "REPORT_DATE": period.isoformat()}
+                    for f in pages[self.page]
+                ],
+            }
+
+    class Session:
+        @asynccontextmanager
+        async def get(self, _url: str, *, params: dict[str, str], timeout: ClientTimeout) -> AsyncIterator[Response]:
+            assert (params["SCode"], params["ReportDate"], params["pageSize"]) == (
+                stock.code,
+                period.isoformat(),
+                "100",
+            )
+            page = int(params["pageNum"])
+            requested.append((page, timeout.total))
+            if page == 4 and (timeout.total == 4 or not retry_succeeds):
+                raise TimeoutError
+            yield Response(page)
+
+    @asynccontextmanager
+    async def client_session(**_kwargs: object) -> AsyncIterator[Session]:
+        yield Session()
+
+    async def load_baskets(codes: list[str], *, day: date, target: TargetStock, preview: bool) -> BasketResult:
+        assert target == stock and day == date(2026, 11, 17) and preview
+        sampled.append(codes)
+        return BasketResult((), tuple(Failure(code, "缺当日报价") for code in codes))
+
+    monkeypatch.setattr(etf_basket, "ClientSession", client_session)
+    monkeypatch.setattr(etf_compare, "load_baskets", load_baskets)
+    result = asyncio.run(search_listed_funds(stock, day))
+    assert isinstance(result, SearchResult)
+    expected = (*first, industrial, manufacturing) if retry_succeeds else (*first, industrial)
+    assert result.candidates == expected
+    assert sampled[0][:2] == [first[0].code, industrial.code] and len(sampled[0]) == 8
+    assert requested == [(1, 4), (2, 4), (3, 4), (4, 4), (4, 2)]
+    _, summary = build_search_html(result)
+    assert "数据源共 12 页" in summary and "本轮无可估算权重" in summary
+    if retry_succeeds:
+        assert "4/4 页" in summary and "12 只 ETF 候选" in summary and manufacturing.code in sampled[0]
+    else:
+        assert "3/4 页" in summary and "11 只 ETF 候选" in summary
+        assert "持仓披露第 4 页" in summary and "短重试一次后仍未取得数据" in summary
 
 
 def test_watchlist_and_fund_partial_or_full_failure_notice(monkeypatch: pytest.MonkeyPatch) -> None:
