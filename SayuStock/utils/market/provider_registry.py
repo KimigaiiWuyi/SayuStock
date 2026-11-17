@@ -95,6 +95,8 @@ _GROUP_CHAIN_CONFIG_KEYS: dict[str, str] = {
     "exclusive": "market_api_chain_exclusive",
     # IPO 日历域：东方财富全覆盖，纳斯达克仅美股（cn/hk 返回 unsupported 跳过）
     "ipo": "market_api_chain_ipo",
+    # ETF 成分股批量报价域：腾讯财经 / 新浪财经（东财/同花顺返回 unsupported 跳过）
+    "etf_quote": "market_api_chain_etf_quote",
 }
 
 # 接口 → 功能域；未列出的接口（resolve 等）走全局链。
@@ -104,6 +106,7 @@ _IFACE_GROUPS: dict[str, str] = {
     "ipo_cn": "ipo",
     "ipo_hk": "ipo",
     "ipo_us": "ipo",
+    "batch_quotes": "etf_quote",
     "quote": "quote",
     "quotes": "quote",
     "intraday": "quote",
@@ -382,6 +385,10 @@ class ConfigurableEquityMarket:
 
     async def quotes(self, queries: Sequence[str]) -> list[Quote | MarketError]:
         return list(await asyncio.gather(*[self.quote(q) for q in queries]))
+
+    async def batch_quotes(self, symbols: Sequence[str]) -> dict[str, Quote] | MarketError:
+        result = await self._dispatch("batch_quotes", "batch_quotes", symbols)
+        return cast("dict[str, Quote] | MarketError", result)
 
     async def intraday(self, query: str, *, ndays: int = 1) -> IntradaySeries | MarketError:
         result = await self._dispatch("intraday", "intraday", query, ndays=ndays)

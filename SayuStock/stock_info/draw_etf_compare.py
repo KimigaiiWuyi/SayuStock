@@ -20,33 +20,31 @@ from .etf_compare import (
     shares_overlap,
     comparison_stocks,
 )
-from ..utils.warn_box import WARN_CSS, Failure, failure_lines, warn_box_html, warn_box_height
+from ..render.palette import (
+    DIM,
+    RED,
+    BLUE,
+    PINK,
+    TEAL,
+    GREEN,
+    MUTED,
+    WHITE,
+    ORANGE,
+    SERIES,
+    VIOLET,
+    YELLOW,
+    mix,
+)
+from ..utils.warn_box import failure_lines
 from ..render.templates import render_template
+from ..utils.market.display import source_footer
 from ..utils.market.adapters.etf_basket import HOLDER_PAGE_SIZE
 
-WIDTH = 800
+WIDTH = 960
 _INDUSTRIES_PER_PIE = 5
-_COLORS = (
-    "#43c2a1",
-    "#72aaf5",
-    "#f0af6c",
-    "#b793ee",
-    "#ed8c9e",
-    "#58c4db",
-    "#e3cc72",
-    "#8ebf73",
-    "#d99478",
-    "#8899e6",
-    "#eb7779",
-    "#74b7b2",
-    "#c4a5db",
-    "#e7c694",
-    "#96c9d7",
-    "#91c7a8",
-    "#bd8f91",
-    "#92aeda",
-    "#b8cf91",
-    "#dba5c7",
+_COLORS: tuple[str, ...] = (
+    *SERIES[:12],
+    *(mix(color, WHITE, 0.58) for color in (BLUE, ORANGE, VIOLET, GREEN, PINK, RED, TEAL, YELLOW)),
 )
 _OTHER_INDUSTRIES = "其余二级行业"
 _BASIS = (
@@ -54,7 +52,6 @@ _BASIS = (
     "权重分母是全部计价股票市值之和，篮子现金和零股数项不计入。"
     "按整篮分批取价，任一所需的当日报价缺失时，该 ETF 暂不出权重。"
 )
-_SOURCE = "申赎清单：沪深交易所 · 行情：腾讯 · 行业：申万二级"
 
 
 @dataclass(frozen=True, slots=True)
@@ -75,18 +72,36 @@ class _PieSlice:
     path: str
 
 
-def _warning(failures: Sequence[Failure]) -> tuple[str, int]:
-    lines = failure_lines(failures, per_line=2)
-    height = warn_box_height(len(lines))
-    return warn_box_html(title="本次未纳入的项目", lines=lines, top=0, left=0, width=WIDTH - 64, height=height), height
-
-
 def _quote_window(funds: Sequence[FundValue]) -> str:
     if not funds:
         return ""
     first = min(fund.first_quote for fund in funds)
     last = max(fund.last_quote for fund in funds)
     return f"{first:%Y-%m-%d} · 报价时间 {first:%H:%M}–{last:%H:%M}（北京时间）"
+
+
+def _stale_notes(funds: Sequence[FundValue]) -> list[str]:
+    notes: list[str] = []
+    for fund in funds:
+        if not fund.stale_stocks:
+            continue
+        sample = "、".join(fund.stale_stocks[:3])
+        suffix = f"等 {len(fund.stale_stocks)} 只" if len(fund.stale_stocks) > 3 else ""
+        notes.append(
+            f"{fund.code} 含 {len(fund.stale_stocks)} 只非当日报价成分（疑似停牌，按最近价估算：{sample}{suffix}）"
+        )
+    return notes
+
+
+def _footer(funds: Sequence[FundValue], *, include_eastmoney: bool = False) -> str:
+    providers: list[str | None] = ["沪深交易所"]
+    for fund in funds:
+        providers.extend(fund.providers)
+    if not any(fund.providers for fund in funds):
+        providers.append("tencent")
+    if include_eastmoney:
+        providers.append("eastmoney")
+    return source_footer(*providers, note="申赎篮子 · 申万二级")
 
 
 def _theme_rows(result: SearchResult) -> tuple[list[_Theme], int]:
@@ -165,8 +180,8 @@ def _industry_pies(funds: Sequence[FundValue]) -> list[list[_PieSlice]]:
             if label not in (_OTHER_INDUSTRIES, UNKNOWN_INDUSTRY)
         )
     )
-    colors: dict[str, str] = dict(zip(labels, _COLORS[: len(labels)], strict=True))
-    colors.update({_OTHER_INDUSTRIES: "#647889", UNKNOWN_INDUSTRY: "#bdc5ce"})
+    colors: dict[str, str] = {label: _COLORS[i % len(_COLORS)] for i, label in enumerate(labels)}
+    colors.update({_OTHER_INDUSTRIES: DIM, UNKNOWN_INDUSTRY: MUTED})
     return [_pie_slices(breakdown, colors) for breakdown in breakdowns]
 
 
@@ -194,14 +209,16 @@ def build_search_html(result: SearchResult) -> tuple[str, str]:
         f"持仓披露截至 {result.period:%Y-%m-%d}。本次成功查 {result.page}/{result.planned_pages} 页"
         f"（数据源共 {result.pages} 页，每页最多 {HOLDER_PAGE_SIZE} 条），发现 {len(result.candidates)} 只 ETF 候选。"
     )
-    source = _SOURCE + " · 披露反查：东方财富"
+    footer = _footer(result.preview.funds, include_eastmoney=True)
     quote_window = _quote_window(result.preview.funds)
     names = {fund.code: fund.name for fund in result.candidates}
     membership = [
         f"{names[item.code]} {item.code} · {item.stock_count} 只成分股有正股数"
         for item in result.preview.membership_only
     ]
-    preview_note = f"篮子超过 {PREVIEW_STOCK_LIMIT} 只正股数成分股时，找股只核验成分。展开或直接对比时按整篮估值。"
+    preview_note = f"篮子超过 {PREVIEW_STOCK_LIMIT} 只正股数成分股时，找股只核验成分。ETF展开或直接对比时按整篮估值。"
+    stale_notes = _stale_notes(result.preview.funds)
+    warn_lines = failure_lines(result.preview.failures, per_line=2)
     lines = [title, quote_window, _BASIS, scope]
     lines.extend(
         f"{row.name} {row.range_text}（{row.caption}）· 参考指数 {row.index_text}"
@@ -213,15 +230,17 @@ def build_search_html(result: SearchResult) -> tuple[str, str]:
         lines.append("本轮暂无当日权重估算。")
     if membership:
         lines.extend((f"当日篮子包含{result.stock.name} · 仅核验成分", preview_note, *membership))
-    lines.extend(("发送「展开 主题名」对比该类 ETF。", source))
+    lines.extend(stale_notes)
+    lines.extend(("发送「ETF展开 主题名」对比该类 ETF。", footer))
     lines.extend(failure_lines(result.preview.failures))
-    warn, warn_height = _warning(result.preview.failures)
     html = render_template(
         "etf_baskets.html",
+        width=WIDTH,
+        kicker="场内基金 · 持仓反查",
         title=title,
+        subtitle=quote_window or f"{result.stock.code} · 按当日申赎篮子估算",
         basis=_BASIS,
-        source=source,
-        quote_window=quote_window,
+        footer=footer,
         mode="search",
         themes=rows,
         last_tick=axis,
@@ -230,9 +249,8 @@ def build_search_html(result: SearchResult) -> tuple[str, str]:
         membership=membership,
         membership_title=f"当日篮子包含{result.stock.name} · 仅核验成分",
         preview_note=preview_note,
-        warn=warn,
-        warn_css=WARN_CSS,
-        warn_height=warn_height,
+        stale_notes=stale_notes,
+        warn_lines=warn_lines,
     )
     return html, "\n".join(line for line in lines if line)
 
@@ -247,6 +265,9 @@ def build_comparison_html(result: BasketResult, title: str, target: TargetStock 
         high = max(value for _, _, value in overlaps)
         overlap_note = f"两两篮子股票权重重合度：{low:.2f}%–{high:.2f}%"
     quote_window = _quote_window(funds)
+    footer = _footer(funds)
+    stale_notes = _stale_notes(funds)
+    warn_lines = failure_lines(result.failures, per_line=2)
     lines = [title, quote_window, _BASIS, overlap_note]
     lines.extend(
         f"{fund.name} {fund.code} · {len(fund.stocks)} 只计价股票参与估算 · {fund.index_name or '跟踪指数暂无'}"
@@ -259,23 +280,25 @@ def build_comparison_html(result: BasketResult, title: str, target: TargetStock 
         sectors_text = " · ".join(f"{name} {weight:.2f}%" for name, weight in fund.industries.items())
         lines.append(f"{fund.code} 申万二级：{sectors_text}")
     lines.extend(f"{left} / {right} 重合度 {overlap:.2f}%" for left, right, overlap in overlaps)
+    lines.extend(stale_notes)
     lines.extend(failure_lines(result.failures))
-    warn, warn_height = _warning(result.failures)
+    lines.append(footer)
     html = render_template(
         "etf_baskets.html",
+        width=WIDTH,
+        kicker="场内基金 · 申赎篮子",
         title=title,
+        subtitle=quote_window,
         basis=_BASIS,
-        source=_SOURCE,
-        quote_window=quote_window,
+        footer=footer,
         mode="compare",
         funds=funds,
         matrix=matrix,
         pies=_industry_pies(funds),
         industry_limit=_INDUSTRIES_PER_PIE,
         overlap=overlap_note,
-        warn=warn,
-        warn_css=WARN_CSS,
-        warn_height=warn_height,
+        stale_notes=stale_notes,
+        warn_lines=warn_lines,
     )
     return html, "\n".join(lines)
 

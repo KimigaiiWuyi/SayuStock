@@ -208,6 +208,10 @@ class EastMoneyMarketData:
     async def quotes(self, queries: Sequence[str]) -> list[Quote | MarketError]:
         return list(await asyncio.gather(*[self.quote(q) for q in queries]))
 
+    async def batch_quotes(self, symbols: Sequence[str]) -> dict[str, Quote] | MarketError:
+        _ = symbols
+        return unsupported("东财暂不支持批量带日期成分股估值", provider=PROVIDER)
+
     async def intraday(self, query: str, *, ndays: int = 1) -> IntradaySeries | MarketError:
         code_info = await _resolve_code(query)
         if isinstance(code_info, MarketError):

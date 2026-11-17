@@ -645,6 +645,7 @@ def test_etf_basket_comparison_render_and_stale_quote(require_render_runtime: No
     result = BasketResult((fund, other), (Failure("159843", "缺当日报价"),))
     html, text = build_comparison_html(result, "ETF 持仓对比", TargetStock("600519", "贵州茅台"))
     assert "重点股票权重" in html and "申万二级行业" in html and html.count('r="54"') == 2
+    assert "ex-warn-panel" in html and "extra-foot" in html and "数据来源：沪深交易所" in html
     assert "本次未纳入的项目" in html and "159843" in text and "100.00%" in text
     assert "篮子现金和零股数项不计入" in text and "1 只计价股票参与估算" in text
     assert html.count('class="ring-count">1') == 2
@@ -745,9 +746,12 @@ def test_etf_quotes_share_in_flight_only(monkeypatch: pytest.MonkeyPatch) -> Non
 
 def test_etf_large_basket_values_all_stocks(monkeypatch: pytest.MonkeyPatch) -> None:
     from SayuStock.stock_info import etf_compare
-    from SayuStock.utils.market.adapters import etf_basket
+    from SayuStock.utils.market import set_market
+    from SayuStock.utils.market.errors import network_error
     from SayuStock.stock_info.etf_compare import TargetStock, SearchResult, load_baskets
+    from SayuStock.utils.market.adapters.sina import provider as sina_provider
     from SayuStock.stock_info.draw_etf_compare import build_search_html
+    from SayuStock.utils.market.adapters.tencent import provider as tencent_provider
     from SayuStock.utils.market.adapters.etf_basket import ListedFund, CreationBasket, parse_creation_basket
 
     day = date(2026, 11, 17)
@@ -766,13 +770,46 @@ def test_etf_large_basket_values_all_stocks(monkeypatch: pytest.MonkeyPatch) -> 
 
     batch_sizes: list[int] = []
     missing: set[str] = set()
+    stale: set[str] = set()
+    tencent_down = False
 
-    async def fetch_quotes(symbols: list[str]) -> dict[str, str]:
+    async def fetch_quotes(symbols: list[str]) -> dict[str, str] | MarketError:
+        if tencent_down:
+            return network_error("腾讯超时", provider="tencent")
         batch_sizes.append(len(symbols))
         return {
-            symbol: "~".join(["1", symbol[2:], symbol[2:], "10", *([""] * 26), "20261117150000", *([""] * 7)])
+            symbol: "~".join(
+                [
+                    "1",
+                    symbol[2:],
+                    symbol[2:],
+                    "10",
+                    *([""] * 26),
+                    "20261116150000" if symbol in stale else "20261117150000",
+                    *([""] * 7),
+                ]
+            )
             for symbol in symbols
             if symbol not in missing
+        }
+
+    async def fetch_sina_quotes(symbols: list[str]) -> dict[str, str]:
+        return {
+            symbol: ",".join(
+                [
+                    symbol[2:],
+                    "10",
+                    "10",
+                    "10",
+                    "10",
+                    "10",
+                    *([""] * 24),
+                    "2026-11-17",
+                    "15:00:00",
+                    "",
+                ]
+            )
+            for symbol in symbols
         }
 
     async def fetch_basket(code: str, trade_day: date) -> CreationBasket:
@@ -782,27 +819,43 @@ def test_etf_large_basket_values_all_stocks(monkeypatch: pytest.MonkeyPatch) -> 
     async def fetch_index(_code: str) -> str:
         return ""
 
-    monkeypatch.setattr(etf_basket, "fetch_qt_lines", fetch_quotes)
+    set_market(None)
+    monkeypatch.setattr(tencent_provider, "fetch_qt_lines", fetch_quotes)
+    monkeypatch.setattr(sina_provider, "fetch_hq_lines", fetch_sina_quotes)
     monkeypatch.setattr(etf_compare, "fetch_creation_basket", fetch_basket)
     monkeypatch.setattr(etf_compare, "fetch_tracked_index", fetch_index)
-    stock = TargetStock(codes[0], "目标股")
-    preview = asyncio.run(load_baskets([basket.code], day=day, target=stock, preview=True))
-    assert not batch_sizes and not preview.funds and not preview.failures
-    assert [(item.code, item.stock_count) for item in preview.membership_only] == [(basket.code, 406)]
-    candidates = (ListedFund(basket.code, "中证A500ETF"),)
-    _, text = build_search_html(SearchResult(stock, date(2026, 9, 30), candidates, 1, 1, preview))
-    assert "当日篮子包含目标股 · 仅核验成分" in text and "406 只成分股有正股数" in text
+    try:
+        stock = TargetStock(codes[0], "目标股")
+        preview = asyncio.run(load_baskets([basket.code], day=day, target=stock, preview=True))
+        assert not batch_sizes and not preview.funds and not preview.failures
+        assert [(item.code, item.stock_count) for item in preview.membership_only] == [(basket.code, 406)]
+        candidates = (ListedFund(basket.code, "中证A500ETF"),)
+        _, text = build_search_html(SearchResult(stock, date(2026, 9, 30), candidates, 1, 1, preview))
+        assert "当日篮子包含目标股 · 仅核验成分" in text and "406 只成分股有正股数" in text
 
-    result = asyncio.run(load_baskets([basket.code], day=day, target=stock))
-    assert batch_sizes == [60] * 6 + [47]
-    assert len(result.funds) == 1 and not result.membership_only and not result.failures
-    value = result.funds[0]
-    assert len(value.stocks) == 406
-    assert value.weight(codes[0]) == pytest.approx(100 / 712)
-    assert value.weight(codes[-1]) == pytest.approx(200 / 712)
-    missing.add(basket.stocks[-1].symbol)
-    result = asyncio.run(load_baskets([basket.code], day=day))
-    assert not result.funds and result.failures == (Failure(basket.code, f"{codes[-1]}缺当日报价"),)
+        result = asyncio.run(load_baskets([basket.code], day=day, target=stock))
+        assert batch_sizes == [60] * 6 + [47]
+        assert len(result.funds) == 1 and not result.membership_only and not result.failures
+        value = result.funds[0]
+        assert len(value.stocks) == 406 and value.providers == ("tencent",)
+        assert value.weight(codes[0]) == pytest.approx(100 / 712)
+        assert value.weight(codes[-1]) == pytest.approx(200 / 712)
+
+        stale.add(basket.stocks[-1].symbol)
+        suspended = asyncio.run(load_baskets([basket.code], day=day))
+        assert len(suspended.funds) == 1 and suspended.funds[0].stale_stocks == (codes[-1],)
+        stale.clear()
+
+        tencent_down = True
+        fallback = asyncio.run(load_baskets([basket.code], day=day))
+        assert len(fallback.funds) == 1 and fallback.funds[0].providers == ("sina",)
+        tencent_down = False
+
+        missing.add(basket.stocks[-1].symbol)
+        result = asyncio.run(load_baskets([basket.code], day=day))
+        assert not result.funds and result.failures == (Failure(basket.code, f"{codes[-1]}缺当日报价"),)
+    finally:
+        set_market(None)
 
 
 @pytest.mark.parametrize("retry_succeeds", [True, False])
@@ -877,7 +930,7 @@ def test_etf_search_retries_page_and_reports_completed_pages(
     expected = (*first, industrial, manufacturing) if retry_succeeds else (*first, industrial)
     assert result.candidates == expected
     assert sampled[0][:2] == [first[0].code, industrial.code] and len(sampled[0]) == 8
-    assert requested == [(1, 4), (2, 4), (3, 4), (4, 4), (4, 2)]
+    assert requested[0] == (1, 4) and set(requested) == {(1, 4), (2, 4), (3, 4), (4, 4), (4, 2)}
     _, summary = build_search_html(result)
     assert "数据源共 12 页" in summary and "本轮无可估算权重" in summary
     if retry_succeeds:

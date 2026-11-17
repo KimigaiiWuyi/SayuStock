@@ -37,7 +37,7 @@ from .parse import (
     parse_hq_line_commodity,
     sina_us_mink_symbol_from_secid,
 )
-from .._base import PartialMarketData, resolve_em_symbol, resolve_em_symbol_safe
+from .._base import PartialMarketData, resolve_em_symbol, run_quote_batches, resolve_em_symbol_safe
 from .client import (
     PROVIDER,
     fetch_kline,
@@ -187,6 +187,14 @@ class SinaMarketData(PartialMarketData):
                     continue
                 results[i] = _parse_us_or_cn(line, sina_sym=sina_sym, symbol=sym_by_idx[i])
         return [r if r is not None else not_found(ErroText["notStock"], provider=PROVIDER) for r in results]
+
+    async def batch_quotes(self, symbols: Sequence[str]) -> dict[str, Quote] | MarketError:
+        return await run_quote_batches(
+            symbols,
+            provider=PROVIDER,
+            fetch_batch=fetch_hq_lines,
+            parse_line=lambda line, ref: parse_hq_line(line, symbol=ref),
+        )
 
     async def intraday(self, query: str, *, ndays: int = 1) -> IntradaySeries | MarketError:
         if ndays > 1:

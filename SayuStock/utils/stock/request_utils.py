@@ -208,6 +208,7 @@ _MARKET_SEC_TYPES: Dict[str, frozenset] = {
     "us": frozenset({"美股", "粉单"}),
     "kr": frozenset({"韩股"}),
     "a": frozenset({"沪深A", "沪A", "深A", "创业板", "科创板", "京A"}),
+    "etf": frozenset({"基金"}),
 }
 
 

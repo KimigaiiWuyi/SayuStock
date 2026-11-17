@@ -1,139 +1,138 @@
-<!doctype html>
-<html lang="zh-CN">
-<head>
-<meta charset="utf-8">
-<style>
-* { box-sizing: border-box; }
-body { margin: 0; width: 800px; background: #101a23; color: #eaf3fa; font-size: 18px; }
-main { padding: 32px; }
-h1, h2, p { margin: 0; }
-h1 { font-size: 34px; margin-bottom: 8px; }
-h2 { font-size: 23px; margin-bottom: 10px; }
-p, span { line-height: 1.48; }
-.note { font-size: 15px; color: #acc0cf; }
-.caption { font-size: 13px; color: #9eb1c4; }
-.panel { background: #182633; border-radius: 14px; padding: 18px; margin-top: 14px; }
-.header, .group-label { display: flex; justify-content: space-between; align-items: center; }
+{% extends "extras_base.html" %}
+{% from "extras_macros.html" import heading %}
+{% block style %}
+.etf-basis { margin-top: -2px; }
 .group { margin-top: 12px; }
-.range { position: relative; height: 7px; margin: 5px 0; background: #293d4c; border-radius: 4px; }
-.range-in { position: absolute; top: 0; height: 7px; min-width: 7px; background: #37bd98; border-radius: 4px; }
-.matrix { margin-top: 4px; font-size: 17px; }
-.matrix-row { display: flex; align-items: stretch; border-bottom: 1px solid #324353; }
-.matrix-stock { display: block; flex: 0 0 124px; padding: 8px 5px; white-space: nowrap; }
-.matrix-weight { flex: 1; min-width: 0; padding: 8px 4px; text-align: center; }
-.matrix-head .matrix-weight { display: flex; flex-direction: column; justify-content: space-between; font-size: 14px; }
-.matrix-head .caption { display: block; }
-.best { background: #234640; color: #85e0c7; font-weight: 700; }
-.pies { display: flex; align-items: stretch; gap: 10px; margin-top: 12px; }
-.pie { flex: 1; min-width: 0; padding: 12px 10px; text-align: center; background: #12212e; border: 1px solid #2a3d4d; border-radius: 12px; }
-.pie-name { font-size: 14px; }
-.pie-code { color: #9eb1c4; font-size: 12px; }
+.group:first-of-type { margin-top: 10px; }
+.group-label { display: flex; justify-content: space-between; align-items: center; gap: 8px; font-size: 16px; }
+.range { position: relative; height: 7px; margin: 6px 0; background: {{ BORDER }}; border-radius: 4px; overflow: hidden; }
+.range-in { position: absolute; top: 0; height: 7px; min-width: 7px; background: {{ TEAL }}; border-radius: 4px; }
+.axis-row { display: flex; justify-content: space-between; margin-top: 8px; }
+.matrix { margin-top: 8px; font-size: 16px; }
+.matrix-row { display: flex; align-items: stretch; border-top: 1px solid {{ GRID }}; }
+.matrix-row.matrix-head { border-top: 0; padding-bottom: 4px; }
+.matrix-row.striped { background: {{ rgba(SURFACE, 0.60) }}; }
+.matrix-stock { display: block; flex: 0 0 140px; padding: 8px 8px; white-space: nowrap; }
+.matrix-weight { flex: 1; min-width: 0; padding: 8px 6px; text-align: center; font-variant-numeric: tabular-nums; }
+.matrix-head .matrix-weight { display: flex; flex-direction: column; justify-content: space-between; gap: 2px; font-size: 14px; }
+.matrix-head .ex-note { display: block; }
+.best { background: {{ rgba(TEAL, 0.16) }}; color: {{ TEAL }}; font-weight: 700; border-radius: 4px; }
+.pies { display: flex; align-items: stretch; gap: 12px; margin-top: 12px; }
+.pie { flex: 1; min-width: 0; display: flex; flex-direction: column; padding: 14px 12px; text-align: center; background: {{ SURFACE }}; border: 1px solid {{ BORDER }}; border-radius: 10px; }
+.pie-head { flex: 0 0 auto; min-height: 42px; display: flex; flex-direction: column; justify-content: center; }
+.pie-name { margin: 0; font-size: 14px; font-weight: 700; overflow-wrap: anywhere; }
+.pie-code { margin: 2px 0 0; color: {{ MUTED }}; font-size: 12px; }
 .ring { position: relative; width: 126px; height: 126px; margin: 8px auto 12px; }
 .ring svg { display: block; }
 .ring-label { position: absolute; left: 0; top: 42px; width: 126px; text-align: center; }
-.ring-count { display: block; font-size: 22px; line-height: 1.1; }
-.ring-unit { display: block; font-size: 11px; color: #acc0cf; }
-.industry-row { display: flex; justify-content: space-between; align-items: center; gap: 4px; padding: 4px 0; border-top: 1px solid #253745; font-size: 12px; }
-.industry-label { display: flex; align-items: center; gap: 5px; text-align: left; }
-.industry-weight { white-space: nowrap; font-size: 12px; font-weight: 700; }
+.ring-count { display: block; font-size: 22px; line-height: 1.1; font-variant-numeric: tabular-nums; }
+.ring-unit { display: block; font-size: 11px; color: {{ MUTED }}; }
+.industry-row { display: flex; justify-content: space-between; align-items: center; gap: 4px; padding: 4px 0; border-top: 1px solid {{ GRID }}; font-size: 12px; }
+.industry-label { display: flex; align-items: center; gap: 5px; text-align: left; min-width: 0; }
+.industry-weight { white-space: nowrap; font-size: 12px; font-weight: 700; font-variant-numeric: tabular-nums; }
 .swatch { display: block; flex: 0 0 7px; width: 7px; height: 7px; border-radius: 2px; }
-.overlap { margin-top: 12px; }
-.warning { position: relative; margin-top: 14px; }
-footer { margin-top: 12px; }
-{{ warn_css | safe }}
-</style>
-</head>
-<body>
-<main>
-  <h1>{{ title }}</h1>
-  {% if quote_window %}<p class="note">{{ quote_window }}</p>{% endif %}
-  {% if basis %}<p class="note">{{ basis }}</p>{% endif %}
-  {% if mode == "search" %}
-  <p class="note">{{ scope }}</p>
-  <section class="panel">
-    <h2>按主题比较目标股权重</h2>
-    <p class="caption">区间为本轮核验样本最低至最高。发送「展开 主题名」对比该类 ETF。</p>
-    {% for theme in themes %}
-    <div class="group">
-      <div class="group-label"><strong>{{ theme.name }}</strong>{% if theme.range_text %}<strong>{{ theme.range_text }}</strong>{% endif %}</div>
-      {% if theme.range_text %}
-      <div class="range"><div class="range-in" style="left:{{ theme.start }}%;width:{{ theme.width }}%"></div></div>
-      <p class="caption">{{ theme.caption }} · 参考指数 {{ theme.index_text }}</p>
-      {% else %}
-      <p class="caption">{{ theme.caption }} · 本轮无可估算权重</p>
-      {% endif %}
+.overlap { margin: 12px 0 0; font-size: 15px; color: {{ TEXT_SOFT }}; }
+.stale-note { margin: 6px 0 0; font-size: 13px; color: {{ YELLOW }}; }
+.index-list { display: flex; flex-direction: column; gap: 4px; }
+.index-item { margin: 0; font-size: 13px; color: {{ MUTED }}; }
+{% endblock %}
+{% block content %}
+{{ heading(kicker, title, subtitle) }}
+<div class="ex-note etf-basis">{{ basis }}</div>
+{% if mode == "search" %}
+<div class="ex-note">{{ scope }}</div>
+<section class="panel ex-panel">
+  <h2 class="ex-h2">按主题比较目标股权重</h2>
+  <div class="ex-note">区间为本轮核验样本最低至最高。发送「ETF展开 主题名」对比该类 ETF。</div>
+  {% for theme in themes %}
+  <div class="group">
+    <div class="group-label"><strong>{{ theme.name }}</strong>{% if theme.range_text %}<strong class="ex-num">{{ theme.range_text }}</strong>{% endif %}</div>
+    {% if theme.range_text %}
+    <div class="range"><div class="range-in" style="left:{{ theme.start }}%;width:{{ theme.width }}%"></div></div>
+    <div class="ex-note">{{ theme.caption }} · 参考指数 {{ theme.index_text }}</div>
+    {% else %}
+    <div class="ex-note">{{ theme.caption }} · 本轮无可估算权重</div>
+    {% endif %}
+  </div>
+  {% endfor %}
+  {% if has_weights %}<div class="axis-row ex-note"><span>0%</span><span>{{ last_tick }}%</span></div>
+  {% else %}<div class="ex-empty">本轮暂无当日权重估算。</div>{% endif %}
+  {% for note in stale_notes %}<p class="stale-note">{{ note }}</p>{% endfor %}
+</section>
+{% if membership %}
+<section class="panel ex-panel">
+  <h2 class="ex-h2">{{ membership_title }}</h2>
+  <div class="ex-note">{{ preview_note }}</div>
+  <div class="ex-list">
+    {% for item in membership %}<div class="ex-item">· {{ item }}</div>{% endfor %}
+  </div>
+</section>
+{% endif %}
+{% else %}
+<section class="panel ex-panel">
+  <h2 class="ex-h2">重点股票权重</h2>
+  <div class="ex-note">高亮表示该行最大值。— 表示该篮子无计价股数。</div>
+  <div class="matrix" role="table" aria-label="股票权重矩阵">
+    <div class="matrix-row matrix-head" role="row">
+      <strong class="matrix-stock" role="columnheader">股票</strong>
+      {% for fund in funds %}
+      <strong class="matrix-weight" role="columnheader"><span>{{ fund.name }}</span><span class="ex-note">{{ fund.code }}</span></strong>
+      {% endfor %}
+    </div>
+    {% for stock, weights, high in matrix %}
+    <div class="matrix-row{% if loop.index0 is even %} striped{% endif %}" role="row">
+      <strong class="matrix-stock" role="rowheader">{{ stock.name }}</strong>
+      {% for weight in weights %}
+      <span class="matrix-weight{% if high > 0 and weight == (high | pct) %} best{% endif %}" role="cell">{{ weight or "—" }}</span>
+      {% endfor %}
     </div>
     {% endfor %}
-    {% if has_weights %}<div class="header caption"><span>0%</span><span>{{ last_tick }}%</span></div>
-    {% else %}<p class="note">本轮暂无当日权重估算。</p>{% endif %}
-  </section>
-  {% if membership %}
-  <section class="panel">
-    <h2>{{ membership_title }}</h2>
-    <p class="caption">{{ preview_note }}</p>
-    {% for item in membership %}<p class="note group">{{ item }}</p>{% endfor %}
-  </section>
-  {% endif %}
-  {% else %}
-  <section class="panel">
-    <h2>重点股票权重</h2>
-    <p class="caption">高亮表示该行最大值。— 表示该篮子无计价股数。</p>
-    <div class="matrix" role="table" aria-label="股票权重矩阵">
-      <div class="matrix-row matrix-head" role="row">
-        <strong class="matrix-stock" role="columnheader">股票</strong>
-        {% for fund in funds %}
-        <strong class="matrix-weight" role="columnheader"><span>{{ fund.name }}</span><span class="caption">{{ fund.code }}</span></strong>
-        {% endfor %}
-      </div>
-      {% for stock, weights, high in matrix %}
-      <div class="matrix-row" role="row">
-        <strong class="matrix-stock" role="rowheader">{{ stock.name }}</strong>
-        {% for weight in weights %}
-        <span class="matrix-weight{% if high > 0 and weight == (high | pct) %} best{% endif %}" role="cell">{{ weight or "—" }}</span>
-        {% endfor %}
-      </div>
-      {% endfor %}
-    </div>
-  </section>
-  <section class="panel">
-    <h2>申万二级行业构成</h2>
-    <p class="caption">每只 ETF 单列权重最高的 {{ industry_limit }} 个行业。同一行业在各图中颜色一致。</p>
-    <div class="pies">
-      {% for fund in funds %}
-      <div class="pie">
-        {% set parts = pies[loop.index0] %}
-        <p class="pie-name"><strong>{{ fund.name }}</strong></p>
+  </div>
+</section>
+<section class="panel ex-panel">
+  <h2 class="ex-h2">申万二级行业构成</h2>
+  <div class="ex-note">每只 ETF 单列权重最高的 {{ industry_limit }} 个行业。同一行业在各图中颜色一致。</div>
+  <div class="pies">
+    {% for fund in funds %}
+    <div class="pie">
+      {% set parts = pies[loop.index0] %}
+      <div class="pie-head">
+        <p class="pie-name">{{ fund.name }}</p>
         <p class="pie-code">{{ fund.code }}</p>
-        <div class="ring">
-          <svg xmlns="http://www.w3.org/2000/svg" width="126" height="126" viewBox="0 0 120 120">
-            {% for part in parts %}
-            {% if part.percent >= 99.999999 %}<circle cx="60" cy="60" r="54" fill="{{ part.color }}"/>
-            {% else %}<path d="{{ part.path }}" fill="{{ part.color }}" stroke="#12212e" stroke-width="1.1"/>{% endif %}
-            {% endfor %}
-            <circle cx="60" cy="60" r="35" fill="#12212e"/>
-          </svg>
-          <div class="ring-label">
-            <strong class="ring-count">{{ fund.stocks | length }}</strong>
-            <span class="ring-unit">只计价股票</span>
-          </div>
+      </div>
+      <div class="ring">
+        <svg xmlns="http://www.w3.org/2000/svg" width="126" height="126" viewBox="0 0 120 120">
+          {% for part in parts %}
+          {% if part.percent >= 99.999999 %}<circle cx="60" cy="60" r="54" fill="{{ part.color }}"/>
+          {% else %}<path d="{{ part.path }}" fill="{{ part.color }}" stroke="{{ SURFACE }}" stroke-width="1.1"/>{% endif %}
+          {% endfor %}
+          <circle cx="60" cy="60" r="35" fill="{{ SURFACE }}"/>
+        </svg>
+        <div class="ring-label">
+          <strong class="ring-count">{{ fund.stocks | length }}</strong>
+          <span class="ring-unit">只计价股票</span>
         </div>
-        {% for part in parts %}
-        <div class="industry-row">
-          <span class="industry-label"><i class="swatch" style="background:{{ part.color }}"></i><span>{{ part.label }}</span></span>
-          <span class="industry-weight">{{ part.percent | pct }}</span>
-        </div>
-        {% endfor %}
+      </div>
+      {% for part in parts %}
+      <div class="industry-row">
+        <span class="industry-label"><i class="swatch" style="background:{{ part.color }}"></i><span>{{ part.label }}</span></span>
+        <span class="industry-weight">{{ part.percent | pct }}</span>
       </div>
       {% endfor %}
     </div>
-    <p class="note overlap">{{ overlap }}</p>
-  </section>
-  <footer class="caption">
-  {% for fund in funds %}<p>{{ fund.code }} 跟踪指数 · {{ fund.index_name or "暂无" }}</p>{% endfor %}
-  </footer>
-  {% endif %}
-  {% if warn %}<div class="warning" style="height:{{ warn_height }}px">{{ warn | safe }}</div>{% endif %}
-  <footer class="caption">{{ source }}</footer>
-</main>
-</body>
-</html>
+    {% endfor %}
+  </div>
+  <p class="overlap">{{ overlap }}</p>
+  {% for note in stale_notes %}<p class="stale-note">{{ note }}</p>{% endfor %}
+</section>
+<section class="panel ex-panel index-list">
+  {% for fund in funds %}<p class="index-item">{{ fund.code }} 跟踪指数 · {{ fund.index_name or "暂无" }}</p>{% endfor %}
+</section>
+{% endif %}
+{% if warn_lines %}
+<section class="panel ex-warn-panel">
+  <div class="ex-h2">本次未纳入的项目</div>
+  {% for line in warn_lines %}<div class="ex-note">{{ line }}</div>{% endfor %}
+</section>
+{% endif %}
+{% endblock %}

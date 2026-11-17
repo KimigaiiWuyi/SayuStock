@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import asyncio
 from typing import Literal
 from datetime import date
-from collections.abc import Sequence
+from dataclasses import replace
+from collections.abc import Callable, Sequence, Coroutine
 
-from ..enums import RankBy, BoardKind, IpoMarket, ValueKind, KlinePeriod
-from ..errors import MarketError, unsupported
+from ..enums import RankBy, BoardKind, IpoMarket, ValueKind, AssetClass, KlinePeriod
+from ..errors import MarketError, empty_error, unsupported, network_error
 from ..models import (
     Quote,
     IpoEvent,
@@ -81,6 +83,10 @@ class PartialMarketData:
     async def quotes(self, queries: Sequence[str]) -> list[Quote | MarketError]:
         return [await self.quote(q) for q in queries]
 
+    async def batch_quotes(self, symbols: Sequence[str]) -> dict[str, Quote] | MarketError:
+        _ = symbols
+        return unsupported("batch_quotes 未实现", provider=self.provider_name)
+
     async def intraday(self, query: str, *, ndays: int = 1) -> IntradaySeries | MarketError:
         _ = ndays
         return unsupported("intraday 未实现", provider=self.provider_name)
@@ -137,3 +143,56 @@ class PartialMarketData:
 
     async def ipo_calendar(self, market: IpoMarket | str) -> list[IpoEvent] | MarketError:
         return unsupported("ipo_calendar 未实现", provider=self.provider_name)
+
+
+async def run_quote_batches(
+    symbols: Sequence[str],
+    *,
+    batch_size: int = 60,
+    concurrency: int = 4,
+    batch_timeout: float = 4.0,
+    budget_seconds: float = 22.0,
+    provider: str,
+    fetch_batch: Callable[[list[str]], Coroutine[None, None, dict[str, str] | MarketError]],
+    parse_line: Callable[[str, SymbolRef], Quote | MarketError],
+) -> dict[str, Quote] | MarketError:
+    """并发分批拉取交易所符号（sh/sz+6位）盘口并解析；整批网络/超时失败时返回 MarketError 供源链顺延。"""
+    unique = tuple(dict.fromkeys(symbols))
+    if not unique:
+        return {}
+    batches = [list(unique[offset : offset + batch_size]) for offset in range(0, len(unique), batch_size)]
+    sem = asyncio.Semaphore(concurrency)
+
+    async def fetch_one(batch: list[str]) -> dict[str, str] | MarketError:
+        async with sem:
+            try:
+                async with asyncio.timeout(batch_timeout):
+                    return await fetch_batch(batch)
+            except TimeoutError:
+                return network_error("批量盘口请求超时", provider=provider)
+
+    try:
+        async with asyncio.timeout(budget_seconds):
+            responses = await asyncio.gather(*(fetch_one(batch) for batch in batches))
+    except TimeoutError:
+        return network_error("批量盘口超出总时限", provider=provider)
+
+    merged: dict[str, str] = {}
+    for resp in responses:
+        if isinstance(resp, MarketError):
+            return resp
+        merged.update(resp)
+
+    out: dict[str, Quote] = {}
+    for symbol in unique:
+        line = merged[symbol] if symbol in merged else ""
+        if not line:
+            continue
+        secid = ("1." if symbol.startswith("sh") else "0.") + symbol[2:]
+        ref = SymbolRef(symbol[2:], "", AssetClass.EQUITY, symbol[:2].upper(), secid)
+        parsed = parse_line(line, ref)
+        if isinstance(parsed, Quote):
+            out[symbol] = replace(parsed, provider=provider)
+    if not out:
+        return empty_error("批量盘口无有效报价", provider=provider)
+    return out

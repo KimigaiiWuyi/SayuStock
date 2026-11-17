@@ -156,6 +156,12 @@ class _StubPort:
     async def quotes(self, queries: Sequence[str]) -> list[Quote | MarketError]:
         return [await self.quote(q) for q in queries]
 
+    async def batch_quotes(self, symbols: Sequence[str]) -> dict[str, Quote] | MarketError:
+        err = self._err_or_none("batch_quotes")
+        if err is not None:
+            return err
+        return {sym: _make_quote(sym[2:], name=f"{self.tag}:batch", exchange=self.tag) for sym in symbols}
+
     async def intraday(self, query: str, *, ndays: int = 1) -> IntradaySeries | MarketError:
         _ = query, ndays
         return unsupported("intraday", provider=self.tag)
@@ -255,10 +261,10 @@ def _patch_registry(monkeypatch: pytest.MonkeyPatch, *, include_nasdaq: bool = F
     em_only = frozenset(
         {"hotmap", "breadth", "market_turnover", "northbound", "valuation_series", "financial_snapshot"}
     )
-    em = _StubPort("eastmoney")
+    em = _StubPort("eastmoney", unsupported_ifaces=frozenset({"batch_quotes"}))
     sina = _StubPort("sina", unsupported_ifaces=em_only)
     tencent = _StubPort("tencent", unsupported_ifaces=em_only | frozenset({"board", "rank_list"}))
-    ths = _StubPort("ths", unsupported_ifaces=em_only | frozenset({"board", "rank_list", "intraday"}))
+    ths = _StubPort("ths", unsupported_ifaces=em_only | frozenset({"board", "rank_list", "intraday", "batch_quotes"}))
     factories: dict[str, Callable[[], _StubPort]] = {
         "eastmoney": lambda: em,
         "sina": lambda: sina,
@@ -270,7 +276,9 @@ def _patch_registry(monkeypatch: pytest.MonkeyPatch, *, include_nasdaq: bool = F
         nasdaq = _StubPort(
             "nasdaq",
             unsupported_ifaces=em_only
-            | frozenset({"quote", "intraday", "kline", "board", "rank_list", "sector_menu", "ipo_cn", "ipo_hk"}),
+            | frozenset(
+                {"quote", "batch_quotes", "intraday", "kline", "board", "rank_list", "sector_menu", "ipo_cn", "ipo_hk"}
+            ),
         )
         factories["nasdaq"] = lambda: nasdaq
         stubs["nasdaq"] = nasdaq
@@ -429,6 +437,10 @@ def test_provider_routing_fallback_and_short_circuit(monkeypatch: pytest.MonkeyP
         assert not is_market_error(us_ipo) and us_ipo[0].code == "nasdaq"
         assert not is_market_error(cn_ipo) and cn_ipo[0].code == "eastmoney"
         assert is_market_error(unknown_ipo) and unknown_ipo.code == "unsupported"
+
+        stubs["tencent"].fail_ifaces = {"batch_quotes": "network"}
+        batch = await m_default.batch_quotes(["sh600519"])
+        assert isinstance(batch, dict) and batch["sh600519"].symbol.exchange == "sina"
 
     asyncio.run(_run())
 

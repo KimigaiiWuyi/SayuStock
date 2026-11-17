@@ -19,7 +19,7 @@ from .parse import (
     intraday_from_minute_bars,
     tencent_symbol_from_secid,
 )
-from .._base import PartialMarketData, resolve_em_symbol, resolve_em_symbol_safe
+from .._base import PartialMarketData, resolve_em_symbol, run_quote_batches, resolve_em_symbol_safe
 from .client import PROVIDER, fetch_minute, fetch_mkline, fetch_fqkline, fetch_qt_lines
 from ...enums import KlinePeriod
 from ...errors import MarketError, not_found, empty_error, unsupported, network_error
@@ -146,6 +146,14 @@ class TencentMarketData(PartialMarketData):
                     continue
                 results[i] = _parse_us_or_cn(line, qt_sym=qt_sym, symbol=sym_by_idx[i])
         return [r if r is not None else not_found(ErroText["notStock"], provider=PROVIDER) for r in results]
+
+    async def batch_quotes(self, symbols: Sequence[str]) -> dict[str, Quote] | MarketError:
+        return await run_quote_batches(
+            symbols,
+            provider=PROVIDER,
+            fetch_batch=fetch_qt_lines,
+            parse_line=lambda line, ref: parse_qt_line(line, symbol=ref, check_code=True),
+        )
 
     async def intraday(self, query: str, *, ndays: int = 1) -> IntradaySeries | MarketError:
         if ndays > 1:

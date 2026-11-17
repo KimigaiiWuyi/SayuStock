@@ -16,14 +16,14 @@ from .etf_compare import (
     SearchResult,
     load_baskets,
     resolve_target,
+    resolve_etf_code,
     expand_fund_theme,
     search_listed_funds,
+    latest_etf_trading_day,
 )
 from .draw_my_info import draw_my_stock_img
 from .draw_fund_info import draw_fund_info
 from .draw_etf_compare import draw_etf_search, draw_etf_comparison
-from ..utils.time_range import now_bjt
-from ..utils.market.adapters.etf_basket import is_etf_code, fund_quote_symbol
 
 sv_stock_info = SV("大盘概览")
 sv_my_stock = SV("我的自选")
@@ -58,7 +58,18 @@ def _recent_fund_search(ev: Event) -> SearchResult | None:
     return recent.result if recent is not None else None
 
 
-@sv_etf_compare.on_command(("场内找股", "ETF找股"), block=True)
+@sv_etf_compare.on_command(
+    ("场内找股", "ETF找股", "etf找股"),
+    block=True,
+    to_ai="""按目标股票反查持有它的场内 ETF，并按主题对比当日申赎篮子权重
+
+    当用户询问"哪些ETF持有贵州茅台"、"买什么ETF能买到工业富联"、"反查重仓宁德时代的ETF"时调用。
+    返回各主题 ETF 的目标股权重区间，之后可配合「ETF展开」对比具体主题。
+
+    Args:
+        text: 沪深 A 股名称或六位代码，例如 "工业富联"、"600519"、"贵州茅台"
+    """,
+)
 async def send_listed_fund_search(bot: Bot, ev: Event) -> None:
     """按目标股票查场内基金，展示当天申赎篮子的主题权重。"""
     query = ev.text.strip()
@@ -70,7 +81,7 @@ async def send_listed_fund_search(bot: Bot, ev: Event) -> None:
     if stock is None:
         await bot.send("未识别到沪深 A 股，请输入股票名称或六位代码。")
         return
-    result = await search_listed_funds(stock, now_bjt().date())
+    result = await search_listed_funds(stock, latest_etf_trading_day())
     if isinstance(result, str):
         await bot.send(result)
         return
@@ -85,37 +96,54 @@ async def send_listed_fund_search(bot: Bot, ev: Event) -> None:
     await bot.send(message)
 
 
-@sv_etf_compare.on_command(("ETF展开", "展开"), block=False)
+@sv_etf_compare.on_command(
+    ("ETF展开", "etf展开", "场内展开"),
+    block=True,
+    to_ai="""展开最近一次「ETF找股」结果中的指定主题，并排对比该主题下最多四只 ETF
+
+    在调用过「ETF找股」后，用户要求展开或对比其中某个主题（如"展开食品饮料主题"、"看看宽基ETF对比"）时调用。
+
+    Args:
+        text: 找股结果中的主题名，例如 "食品饮料"、"通信与5G"、"宽基"
+    """,
+)
 async def send_listed_fund_theme(bot: Bot, ev: Event) -> None:
     """对比当前成员最近一次找股结果中指定主题的 ETF。"""
-    explicit = ev.command == "ETF展开"
     theme = "".join(ev.text.split())
     if not theme:
-        if explicit:
-            await bot.send("用法：ETF展开 食品饮料")
+        await bot.send("用法：ETF展开 食品饮料")
         return
     search = _recent_fund_search(ev)
     if search is None:
-        if explicit:
-            await bot.send("请先发送「ETF找股 股票名称」，再展开结果里的主题。")
+        await bot.send("请先发送「ETF找股 股票名称」，再发送「ETF展开 主题名」。")
         return
-    result = await expand_fund_theme(search, theme, now_bjt().date())
+    result = await expand_fund_theme(search, theme, latest_etf_trading_day())
     if isinstance(result, str):
-        if explicit:
-            await bot.send(result)
+        await bot.send(result)
         return
     await bot.send(await draw_etf_comparison(result, f"{theme} ETF 申赎篮子对比", search.stock))
 
 
-@sv_etf_compare.on_command(("ETF对比", "etf对比"), block=True)
+@sv_etf_compare.on_command(
+    ("ETF对比", "etf对比", "场内对比"),
+    block=True,
+    to_ai="""并排对比两至四只沪深 A 股 ETF 的当日申赎篮子重点股权重与申万二级行业构成
+
+    当用户询问多只 ETF 的持仓对比、成分股重合度、行业权重分布（可指定一只关注股票）时调用。
+    支持输入 ETF 六位代码或简称（空格或逗号分隔），末尾可追加「关注 股票名」。
+
+    Args:
+        text: 两至四只 ETF 代码或简称，可选追加 "关注 股票名"，如 "515170 516900 159843 159862 关注 贵州茅台"
+    """,
+)
 async def send_etf_comparison(bot: Bot, ev: Event) -> None:
-    """按代码对比两至四只 ETF，可指定一只关注股票。"""
+    """按代码或名称对比两至四只 ETF，可指定一只关注股票。"""
     raw_codes, _, query = ev.text.partition("关注")
     codes: list[str] = []
-    for token in raw_codes.lower().replace(",", " ").replace("，", " ").split():
-        code = token[-6:]
-        if not is_etf_code(code) or token not in (code, fund_quote_symbol(code)):
-            await bot.send(f"「{token}」不是有效的沪深 ETF 代码，请检查代码和交易所前缀。")
+    for token in raw_codes.replace(",", " ").replace("，", " ").split():
+        code = await resolve_etf_code(token)
+        if code is None:
+            await bot.send(f"「{token}」不是有效的沪深 ETF 代码或名称，请检查后重试。")
             return
         if code not in codes:
             codes.append(code)
@@ -126,7 +154,7 @@ async def send_etf_comparison(bot: Bot, ev: Event) -> None:
     if query.strip() and stock is None:
         await bot.send("未识别到关注的沪深 A 股，请检查名称或代码。")
         return
-    result = await load_baskets(codes, day=now_bjt().date())
+    result = await load_baskets(codes, day=latest_etf_trading_day())
     await bot.send(await draw_etf_comparison(result, "ETF 申赎篮子对比", stock))
 
 

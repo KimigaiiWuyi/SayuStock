@@ -10,17 +10,15 @@ from time import monotonic
 from typing import TypeVar
 from datetime import date
 from collections import OrderedDict
-from dataclasses import replace, dataclass
+from dataclasses import dataclass
 from collections.abc import Callable, Sequence, Coroutine
 from xml.etree.ElementTree import Element, ParseError, fromstring
 
 from aiohttp import ClientError, ClientSession, ClientTimeout
 
-from ..enums import AssetClass
-from ..errors import MarketError
-from ..models import Quote, SymbolRef
-from .tencent.parse import parse_qt_line
-from .tencent.client import PROVIDER as QUOTE_PROVIDER, fetch_qt_lines
+from ..errors import is_market_error
+from ..models import Quote
+from ..registry import get_market
 
 HOLDER_PAGE_SIZE = 100
 
@@ -32,10 +30,6 @@ _HOLDER_LIMIT = asyncio.Semaphore(4)
 _PCF_LIMIT = asyncio.Semaphore(4)
 _PCF_CACHE_SIZE = 256
 _PCF_CACHE_TTL_SECONDS = 8 * 60 * 60
-_QUOTE_LIMIT = asyncio.Semaphore(4)
-_QUOTE_BATCH_SIZE = 60
-_QUOTE_BATCH_TIMEOUT = 4
-_QUOTE_BUDGET_SECONDS = 25
 _ETF_CODE = re.compile(r"(?:15|51|52|56|58)[0-9]{4}")
 _STOCK_CODE = re.compile(r"(?:00|30|60|68)[0-9]{4}")
 _CASH_MARKER = "159900"
@@ -73,7 +67,7 @@ _PCF_CACHE: OrderedDict[tuple[str, date], tuple[float, CreationBasket]] = Ordere
 _PCF_PENDING: dict[tuple[str, date], asyncio.Task[CreationBasket | str]] = {}
 _HOLDER_PENDING: dict[tuple[str, date, int], asyncio.Task[HolderPage | str]] = {}
 _INDEX_PENDING: dict[str, asyncio.Task[str]] = {}
-_QUOTE_PENDING: dict[tuple[str, ...], asyncio.Task[dict[str, Quote]]] = {}
+_QUOTE_PENDING: dict[tuple[str, ...], asyncio.Task[dict[str, Quote] | str]] = {}
 _RequestKey = TypeVar("_RequestKey")
 _RequestResult = TypeVar("_RequestResult")
 
@@ -308,36 +302,17 @@ def parse_tracked_index(html: str) -> str:
     return index
 
 
-async def fetch_batch_quotes(symbols: Sequence[str]) -> dict[str, Quote]:
-    """同时查询同一组代码时共用取价任务，每次新查询重新取价。"""
+async def fetch_batch_quotes(symbols: Sequence[str]) -> dict[str, Quote] | str:
+    """同时查询同一组代码时共用取价任务，经 MarketDataPort 按源链顺延取价。"""
     if not symbols:
         return {}
     unique = tuple(sorted(set(symbols)))
     prices = await _join_request(_QUOTE_PENDING, unique, lambda: _download_batch_quotes(unique))
-    return prices.copy()
+    return prices.copy() if isinstance(prices, dict) else prices
 
 
-async def _download_batch_quotes(symbols: tuple[str, ...]) -> dict[str, Quote]:
-    result: dict[str, Quote] = {}
-    try:
-        async with asyncio.timeout(_QUOTE_BUDGET_SECONDS):
-            for offset in range(0, len(symbols), _QUOTE_BATCH_SIZE):
-                batch = list(symbols[offset : offset + _QUOTE_BATCH_SIZE])
-                try:
-                    async with _QUOTE_LIMIT, asyncio.timeout(_QUOTE_BATCH_TIMEOUT):
-                        raw = await fetch_qt_lines(batch)
-                except TimeoutError:
-                    continue
-                if isinstance(raw, MarketError):
-                    continue
-                for symbol in batch:
-                    if symbol not in raw:
-                        continue
-                    secid = ("1." if symbol.startswith("sh") else "0.") + symbol[2:]
-                    ref = SymbolRef(symbol[2:], "", AssetClass.EQUITY, symbol[:2].upper(), secid)
-                    parsed = parse_qt_line(raw[symbol], symbol=ref, require_price=True)
-                    if isinstance(parsed, Quote):
-                        result[symbol] = replace(parsed, provider=QUOTE_PROVIDER)
-    except TimeoutError:
-        return result
+async def _download_batch_quotes(symbols: tuple[str, ...]) -> dict[str, Quote] | str:
+    result = await get_market().batch_quotes(symbols)
+    if is_market_error(result):
+        return result.message
     return result
