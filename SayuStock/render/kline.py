@@ -44,6 +44,13 @@ from ..utils.market.display import source_footer
 
 KLINE_WIDTH = 1600
 _, KLINE_RIGHT = plot_bounds(KLINE_WIDTH)
+PRICE_PANEL_HEIGHT = 1120
+PRICE_VOLUME_HEIGHT = 100
+PRICE_VOLUME_GAP = 90
+TURNOVER_PANEL_HEIGHT = 112
+RSI_PANEL_HEIGHT = 124
+KDJ_PANEL_HEIGHT = 112
+MACD_PANEL_HEIGHT = 142
 
 PERIOD_NAMES = {
     KlinePeriod.M5: "5分钟K线",
@@ -113,15 +120,15 @@ def _price_panel(
     close: pd.Series,
     volumes: list[float | None],
 ) -> Panel:
-    panel = Panel("价格 · OHLC / 成交量", 560, [])
+    panel = Panel("价格 · OHLC / 成交量", PRICE_PANEL_HEIGHT, [])
     opens = numbers(frame_column(frame, "open"))
     values = numbers(close)
     _, upper2, lower2 = ind.boll(close, 60, 2)
     _, upper3, lower3 = ind.boll(close, 60, 3)
     lo, hi = bounds([*lows, *highs, *numbers(lower3), *numbers(upper3)])
-    price_bottom = panel.bottom - 108
+    price_bottom = panel.bottom - PRICE_VOLUME_GAP
     scale = Scale(lo, hi, price_bottom, TOP)
-    panel.axis = [Tick(scale(value), f"{value:.2f}") for value in ticks(lo, hi, 6)]
+    panel.axis = [Tick(scale(value), f"{value:.2f}") for value in ticks(lo, hi, 10)]
     _band(panel, xs, scale, numbers(lower3), numbers(upper3), VIOLET)
     _band(panel, xs, scale, numbers(lower2), numbers(upper2), RED)
 
@@ -141,7 +148,7 @@ def _price_panel(
 
     max_volume = max((value for value in volumes if value is not None), default=0.0)
     if max_volume > 0:
-        vol_scale = Scale(0, max_volume * 1.08, panel.bottom, panel.bottom - 120)
+        vol_scale = Scale(0, max_volume * 1.08, panel.bottom, panel.bottom - PRICE_VOLUME_HEIGHT)
         panel.right_axis = [
             Tick(vol_scale(value), compact_number(value)) for value in (0.0, max_volume / 2, max_volume)
         ]
@@ -188,7 +195,7 @@ def _place_peak_mark(panel: Panel, x: float, y: float, label: str, color: str, *
 
 
 def _turnover_panel(xs: list[float], turn: list[float | None], cmf: list[float | None]) -> Panel:
-    panel = Panel("换手率（左） · CMF（右）", 145, [])
+    panel = Panel("换手率（左） · CMF（右）", TURNOVER_PANEL_HEIGHT, [])
     max_turnover = max((abs(value) for value in turn if value is not None), default=0)
     max_cmf = max((abs(value) for value in cmf if value is not None), default=0)
     turn_limit = max(max_turnover * 1.25, 0.01)
@@ -215,7 +222,7 @@ def _zones(panel: Panel, scale: Scale) -> None:
 
 
 def _rsi_panel(xs: list[float], close: pd.Series) -> Panel:
-    panel = Panel("RSI · 20 / 80", 155, [])
+    panel = Panel("RSI · 20 / 80", RSI_PANEL_HEIGHT, [])
     scale = panel_scale(panel, 0, 100, lambda value: f"{value:g}", count=4)
     _zones(panel, scale)
     panel.callouts.extend(
@@ -230,7 +237,7 @@ def _rsi_panel(xs: list[float], close: pd.Series) -> Panel:
 
 
 def _kdj_panel(xs: list[float], high: pd.Series, low: pd.Series, close: pd.Series) -> Panel:
-    panel = Panel("KDJ · 9 / 3 / 3", 145, [])
+    panel = Panel("KDJ · 9 / 3 / 3", KDJ_PANEL_HEIGHT, [])
     k, d, j = [numbers(values) for values in ind.kdj(high, low, close)]
     ymin, ymax = bounds([0, 100, *k, *d, *j], minimum=4)
     scale = panel_scale(panel, ymin, ymax, lambda value: f"{value:g}", count=4)
@@ -248,10 +255,10 @@ def _kdj_panel(xs: list[float], high: pd.Series, low: pd.Series, close: pd.Serie
 
 
 def _macd_panel(xs: list[float], close: pd.Series, dates: list[datetime], *, intraday: bool) -> Panel:
-    panel = Panel("MACD · 12 / 26 / 9", 175, [], date_ticks(dates, xs, intraday=intraday))
+    panel = Panel("MACD · 12 / 26 / 9", MACD_PANEL_HEIGHT, [], date_ticks(dates, xs, intraday=intraday))
     dif, dea, histogram = [numbers(values) for values in ind.macd(close)]
     lo, hi = bounds(list(chain([0.0], dif, dea, histogram)))
-    scale = panel_scale(panel, lo, hi, lambda value: f"{value:g}", count=3)
+    scale = panel_scale(panel, lo, hi, lambda value: f"{value:g}", count=4)
     baseline = scale(0)
     width = bar_width(len(xs), KLINE_RIGHT - LEFT, 0.76)
     panel.rules.append(Rule(LEFT, baseline, KLINE_RIGHT, baseline, FLAT))

@@ -395,7 +395,13 @@ def test_chart_and_card_gallery_render_with_evidence() -> None:
         for name, page in charts.items():
             assert not isinstance(page, str), page
             assert "数据来源" in page_html(page)
-            _save_evidence("charts", name, await render_chart(page))
+            payload = await render_chart(page)
+            _save_evidence("charts", name, payload)
+            if name == "05-kline":
+                assert isinstance(payload, bytes)
+                _, img_h = struct.unpack(">II", payload[16:24])
+                assert page.panels[0].height > sum(p.height for p in page.panels[1:])
+                assert page.panels[0].height * 1.5 / img_h >= 0.5
 
         snap = _board(BoardKind.INDUSTRY)
         dense_snap = BoardSnapshot(
