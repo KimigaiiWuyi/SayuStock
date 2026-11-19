@@ -29,6 +29,7 @@ BOOK_WRITE_TOOLS: tuple[str, ...] = (
     "papertrade_decision_insert",
     "papertrade_trade_insert",
     "papertrade_position_upsert",
+    "papertrade_position_plan_update",
     "papertrade_match_order",
     "papertrade_candidate_refresh",
 )

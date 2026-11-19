@@ -19,7 +19,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from gsuid_core.utils.database.base_models import with_session
 
 from .matcher import apply_fill_qty_cost, cash_delta_for_fill
-from .strategy import _as_finite_float, parse_llm_json_object, normalize_plan_indicators
+from .strategy import resolve_plan_prices, parse_llm_json_object
 from ..utils.database.papertrade_models import (
     DEFAULT_STRATEGY_ID,
     DEFAULT_ACCOUNT_NAME,
@@ -524,6 +524,71 @@ class PaperPositionRepo:
         await session.flush()
         return _rowcount(result)
 
+    @classmethod
+    @with_session
+    async def update_plan(
+        cls,
+        session: AsyncSession,
+        account_id: int,
+        stock_code: str,
+        *,
+        plan_stop_price: Optional[float] = None,
+        plan_stop_pct: Optional[float] = None,
+        clear_stop_pct: bool = False,
+        plan_take_price: Optional[float] = None,
+        plan_thesis: Optional[str] = None,
+        updated_at: Optional[datetime] = None,
+        increment_rev: bool = True,
+        audit_reason: str = "",
+        audit_indicators: str = "",
+    ) -> tuple[Optional[SayuPaperPosition], int]:
+        """原子更新已有持仓的止损/止盈计划，并同事务写入决策审计记录。"""
+        stmt = select(SayuPaperPosition).where(
+            and_(
+                col(SayuPaperPosition.account_id) == account_id,
+                col(SayuPaperPosition.stock_code) == stock_code,
+                col(SayuPaperPosition.qty) > 0,
+            )
+        )
+        pos: Optional[SayuPaperPosition] = (await session.execute(stmt)).scalars().first()
+        if pos is None:
+            return None, 0
+
+        now = updated_at or datetime.now()
+        if plan_stop_price is not None:
+            pos.plan_stop_price = plan_stop_price
+        if clear_stop_pct:
+            pos.plan_stop_pct = None
+        elif plan_stop_pct is not None:
+            pos.plan_stop_pct = plan_stop_pct
+        if plan_take_price is not None:
+            pos.plan_take_price = plan_take_price
+        if plan_thesis is not None:
+            pos.plan_thesis = plan_thesis
+        pos.plan_updated_at = now
+        if increment_rev:
+            pos.plan_rev_count = int(pos.plan_rev_count or 0) + 1
+        pos.updated_at = now
+        session.add(pos)
+
+        decision = SayuPaperDecision(
+            account_id=account_id,
+            group_id=pos.group_id,
+            bot_id=pos.bot_id,
+            action="hold",
+            stock_code=pos.stock_code,
+            stock_name=pos.stock_name,
+            score=0.0,
+            reason=audit_reason,
+            indicators=audit_indicators,
+            trade_id=None,
+            blocked_by="",
+            created_at=now,
+        )
+        session.add(decision)
+        await session.flush()
+        return pos, int(decision.id or 0)
+
 
 # ============================================================
 # Trade Repo（append-only）
@@ -693,12 +758,8 @@ class PaperTradeRepo:
         tp: float | None = None
         th: str | None = None
         if side == "buy" and snapshot:
-            parsed_plan = normalize_plan_indicators(parse_llm_json_object(snapshot))
-            sp = _as_finite_float(parsed_plan.get("plan_stop_price"))
-            spct = _as_finite_float(parsed_plan.get("plan_stop_pct"))
-            tp = _as_finite_float(parsed_plan.get("plan_take_price"))
-            raw_th = str(parsed_plan.get("plan_thesis") or "").strip()
-            th = raw_th if raw_th else None
+            entry_ref = new_avg if new_avg > 0 else price
+            sp, spct, tp, th = resolve_plan_prices(parse_llm_json_object(snapshot), entry_price=entry_ref)
 
         if new_qty <= 0:
             if existing is not None:
@@ -722,12 +783,16 @@ class PaperTradeRepo:
             existing.updated_at = now
             if sp is not None:
                 existing.plan_stop_price = sp
+                if spct is None and new_avg > 0 and sp >= new_avg:
+                    existing.plan_stop_pct = None
             if spct is not None:
                 existing.plan_stop_pct = spct
             if tp is not None:
                 existing.plan_take_price = tp
             if th is not None:
                 existing.plan_thesis = th
+            if sp is not None or spct is not None or tp is not None or th is not None:
+                existing.plan_updated_at = now
             session.add(existing)
         else:
             session.add(

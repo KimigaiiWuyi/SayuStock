@@ -1,0 +1,12 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python -m py_compile SayuStock/stock_sina/eastmoney_value.py)",
+      "Read(//e/MyPyProject/gsuid_core/**)",
+      "Bash(PYTHONPATH=E:/MyPyProject/gsuid_core python -c ' *)",
+      "Bash(python -c ' *)",
+      "Skill(code-review)",
+      "Bash(python -c \"import httpx; print\\('httpx ok'\\)\")"
+    ]
+  }
+}

@@ -10,7 +10,11 @@ from typing import Any, Mapping
 
 from .base import Strategy, GateInput, ParamSpec, PoolPreference
 from .tools import MULTIFACTOR_RESEARCH_TOOLS
-from ..strategy import macro_gate_reason, indicators_have_entry_stop
+from ..strategy import (
+    macro_gate_reason,
+    indicators_have_entry_stop,
+    indicators_have_entry_take,
+)
 from ...stock_macro.prompts import MACRO_POSITION_RULES
 
 __all__ = ["MultiFactorStrategy"]
@@ -48,7 +52,8 @@ class MultiFactorStrategy(Strategy):
             "- 五维评分：宏观/事件≈30% / 技术≈35% / 基本面≈25% / 波动率调节 ±10%。\n"
             f"- buy 建议 score ≥ {min_score:.2f}；不足则 hold 并在 reason 写清差在哪一维。\n"
             "- buy 的 snapshot/indicators JSON 顶层**必须**同时写：plan_stop_pct(<0) 或 "
-            "plan_stop_price(>0)；macro_regime（进攻/中性/防御）；macro_note（≥8 字宏观依据）。"
+            "plan_stop_price(>0)；plan_take_price(>0) 或 plan_take_pct(>0)；"
+            "macro_regime（进攻/中性/防御）；macro_note（≥8 字宏观依据）。"
             "缺任一项拒绝落库。请先调 stock_indicators 与 macro_event_list。\n"
             "- 表内有 severity≥4 的 risk_off 进行中事件时，buy 不得标 macro_regime=进攻。\n"
             "- reason 开头固定写「宏观:{档位}|{相}|{一句依据}」。\n"
@@ -90,5 +95,10 @@ class MultiFactorStrategy(Strategy):
             return (
                 "⚠️ buy 须在 indicators/snapshot JSON 写入 plan_stop_pct(<0) 或 "
                 "plan_stop_price(>0)（可解析数值止损）；已拒绝落库，请补全后重试"
+            )
+        if not indicators_have_entry_take(ind):
+            return (
+                "⚠️ buy 须同时在 indicators/snapshot JSON 写入止盈计划 plan_take_price(>0) 或 "
+                "plan_take_pct(>0)（如 0.10）；已拒绝落库，请补全后重试"
             )
         return macro_gate_reason(ind)

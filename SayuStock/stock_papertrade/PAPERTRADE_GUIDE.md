@@ -198,11 +198,11 @@ SayuStock 插件里的"模拟盘"长期能力：
   「宏观:{档位}|{相}|{依据}」。
 
 **仅子代理可见**（category="default" + visible_when）：
-- 写操作：`papertrade_decision_insert`（写决策日志）/ `papertrade_trade_insert`（写流水 + 改现金 + **随成交原子改持仓** + 累计 principal）/ `papertrade_position_upsert`（**只刷新已有持仓报价**，不能建仓/改股数）/ `papertrade_match_order`（撮合计算 fee，不写库）
+- 写操作：`papertrade_decision_insert`（写决策日志）/ `papertrade_trade_insert`（写流水 + 改现金 + **随成交原子改持仓** + 累计 principal）/ `papertrade_position_upsert`（**只刷新已有持仓报价**，不能建仓/改股数）/ `papertrade_position_plan_update`（**补齐老仓缺失止损止盈，或极低频单向上移追踪止损/收紧止盈**，受跨日冷却、方向与 ≥2% 台阶硬闸约束，自动写决策审计）/ `papertrade_match_order`（撮合计算 fee，不写库）
 
 ⚠️ **策略硬闸（2026-08-12 加）**：`papertrade_decision_insert` / `papertrade_trade_insert`
-的 buy 会先过**该盘策略的 `gate_buy`**：缺入场价/止损价、评分不够、止损太宽、
-量比/换手率不满足……**一律拒绝落库**并返回具体原因。收到拒绝就按原因补数据或改 hold，
+的 buy 会先过**该盘策略的 `gate_buy`**：缺止损（多因子盘同时须带止盈 `plan_take_price` 或 `plan_take_pct`）、
+量比/分位不满足……**一律拒绝落库**并返回具体原因。收到拒绝就按原因补数据或改 hold，
 **不要**换个说法重试同一笔——闸是按数值判的，不看措辞。
 
 ⚠️ **宏观硬闸（2026-09 加，多因子盘）**：buy 的快照 JSON 顶层还必须有 `macro_regime`

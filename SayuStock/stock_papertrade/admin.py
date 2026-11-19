@@ -927,7 +927,8 @@ async def send_dry_run(bot: Bot, ev: Event) -> list[str] | None:
             f"          side='buy', price=<price>, qty=<actual_qty from match>,\n"
             f"          amount=<amount from match>, fee=<fee_total from match>,\n"
             f"          realized_pnl=0.0, reason='DRY_RUN ③ 强制 buy',\n"
-            f"          snapshot='{{\"plan_stop_pct\":-0.08}}',\n"
+            f'          snapshot=\'{{"plan_stop_pct":-0.08,"plan_take_pct":0.12,'
+            f'"macro_regime":"中性","macro_note":"DRY_RUN压测固定中性档验证买入链路"}}\',\n'
             f"          decision_id=0, mode='balanced'\n"
             f"        ) → 拿 trade_id（持仓已随成交写入，不要再 position_upsert 改股数）\n"
             f"Step 6: papertrade_decision_insert(\n"
@@ -1006,7 +1007,8 @@ async def send_dry_run(bot: Bot, ev: Event) -> list[str] | None:
             f"{_ACC_HINT}\n"
             f"\n"
             f"⚠️ 【DRY_RUN 强制 HOLD】 — 必须 action='hold'。\n"
-            f"**禁止调用 papertrade_match_order / papertrade_trade_insert / papertrade_position_upsert**。\n"
+            f"**禁止调用 papertrade_match_order / papertrade_trade_insert / "
+            f"papertrade_position_upsert / papertrade_position_plan_update**。\n"
             f"本段的全部副作用：**仅 1 条 papertrade_decision_insert(action='hold')**。\n"
             f"\n"
             f"Step 1: papertrade_account_query → 拿 cash\n"

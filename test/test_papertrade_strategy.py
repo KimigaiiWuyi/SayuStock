@@ -9,7 +9,7 @@ import inspect
 import textwrap
 from typing import Tuple, Callable, Awaitable
 from pathlib import Path
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from unittest.mock import AsyncMock, patch
 
 import pandas as pd
@@ -41,10 +41,12 @@ from SayuStock.stock_papertrade.strategy import (
     score_stock,
     decide_action,
     apply_risk_check,
+    resolve_plan_prices,
     tech_from_indicators,
     parse_llm_json_object,
     normalize_plan_indicators,
     indicators_have_entry_stop,
+    indicators_have_entry_take,
 )
 from SayuStock.stock_papertrade.strategies.base import GateInput
 from SayuStock.utils.database.papertrade_models import SayuPaperAccount, SayuPaperPosition
@@ -134,16 +136,23 @@ def test_strategies_registry_params_and_volume_location() -> None:
 
 
 def test_strategy_entry_gates() -> None:
-    """多因子止损与宏观三档硬闸、重磅风险拦截，以及量能extremum结构硬闸。"""
+    """多因子止损/止盈与宏观三档硬闸、重磅风险拦截，以及量能extremum结构硬闸。"""
     macro_ok: dict[str, object] = {"macro_regime": "中性", "macro_note": "油价回落但关税战仍在进行"}
-    assert _gate("multi_factor", {"plan_stop_pct": -0.08, **macro_ok}, score=0.01) == ""
-    assert _gate("multi_factor", {"stop_price": 780.15, **macro_ok}, score=0.01) == ""
-    assert "plan_stop" in _gate("multi_factor", {"roe": 1.0, **macro_ok})
-    no_regime = _gate("multi_factor", {"plan_stop_pct": -0.08})
+    take_ok: dict[str, object] = {"plan_take_pct": 0.10}
+    assert _gate("multi_factor", {"plan_stop_pct": -0.08, **take_ok, **macro_ok}, score=0.01) == ""
+    assert _gate("multi_factor", {"stop_price": 780.15, "plan_take_price": 920.0, **macro_ok}, score=0.01) == ""
+    assert "plan_stop" in _gate("multi_factor", {"roe": 1.0, **take_ok, **macro_ok})
+    assert "plan_take" in _gate("multi_factor", {"plan_stop_pct": -0.08, **macro_ok})
+    no_regime = _gate("multi_factor", {"plan_stop_pct": -0.08, **take_ok})
     assert "macro_regime" in no_regime and "macro_event_list" in no_regime
-    assert "macro_note" in _gate("multi_factor", {"plan_stop_pct": -0.08, "macro_regime": "进攻", "macro_note": "涨"})
+    assert "macro_note" in _gate(
+        "multi_factor", {"plan_stop_pct": -0.08, **take_ok, "macro_regime": "进攻", "macro_note": "涨"}
+    )
     assert (
-        _gate("multi_factor", {"plan_stop_pct": -0.08, "macro_regime": "risk_off", "macro_note": "油价冲高美债飙升"})
+        _gate(
+            "multi_factor",
+            {"plan_stop_pct": -0.08, **take_ok, "macro_regime": "risk_off", "macro_note": "油价冲高美债飙升"},
+        )
         == ""
     )
     assert _gate("multi_factor", {"rsi": 90}, side="sell") == ""
@@ -152,6 +161,7 @@ def test_strategy_entry_gates() -> None:
         MACRO_SEVERE_FLAG_KEY: True,
         MACRO_SEVERE_TITLES_KEY: "中美关税战(sev4)",
         "plan_stop_pct": -0.08,
+        "plan_take_pct": 0.12,
         "macro_note": "关税战进行中但个股超跌",
     }
     rejected = _gate("multi_factor", {**severe, "macro_regime": "进攻"})
@@ -255,11 +265,17 @@ def test_strategy_scoring_decision_and_risk() -> None:
     )
     assert blocked_reentry.action == "hold" and blocked_reentry.blocked_by == "reentry_limit"
 
-    parsed = parse_llm_json_object('{"indicators": {"stop_pct": -0.05}}')
+    parsed = parse_llm_json_object('{"indicators": {"stop_pct": -5.0, "take_pct": 10.0}}')
     flat = normalize_plan_indicators(parsed)
-    assert flat["plan_stop_pct"] == -0.05
+    assert flat["plan_stop_pct"] == -0.05 and flat["plan_take_pct"] == 0.1
     assert indicators_have_entry_stop(parsed) is True
+    assert indicators_have_entry_take(parsed) is True
     assert indicators_have_entry_stop({"plan_stop_pct": 0.05}) is False
+    assert indicators_have_entry_take({"plan_take_pct": -0.05}) is False
+    assert indicators_have_entry_take({"plan_take_pct": 500.0}) is True
+    assert indicators_have_entry_take({"plan_take_pct": 501.0}) is False
+    sp, spct, tp, _ = resolve_plan_prices(parsed, entry_price=50.0)
+    assert sp == 47.5 and spct == -0.05 and tp == 55.0
 
 
 def test_candidate_pool_merge_dedup_priority() -> None:
@@ -505,7 +521,14 @@ def test_plan_persistence_and_atomic_write(tmp_path: Path) -> None:
     """入场计划字段定义、长决策理由不截断、trade_insert 透传 snapshot、原子写持仓计划。"""
     import gsuid_core.utils.database.base_models as base_models
 
-    for col in ("plan_stop_price", "plan_stop_pct", "plan_take_price", "plan_thesis"):
+    for col in (
+        "plan_stop_price",
+        "plan_stop_pct",
+        "plan_take_price",
+        "plan_thesis",
+        "plan_updated_at",
+        "plan_rev_count",
+    ):
         assert col in SayuPaperPosition.model_fields
 
     long_reason = "完整决策逻辑。" + "量化推理与宏观分析，" * 20
@@ -572,9 +595,9 @@ def test_plan_persistence_and_atomic_write(tmp_path: Path) -> None:
     engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path.as_posix()}/pt_plan.db")
     maker = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
 
-    async def _atomic() -> object:
+    async def _atomic() -> tuple[object, object, object]:
         ddl = str(CreateTable(SayuPaperAccount.__table__).compile(dialect=sqlite.dialect()))
-        for t in ("sayupaperposition", "sayupapertrade"):
+        for t in ("sayupaperposition", "sayupapertrade", "sayupaperdecision"):
             ddl += ";" + str(CreateTable(SayuPaperAccount.metadata.tables[t]).compile(dialect=sqlite.dialect()))
         async with engine.begin() as conn:
             for stmt in ddl.split(";"):
@@ -596,9 +619,8 @@ def test_plan_persistence_and_atomic_write(tmp_path: Path) -> None:
                 acc_id = int(acc.id or 0)
             snap = json.dumps(
                 {
-                    "plan_stop_price": 83.36,
-                    "plan_stop_pct": -0.055,
-                    "plan_take_price": 98.0,
+                    "plan_stop_pct": -5.0,
+                    "plan_take_pct": 10.0,
                     "plan_thesis": "白电龙头底仓",
                 },
                 ensure_ascii=False,
@@ -616,7 +638,7 @@ def test_plan_persistence_and_atomic_write(tmp_path: Path) -> None:
                 snapshot=snap,
             )
             async with maker() as s:
-                return (
+                row_buy = (
                     await s.execute(
                         text(
                             "SELECT plan_stop_price, plan_stop_pct, plan_take_price, plan_thesis "
@@ -625,12 +647,190 @@ def test_plan_persistence_and_atomic_write(tmp_path: Path) -> None:
                         {"a": acc_id},
                     )
                 ).first()
+            pos_updated, audit_id = await db.PaperPositionRepo.update_plan(
+                acc_id,
+                "000333",
+                plan_stop_price=90.0,
+                clear_stop_pct=True,
+                plan_take_price=105.0,
+                increment_rev=True,
+                audit_reason="[计划修订:trail_stop] 浮盈超10%，止损上移保本锁定利润",
+                audit_indicators='{"plan_revision":{"type":"trail_stop"}}',
+            )
+            async with maker() as s:
+                row_rev = (
+                    await s.execute(
+                        text(
+                            "SELECT plan_stop_price, plan_stop_pct, plan_take_price, plan_rev_count, plan_updated_at "
+                            "FROM sayupaperposition WHERE account_id = :a"
+                        ),
+                        {"a": acc_id},
+                    )
+                ).first()
+                row_audit = (
+                    await s.execute(
+                        text("SELECT id, action, reason FROM sayupaperdecision WHERE id = :did"),
+                        {"did": audit_id},
+                    )
+                ).first()
+            assert pos_updated is not None and audit_id > 0
+            return row_buy, row_rev, row_audit
         finally:
             base_models.async_maker = orig_maker
             await engine.dispose()
 
-    pos_row = asyncio.run(_atomic())
-    assert pos_row is not None and pos_row[3] == "白电龙头底仓" and abs(float(pos_row[0]) - 83.36) < 0.001
+    pos_row, rev_row, audit_row = asyncio.run(_atomic())
+    assert pos_row is not None and pos_row[3] == "白电龙头底仓"
+    assert abs(float(pos_row[1]) + 0.05) < 1e-4 and abs(float(pos_row[2]) - 88.22 * 1.1) < 0.02
+    assert rev_row is not None and abs(float(rev_row[0]) - 90.0) < 0.001 and rev_row[1] is None and int(rev_row[3]) == 1
+    assert audit_row is not None and audit_row[1] == "hold" and "trail_stop" in str(audit_row[2])
+
+    # 计划修订硬闸：backfill 豁免冷却 / 禁覆盖已有 / 跨日冷却 / 禁放宽止损 / 2%台阶 / 临近止盈禁上调
+    now = datetime(2026, 11, 19, 14, 30)
+    old_pos = SayuPaperPosition(
+        account_id=1,
+        stock_code="600900",
+        stock_name="长江电力",
+        qty=1000,
+        avg_cost=28.0,
+        opened_at=now - timedelta(hours=1),
+        plan_stop_price=None,
+        plan_stop_pct=None,
+        plan_take_price=None,
+    )
+    ok_err, ok_payload = ai_tools._validate_plan_update(
+        old_pos,
+        mode="balanced",
+        current_price=30.8,
+        revision_type="backfill",
+        reason="老仓建仓未写止盈止损，现补齐结构化防守与压力位止盈",
+        plan_stop_price=28.0,
+        plan_take_price=33.5,
+        now=now,
+    )
+    assert ok_err == "" and ok_payload["increment_rev"] is False
+
+    planned = SayuPaperPosition(
+        account_id=1,
+        stock_code="601988",
+        stock_name="中国银行",
+        qty=2000,
+        avg_cost=6.91,
+        opened_at=now - timedelta(days=5),
+        plan_stop_price=6.50,
+        plan_stop_pct=-0.06,
+        plan_take_price=7.46,
+        plan_updated_at=now - timedelta(hours=2),
+    )
+    err_bf, _ = ai_tools._validate_plan_update(
+        planned,
+        mode="balanced",
+        current_price=7.30,
+        revision_type="backfill",
+        reason="尝试用backfill覆盖已有计划应该被硬闸直接拒绝",
+        plan_take_price=7.80,
+        now=now,
+    )
+    assert "已有止盈计划" in err_bf
+    err_cd, _ = ai_tools._validate_plan_update(
+        planned,
+        mode="balanced",
+        current_price=7.30,
+        revision_type="trail_stop",
+        reason="刚改过又来上移止损应该触发跨日冷却硬闸拦截",
+        plan_stop_price=6.91,
+        now=now,
+    )
+    assert "冷却中" in err_cd
+
+    cooled = SayuPaperPosition(
+        account_id=1,
+        stock_code="601988",
+        stock_name="中国银行",
+        qty=2000,
+        avg_cost=6.91,
+        opened_at=now - timedelta(days=5),
+        plan_stop_price=6.50,
+        plan_stop_pct=-0.06,
+        plan_take_price=7.46,
+        plan_updated_at=now - timedelta(days=2),
+    )
+    err_widen, _ = ai_tools._validate_plan_update(
+        cooled,
+        mode="balanced",
+        current_price=7.20,
+        revision_type="trail_stop",
+        reason="下跌后企图把止损往下挪动放宽应该被硬闸拒绝",
+        plan_stop_price=6.40,
+        now=now,
+    )
+    assert "严禁放宽止损" in err_widen
+    err_step, _ = ai_tools._validate_plan_update(
+        cooled,
+        mode="balanced",
+        current_price=7.20,
+        revision_type="trail_stop",
+        reason="止损仅微调不到百分之一应该被最小台阶门槛拦截",
+        plan_stop_price=6.55,
+        now=now,
+    )
+    assert "变动过小" in err_step
+    err_near, _ = ai_tools._validate_plan_update(
+        cooled,
+        mode="balanced",
+        current_price=7.38,
+        revision_type="take_adjust",
+        reason="距离原止盈不足2%临门抬高止盈逃避落袋应该拒绝",
+        plan_take_price=8.00,
+        now=now,
+    )
+    assert "临门抬高止盈" in err_near
+    err_macro_up, _ = ai_tools._validate_plan_update(
+        cooled,
+        mode="balanced",
+        current_price=7.10,
+        revision_type="macro_tighten",
+        reason="宏观收紧模式下不得反而上调止盈目标应该被拒绝",
+        plan_take_price=8.00,
+        now=now,
+    )
+    assert "不得上调止盈价" in err_macro_up
+    err_macro_empty, _ = ai_tools._validate_plan_update(
+        cooled,
+        mode="balanced",
+        current_price=7.10,
+        revision_type="macro_tighten",
+        reason="宏观收紧却只改逻辑文本不收紧任何止损止盈应该被拒绝",
+        plan_thesis="仅改文字不收紧价格",
+        now=now,
+    )
+    assert "不能只改 plan_thesis" in err_macro_empty
+    err_same_stop, same_payload = ai_tools._validate_plan_update(
+        cooled,
+        mode="balanced",
+        current_price=7.10,
+        revision_type="take_adjust",
+        reason="重传未变更的原止损价6.50同时调整止盈价应视为未改止损并放行",
+        plan_stop_price=6.50,
+        plan_take_price=8.20,
+        now=now,
+    )
+    assert err_same_stop == "" and same_payload["plan_stop_price"] is None and same_payload["plan_take_price"] == 8.2
+    err_trail_ok, trail_payload = ai_tools._validate_plan_update(
+        cooled,
+        mode="balanced",
+        current_price=7.30,
+        revision_type="trail_stop",
+        reason="浮盈接近6%且跨日冷却已满，将止损上移至成本保本位",
+        plan_stop_price=6.91,
+        now=now,
+    )
+    assert (
+        err_trail_ok == ""
+        and trail_payload["plan_stop_pct"] is None
+        and trail_payload["clear_stop_pct"] is True
+        and trail_payload["increment_rev"] is True
+    )
 
 
 def test_v2_migration_and_orphan_ledger_heal(tmp_path: Path) -> None:
@@ -799,7 +999,8 @@ def test_v2_migration_and_orphan_ledger_heal(tmp_path: Path) -> None:
                 {"a": acc},
             )
             snap_midea = json.dumps(
-                {"plan_stop_price": 83.36, "plan_stop_pct": -0.055, "plan_thesis": "白电蓝筹"}, ensure_ascii=False
+                {"plan_stop_price": 83.36, "plan_stop_pct": -5.5, "plan_take_pct": 10.0, "plan_thesis": "白电蓝筹"},
+                ensure_ascii=False,
             )
             ind_moutai = json.dumps(
                 {"plan_stop_price": 1480.0, "plan_stop_pct": -0.075, "plan_thesis": "白酒龙头"}, ensure_ascii=False
@@ -844,13 +1045,22 @@ def test_v2_migration_and_orphan_ledger_heal(tmp_path: Path) -> None:
                 for r in (await s.execute(text("SELECT stock_code FROM sayupaperposition ORDER BY stock_code"))).all()
             ]
             assert codes == ["000333", "600519"]
-            midea_stop = (
-                await s.execute(text("SELECT plan_stop_price FROM sayupaperposition WHERE stock_code = '000333'"))
-            ).scalar()
+            midea_plan = (
+                await s.execute(
+                    text(
+                        "SELECT plan_stop_price, plan_stop_pct, plan_take_price "
+                        "FROM sayupaperposition WHERE stock_code = '000333'"
+                    )
+                )
+            ).first()
             moutai_stop = (
                 await s.execute(text("SELECT plan_stop_price FROM sayupaperposition WHERE stock_code = '600519'"))
             ).scalar()
-            assert abs(float(midea_stop) - 83.36) < 0.001 and abs(float(moutai_stop) - 1480.0) < 0.001
+            assert midea_plan is not None
+            assert abs(float(midea_plan[0]) - 83.36) < 0.001
+            assert abs(float(midea_plan[1]) + 0.055) < 1e-4
+            assert abs(float(midea_plan[2]) - 88.21 * 1.1) < 0.01
+            assert abs(float(moutai_stop) - 1480.0) < 0.001
 
     asyncio.run(_run_on_db("v2", _test_v2))
     asyncio.run(_run_on_db("heal", _test_heal))

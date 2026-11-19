@@ -1,14 +1,14 @@
 """模拟盘 ai_tools 集合。
 
-16 个 ai_tools，分三类（**没有重叠**，每个工具只做一件事）：
+17 个 ai_tools，分三类（**没有重叠**，每个工具只做一件事）：
 - 业务/账本（**7 个只读**，capability_domain="AI模拟盘"，category="common"）
   —— 主 persona + 能力代理都能用
   —— 含 ``papertrade_account_list``：多盘时先看有哪些盘，再拿盘名查明细
   —— 含 ``papertrade_holdings_image``：仿「我的自选」的持仓简图（含今日涨跌+持仓浮盈）
-- 能力代理私有（**6 个写**，capability_domain="AI模拟盘"，category="default" + visible_when）
+- 能力代理私有（**7 个写**，capability_domain="AI模拟盘"，category="default" + visible_when）
   —— 仅 papertrade_*_agent 可见；防止主 persona 误调写操作
-  —— decision_insert / trade_insert / position_upsert / candidate_refresh /
-     match_order / snapshot_write
+  —— decision_insert / trade_insert / position_upsert / position_plan_update /
+     candidate_refresh / match_order / snapshot_write
 - 通用辅助（3 个，capability_domain="AI模拟盘"，category="common"）
   —— 财报 / 指标 / 交易日判断
 
@@ -41,8 +41,10 @@ from gsuid_core.ai_core.planning.runtime import PlanRunContext, get_plan_context
 
 from . import db, broadcast, strategies, account_scope
 from .strategy import (
+    MODE_RULES,
     MACRO_SEVERE_FLAG_KEY,
     MACRO_SEVERE_TITLES_KEY,
+    normalize_stop_pct,
     parse_llm_json_object,
     normalize_plan_indicators,
 )
@@ -135,6 +137,8 @@ class _PositionItem(TypedDict):
     plan_stop_pct: float | None
     plan_take_price: float | None
     plan_thesis: str | None
+    plan_updated_at: str | None
+    plan_rev_count: int
 
 
 class _TradeItem(TypedDict):
@@ -657,6 +661,8 @@ async def papertrade_position_list(
                 "plan_stop_pct": p.plan_stop_pct,
                 "plan_take_price": p.plan_take_price,
                 "plan_thesis": p.plan_thesis,
+                "plan_updated_at": p.plan_updated_at.isoformat() if p.plan_updated_at else None,
+                "plan_rev_count": int(p.plan_rev_count or 0),
             }
         )
     return json.dumps(items, ensure_ascii=False)
@@ -952,7 +958,8 @@ async def papertrade_decision_insert(
                        其余可拼 stock_indicators / stock_financials 摘要。
                        非法 JSON 会降级为空；**不要**把大段中文塞进 reason 冒充计划。
                        **buy 硬门**：必须含可解析 ``plan_stop_pct``(<0) 或
-                       ``plan_stop_price``(>0)，否则拒绝落库。
+                       ``plan_stop_price``(>0)；多因子盘还须同时含止盈计划
+                       ``plan_take_price``(>0) 或 ``plan_take_pct``(>0)，否则拒绝落库。
                        **buy 宏观硬门（多因子盘）**：还必须含 ``macro_regime``
                        （进攻/中性/防御）与 ``macro_note``（≥8 字依据）；宏观事件表有
                        severity≥4 的 risk_off 进行中事件时不得标进攻。
@@ -1073,9 +1080,10 @@ async def papertrade_trade_insert(
     对照：偏差 > 3% 时拒绝落库（说明传入的是入池旧价/隔夜价），返回错误
     让 LLM 重新走 match_order。行情不可达时放行（match_order 已把过关）。
 
-    **buy 入场止损硬门**：``side='buy'`` 时 ``snapshot``（或 ``indicators``）JSON
-    必须含可解析 ``plan_stop_pct``(<0) 或 ``plan_stop_price``(>0)；也接受
-    ``stop_pct`` / ``stop_price`` 别名。尾部多余字段会忽略，不再因 JSON 写坏整笔拒单。
+    **buy 入场计划硬门**：``side='buy'`` 时 ``snapshot``（或 ``indicators``）JSON
+    必须含可解析 ``plan_stop_pct``(<0) 或 ``plan_stop_price``(>0)（接受 ``stop_pct`` /
+    ``stop_price`` 别名）；多因子盘还必须含止盈 ``plan_take_price``(>0) 或
+    ``plan_take_pct``(>0)（只写百分比会自动按成交均价折算成 ``plan_take_price`` 落库）。
 
     **buy 宏观硬门（多因子盘）**：同一 JSON 顶层还必须带 ``macro_regime``
     （进攻 / 中性 / 防御）与 ``macro_note``（≥8 字宏观依据）；宏观事件表里有
@@ -1190,6 +1198,348 @@ async def papertrade_position_upsert(
     if qty != existing.qty:
         ignored = f"；已忽略传入 qty={qty}（股数={existing.qty} 由流水维护）"
     return f"ok pos_id={pos_id} qty={existing.qty}{ignored}"
+
+
+_PLAN_REVISION_TYPES: frozenset[str] = frozenset({"backfill", "trail_stop", "macro_tighten", "take_adjust"})
+_PLAN_REASON_MIN_LEN: int = 15
+_PLAN_COOLDOWN_HOURS: float = 20.0
+_PLAN_MIN_STEP_PCT: float = 0.02
+_PLAN_NEAR_TAKE_LOCK_PCT: float = 0.02
+_PLAN_MAX_TAKE_RAISE_PCT: float = 0.20
+
+
+def _same_day_or_within_cooldown(last_touch: _dt.datetime, now: _dt.datetime) -> tuple[bool, float]:
+    """判断是否与上次建仓/修订在同一自然日或未满冷却小时数。"""
+    lt = last_touch.replace(tzinfo=None) if last_touch.tzinfo is not None else last_touch
+    nw = now.replace(tzinfo=None) if now.tzinfo is not None else now
+    elapsed_h = (nw - lt).total_seconds() / 3600.0
+    if nw.date() == lt.date() or elapsed_h < _PLAN_COOLDOWN_HOURS:
+        return True, max(0.0, elapsed_h)
+    return False, elapsed_h
+
+
+def _validate_plan_update(
+    pos: SayuPaperPosition,
+    *,
+    mode: str,
+    current_price: float,
+    revision_type: str,
+    reason: str,
+    plan_stop_price: float = 0.0,
+    plan_stop_pct: float = 0.0,
+    plan_take_price: float = 0.0,
+    plan_thesis: str = "",
+    now: _dt.datetime | None = None,
+) -> tuple[str, dict[str, object]]:
+    """校验持仓止损/止盈计划修订硬闸；返回 ``(拒绝理由或空串, 归一后的更新载荷)``。"""
+    rev = (revision_type or "").strip().lower()
+    if rev not in _PLAN_REVISION_TYPES:
+        allowed = " / ".join(sorted(_PLAN_REVISION_TYPES))
+        return f"⚠️ revision_type 非法（{revision_type!r}），只能是 {allowed} 之一；已拒绝修订。", {}
+
+    clean_reason = "".join(ch if ch.isprintable() else " " for ch in (reason or "")).strip()
+    if len(clean_reason) < _PLAN_REASON_MIN_LEN:
+        return (
+            f"⚠️ reason 过短（需 ≥{_PLAN_REASON_MIN_LEN} 字，须写明原计划 → 新证据 → 修订原因）；已拒绝修订。",
+            {},
+        )
+
+    if plan_stop_price < 0 or plan_take_price < 0:
+        return "⚠️ plan_stop_price / plan_take_price 不能为负数；已拒绝修订。", {}
+
+    want_stop_pct: float | None = None
+    if plan_stop_pct != 0:
+        want_stop_pct = normalize_stop_pct(plan_stop_pct)
+        if want_stop_pct is None:
+            return "⚠️ plan_stop_pct 必须是负小数（如 -0.06）；已拒绝修订。", {}
+
+    avg_cost = float(pos.avg_cost or 0.0)
+    want_stop_price: float | None = round(float(plan_stop_price), 4) if plan_stop_price > 0 else None
+    if want_stop_price is None and want_stop_pct is not None and avg_cost > 0:
+        want_stop_price = round(avg_cost * (1.0 + want_stop_pct), 4)
+    elif want_stop_price is not None and want_stop_pct is None and avg_cost > 0:
+        # 仅低于成本时反推负止损幅度；保本/盈利保护止损留空 pct，不污染负小数语义
+        if want_stop_price < avg_cost:
+            want_stop_pct = round((want_stop_price - avg_cost) / avg_cost, 4)
+
+    want_take_price: float | None = round(float(plan_take_price), 4) if plan_take_price > 0 else None
+    want_thesis: str | None = plan_thesis.strip() or None
+
+    rules = MODE_RULES[mode if mode in MODE_RULES else "balanced"]
+    mode_stop_pct = float(rules["stop_loss"])
+    mode_hard_stop = round(avg_cost * (1.0 + mode_stop_pct), 4) if avg_cost > 0 else 0.0
+
+    old_stop_pct = normalize_stop_pct(pos.plan_stop_pct)
+    old_stop: float | None = (
+        round(float(pos.plan_stop_price), 4)
+        if pos.plan_stop_price is not None and pos.plan_stop_price > 0
+        else (round(avg_cost * (1.0 + old_stop_pct), 4) if old_stop_pct is not None and avg_cost > 0 else None)
+    )
+    old_take: float | None = (
+        round(float(pos.plan_take_price), 4) if pos.plan_take_price is not None and pos.plan_take_price > 0 else None
+    )
+    old_thesis: str | None = (pos.plan_thesis or "").strip() or None
+
+    # 重传与现有计划完全相同的字段视为未变更（no-op），避免误判为放宽或微调
+    if want_stop_price is not None and old_stop is not None and abs(want_stop_price - old_stop) < 1e-4:
+        want_stop_price = None
+        want_stop_pct = None
+    if want_take_price is not None and old_take is not None and abs(want_take_price - old_take) < 1e-4:
+        want_take_price = None
+    if want_thesis is not None and old_thesis is not None and want_thesis == old_thesis:
+        want_thesis = None
+
+    if want_stop_price is None and want_take_price is None and want_thesis is None:
+        return "⚠️ 未提供任何有实质变更的止损/止盈/逻辑字段（未变更字段可留空）；无需修订。", {}
+
+    now_dt = now or _dt.datetime.now()
+
+    if rev == "backfill":
+        if want_stop_price is not None and old_stop is not None:
+            return (
+                f"⚠️ {pos.stock_code} 已有止损计划（{old_stop:.2f}），不能用 backfill 覆盖；"
+                "如需上移保护请改用 trail_stop 或 macro_tighten。",
+                {},
+            )
+        if want_take_price is not None and old_take is not None:
+            return (
+                f"⚠️ {pos.stock_code} 已有止盈计划（{old_take:.2f}），不能用 backfill 覆盖；"
+                "如需调整请改用 take_adjust 或 macro_tighten。",
+                {},
+            )
+        if want_stop_price is None and want_take_price is None and old_thesis is not None:
+            return f"⚠️ {pos.stock_code} 已有计划逻辑，backfill 仅用于补齐缺失字段。", {}
+    else:
+        last_touch = pos.plan_updated_at or pos.opened_at
+        if last_touch is not None:
+            blocked, elapsed_h = _same_day_or_within_cooldown(last_touch, now_dt)
+            if blocked:
+                return (
+                    f"⚠️ 计划修订冷却中：{pos.stock_code} 距上次建仓/修订仅 {elapsed_h:.1f} 小时"
+                    f"（同交易日内或不足 {_PLAN_COOLDOWN_HOURS:.0f} 小时禁止重复改计划）；"
+                    "请按现行计划执行或改 hold。",
+                    {},
+                )
+        if rev == "trail_stop" and want_stop_price is None:
+            return "⚠️ trail_stop 必须提供上移后的 plan_stop_price（或 plan_stop_pct）。", {}
+        if rev == "take_adjust" and want_take_price is None:
+            return "⚠️ take_adjust 必须提供新的 plan_take_price。", {}
+        if rev == "macro_tighten" and want_stop_price is None and want_take_price is None:
+            return "⚠️ macro_tighten 必须上移止损或下调止盈，不能只改 plan_thesis。", {}
+
+    if want_stop_price is not None:
+        if mode_hard_stop > 0 and want_stop_price < mode_hard_stop - 1e-4:
+            return (
+                f"⚠️ 新止损价 {want_stop_price:.2f} 低于模式硬底线 {mode_hard_stop:.2f}"
+                f"（{mode} {mode_stop_pct:.0%}）；已拒绝修订。",
+                {},
+            )
+        if current_price > 0 and want_stop_price >= current_price:
+            return (
+                f"⚠️ 新止损价 {want_stop_price:.2f} ≥ 当前现价 {current_price:.2f}："
+                "现价已低于该防守位，请直接走卖出流程而非修改计划。",
+                {},
+            )
+        if rev != "backfill":
+            base_stop = old_stop if old_stop is not None else mode_hard_stop
+            if base_stop > 0 and want_stop_price <= base_stop:
+                return (
+                    f"⚠️ 严禁放宽止损：新止损 {want_stop_price:.2f} ≤ 原有效止损 {base_stop:.2f}；"
+                    "止损只能单向上移收紧，已拒绝修订。",
+                    {},
+                )
+            if old_stop is not None and old_stop > 0:
+                step = abs(want_stop_price - old_stop) / old_stop
+                if step < _PLAN_MIN_STEP_PCT:
+                    return (
+                        f"⚠️ 止损变动过小（{old_stop:.2f} → {want_stop_price:.2f}，"
+                        f"仅 {step:.2%} < {_PLAN_MIN_STEP_PCT:.0%} 台阶门槛）；拒绝高频微调。",
+                        {},
+                    )
+
+    if want_take_price is not None:
+        if current_price > 0 and want_take_price <= current_price:
+            return (
+                f"⚠️ 新止盈价 {want_take_price:.2f} ≤ 当前现价 {current_price:.2f}："
+                "现价已达到目标位，请直接走卖出止盈流程而非下调计划。",
+                {},
+            )
+        if rev != "backfill" and old_take is not None and old_take > 0:
+            step = abs(want_take_price - old_take) / old_take
+            if step < _PLAN_MIN_STEP_PCT:
+                return (
+                    f"⚠️ 止盈变动过小（{old_take:.2f} → {want_take_price:.2f}，"
+                    f"仅 {step:.2%} < {_PLAN_MIN_STEP_PCT:.0%} 台阶门槛）；拒绝高频微调。",
+                    {},
+                )
+            if want_take_price > old_take:
+                if rev in ("macro_tighten", "trail_stop"):
+                    return (
+                        f"⚠️ {rev} 只允许收紧风控，不得上调止盈价"
+                        f"（{old_take:.2f} → {want_take_price:.2f}）；已拒绝修订。",
+                        {},
+                    )
+                if current_price > 0 and (old_take - current_price) / old_take < _PLAN_NEAR_TAKE_LOCK_PCT:
+                    return (
+                        f"⚠️ 现价 {current_price:.2f} 距原止盈 {old_take:.2f} 已不足 "
+                        f"{_PLAN_NEAR_TAKE_LOCK_PCT:.0%}，禁止临门抬高止盈逃避落袋；请按原计划执行。",
+                        {},
+                    )
+                raise_pct = (want_take_price - old_take) / old_take
+                if raise_pct > _PLAN_MAX_TAKE_RAISE_PCT:
+                    return (
+                        f"⚠️ 单次上调止盈幅度 {raise_pct:.1%} 超过上限 "
+                        f"{_PLAN_MAX_TAKE_RAISE_PCT:.0%}（{old_take:.2f} → {want_take_price:.2f}）；已拒绝修订。",
+                        {},
+                    )
+
+    eff_stop = want_stop_price if want_stop_price is not None else old_stop
+    eff_take = want_take_price if want_take_price is not None else old_take
+    if eff_stop is not None and eff_take is not None and eff_take <= eff_stop:
+        return f"⚠️ 止盈价 {eff_take:.2f} 必须高于止损价 {eff_stop:.2f}；已拒绝修订。", {}
+
+    clear_stop_pct = bool(
+        want_stop_price is not None and want_stop_pct is None and avg_cost > 0 and want_stop_price >= avg_cost
+    )
+    new_stop_pct: float | None = (
+        None if clear_stop_pct else (want_stop_pct if want_stop_pct is not None else old_stop_pct)
+    )
+
+    payload: dict[str, object] = {
+        "revision_type": rev,
+        "reason": clean_reason,
+        "plan_stop_price": want_stop_price,
+        "plan_stop_pct": want_stop_pct,
+        "clear_stop_pct": clear_stop_pct,
+        "plan_take_price": want_take_price,
+        "plan_thesis": want_thesis,
+        "increment_rev": rev != "backfill",
+        "old": {
+            "plan_stop_price": old_stop,
+            "plan_stop_pct": old_stop_pct,
+            "plan_take_price": old_take,
+            "plan_thesis": old_thesis,
+        },
+        "new": {
+            "plan_stop_price": eff_stop,
+            "plan_stop_pct": new_stop_pct,
+            "plan_take_price": eff_take,
+            "plan_thesis": want_thesis if want_thesis is not None else old_thesis,
+        },
+    }
+    return "", payload
+
+
+@ai_tools(
+    covers=["补齐或低频修订已有持仓的止损止盈计划（不改股数）"],
+    category="default",
+    capability_domain="AI模拟盘",
+    visible_when=_visible_to_papertrade_agent,
+)
+async def papertrade_position_plan_update(
+    ctx: RunContext[ToolContext],
+    stock_code: str,
+    revision_type: str,
+    reason: str,
+    plan_stop_price: float = 0.0,
+    plan_stop_pct: float = 0.0,
+    plan_take_price: float = 0.0,
+    plan_thesis: str = "",
+) -> str:
+    """补齐老仓缺失计划，或极低频修订已有持仓的止损/止盈计划（仅 papertrade_*_agent 调用）。
+
+    **严禁用于高频动态改点位**：绝大多数心跳（>95%）都不应调用本工具。仅在以下场景使用：
+      - ``revision_type="backfill"``：老持仓缺失 ``plan_stop_price`` 或 ``plan_take_price``
+        时的首次补齐（豁免冷却期，但不能覆盖已有计划）。
+      - ``revision_type="trail_stop"``：大幅浮盈（如 ≥+8%）后单向上移追踪/保本止损锁利。
+      - ``revision_type="macro_tighten"``：宏观降档或重大 risk_off 事件时收紧止损/下调止盈。
+      - ``revision_type="take_adjust"``：有效突破原结构且有新催化时调整止盈目标。
+
+    代码硬闸（违规直接拒写）：
+      1. 止损只许上移收紧、绝不放宽，且不低于模式硬底线、不高于当前市价；
+      2. 非 backfill 受跨日冷却（同交易日内或不足 20 小时拒绝重复修改）；
+      3. 已有数值单次改动幅度须 ≥2%，拒绝微小抖动；
+      4. 现价距原止盈不足 2% 时禁止临时抬高止盈，单次上调上限 +20%；
+      5. 本工具不改持仓股数/现金，并自动向决策日志写入 old → new 审计记录。
+    """
+    acc, note = await _write_account()
+    if acc is None or acc.id is None:
+        return note or "⚠️ 无法确定要写入的模拟盘。"
+    denied: str = await _deny_write(acc)
+    if denied:
+        return denied
+
+    pos = await db.PaperPositionRepo.get(acc.id, stock_code)
+    if pos is None or pos.qty <= 0:
+        return f"⚠️ 模拟盘「{acc.name}」当前未持有 {stock_code}，无法修订持仓计划。"
+
+    live_price: float = 0.0
+    if pos.secid:
+        try:
+            q = await quote_service.get_quote(pos.secid)
+            if q is not None and q > 0:
+                live_price = float(q)
+        except Exception as e:
+            _gslogger.debug(f"[SayuStock][PaperTrade] plan_update quote failed {stock_code}: {e}")
+    if live_price <= 0:
+        live_price = float(pos.last_quote_price or pos.avg_cost or 0.0)
+
+    now = _dt.datetime.now()
+    err, payload = _validate_plan_update(
+        pos,
+        mode=acc.mode or "balanced",
+        current_price=live_price,
+        revision_type=revision_type,
+        reason=reason,
+        plan_stop_price=plan_stop_price,
+        plan_stop_pct=plan_stop_pct,
+        plan_take_price=plan_take_price,
+        plan_thesis=plan_thesis,
+        now=now,
+    )
+    if err:
+        return err
+
+    rev_tag = str(payload["revision_type"])
+    clean_reason = str(payload["reason"])
+    audit_reason = f"[计划修订:{rev_tag}] {clean_reason}"
+    audit_ind = json.dumps(
+        {
+            "plan_revision": {
+                "type": rev_tag,
+                "current_price": round(live_price, 4),
+                "old": payload["old"],
+                "new": payload["new"],
+            }
+        },
+        ensure_ascii=False,
+    )
+    sp_val = payload["plan_stop_price"]
+    spct_val = payload["plan_stop_pct"]
+    tp_val = payload["plan_take_price"]
+    th_val = payload["plan_thesis"]
+
+    updated, decision_id = await db.PaperPositionRepo.update_plan(
+        acc.id,
+        pos.stock_code,
+        plan_stop_price=float(sp_val) if isinstance(sp_val, (int, float)) else None,
+        plan_stop_pct=float(spct_val) if isinstance(spct_val, (int, float)) else None,
+        clear_stop_pct=bool(payload["clear_stop_pct"]),
+        plan_take_price=float(tp_val) if isinstance(tp_val, (int, float)) else None,
+        plan_thesis=str(th_val) if isinstance(th_val, str) else None,
+        updated_at=now,
+        increment_rev=bool(payload["increment_rev"]),
+        audit_reason=audit_reason,
+        audit_indicators=audit_ind,
+    )
+    if updated is None:
+        return f"⚠️ {stock_code} 持仓已不存在，修订未落库。"
+    return (
+        f"ok plan_updated {updated.stock_code} ({rev_tag}) "
+        f"stop={updated.plan_stop_price} stop_pct={updated.plan_stop_pct} "
+        f"take={updated.plan_take_price} rev_count={updated.plan_rev_count} "
+        f"audit_decision_id={decision_id}"
+    )
 
 
 @ai_tools(

@@ -678,18 +678,16 @@ async def _heal_positions_plan(
     can_trade_snap: bool = False,
     can_decision_ind: bool = False,
 ) -> int:
-    """自愈持仓入场计划：缺 plan_* 字段的持仓，按「买入流水 snapshot → 决策
-
-    indicators」顺序补 NULL 字段；已有值一律保留（只补不覆写），无新增不计数。
-    """
+    """自愈持仓入场计划：归一脏百分点单位，并按「买入流水 → 决策」补 NULL 字段。"""
     pos_rows = (
         await session.execute(
             text(
-                "SELECT id, account_id, stock_code, "
+                "SELECT id, account_id, stock_code, avg_cost, "
                 "plan_stop_price, plan_stop_pct, plan_take_price, plan_thesis "
                 "FROM sayupaperposition "
                 "WHERE qty > 0 AND account_id > 0 AND ("
                 "plan_stop_price IS NULL OR plan_stop_pct IS NULL "
+                "OR plan_stop_pct <= -1.0 "
                 "OR plan_take_price IS NULL OR plan_thesis IS NULL)"
             )
         )
@@ -697,26 +695,24 @@ async def _heal_positions_plan(
     if not pos_rows:
         return 0
 
-    from ...stock_papertrade.strategy import _as_finite_float, parse_llm_json_object, normalize_plan_indicators
-
-    def _vals(d: dict[str, object]) -> tuple[float | None, float | None, float | None, str | None]:
-        raw_th = str(d.get("plan_thesis") or "").strip()
-        return (
-            _as_finite_float(d.get("plan_stop_price")),
-            _as_finite_float(d.get("plan_stop_pct")),
-            _as_finite_float(d.get("plan_take_price")),
-            raw_th if raw_th else None,
-        )
+    from ...stock_papertrade.strategy import (
+        _as_finite_float,
+        normalize_stop_pct,
+        resolve_plan_prices,
+        parse_llm_json_object,
+    )
 
     healed = 0
     for row in pos_rows:
         pid, aid, code = int(row[0]), int(row[1]), str(row[2] or "")
-        cur = (
-            _as_finite_float(row[3]),
-            _as_finite_float(row[4]),
-            _as_finite_float(row[5]),
-            str(row[6] or "").strip() or None,
-        )
+        avg_cost = float(row[3] or 0.0)
+        raw_sp = _as_finite_float(row[4])
+        raw_spct = _as_finite_float(row[5])
+        raw_tp = _as_finite_float(row[6])
+        raw_th = str(row[7] or "").strip() or None
+        cur = (raw_sp, raw_spct, raw_tp, raw_th)
+
+        fixed_spct = normalize_stop_pct(raw_spct) if raw_spct is not None else None
         plan_dict: dict[str, object] = {}
 
         if can_trade_snap:
@@ -731,9 +727,9 @@ async def _heal_positions_plan(
                 )
             ).first()
             if t_row and t_row[0]:
-                plan_dict = normalize_plan_indicators(parse_llm_json_object(str(t_row[0])))
+                plan_dict = parse_llm_json_object(str(t_row[0]))
 
-        sp, spct, tp, th = _vals(plan_dict)
+        sp, spct, tp, th = resolve_plan_prices(plan_dict, entry_price=avg_cost)
         if can_decision_ind and (sp is None or spct is None or tp is None or th is None):
             d_row = (
                 await session.execute(
@@ -746,7 +742,10 @@ async def _heal_positions_plan(
                 )
             ).first()
             if d_row and d_row[0]:
-                d_sp, d_spct, d_tp, d_th = _vals(normalize_plan_indicators(parse_llm_json_object(str(d_row[0]))))
+                d_sp, d_spct, d_tp, d_th = resolve_plan_prices(
+                    parse_llm_json_object(str(d_row[0])),
+                    entry_price=avg_cost,
+                )
                 if sp is None:
                     sp = d_sp
                 if spct is None:
@@ -756,12 +755,13 @@ async def _heal_positions_plan(
                 if th is None:
                     th = d_th
 
-        new = (
-            cur[0] if cur[0] is not None else sp,
-            cur[1] if cur[1] is not None else spct,
-            cur[2] if cur[2] is not None else tp,
-            cur[3] if cur[3] is not None else th,
-        )
+        new_spct = fixed_spct if fixed_spct is not None else spct
+        new_sp = raw_sp if raw_sp is not None else sp
+        if new_sp is None and new_spct is not None and avg_cost > 0:
+            new_sp = round(avg_cost * (1.0 + new_spct), 4)
+        new_tp = raw_tp if raw_tp is not None else tp
+        new_th = raw_th if raw_th is not None else th
+        new = (new_sp, new_spct, new_tp, new_th)
         if new != cur:
             await session.execute(
                 text(
@@ -776,7 +776,7 @@ async def _heal_positions_plan(
             )
             healed += 1
             logger.info(
-                f"{_HEAL_LOG} 持仓止损自愈: {code} (id={pid}) -> "
+                f"{_HEAL_LOG} 持仓计划自愈: {code} (id={pid}) -> "
                 f"stop_price={new[0]} stop_pct={new[1]} take_price={new[2]}"
             )
     return healed

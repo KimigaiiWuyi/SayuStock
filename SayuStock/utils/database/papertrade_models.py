@@ -96,6 +96,8 @@ class SayuPaperPosition(BaseIDModel, table=True):
     plan_stop_pct: Optional[float] = Field(default=None, title="计划止损幅度（负小数）")
     plan_take_price: Optional[float] = Field(default=None, title="计划止盈价")
     plan_thesis: Optional[str] = Field(default=None, title="入场逻辑描述")
+    plan_updated_at: Optional[datetime] = Field(default=None, title="计划上次修订时间")
+    plan_rev_count: int = Field(default=0, title="计划累计修订次数")
 
 
 # ============================================================
@@ -356,6 +358,9 @@ exec_list.extend(
         "ALTER TABLE sayupaperposition ADD COLUMN plan_take_price REAL;",
         "ALTER TABLE sayupaperposition ADD COLUMN plan_take_price DOUBLE;",
         "ALTER TABLE sayupaperposition ADD COLUMN plan_thesis TEXT;",
+        "ALTER TABLE sayupaperposition ADD COLUMN plan_updated_at DATETIME;",
+        "ALTER TABLE sayupaperposition ADD COLUMN plan_updated_at TIMESTAMP;",
+        "ALTER TABLE sayupaperposition ADD COLUMN plan_rev_count INTEGER DEFAULT 0;",
     ]
 )
 

@@ -42,6 +42,31 @@ def _as_finite_float(value: object) -> float | None:
 _STOP_PCT_ALIASES: tuple[str, ...] = ("plan_stop_pct", "stop_pct", "stop_loss_pct")
 _STOP_PRICE_ALIASES: tuple[str, ...] = ("plan_stop_price", "stop_price", "stop_loss_price")
 _TAKE_PRICE_ALIASES: tuple[str, ...] = ("plan_take_price", "take_price", "take_profit_price", "take_profit")
+_TAKE_PCT_ALIASES: tuple[str, ...] = ("plan_take_pct", "take_pct", "take_profit_pct")
+
+
+def normalize_stop_pct(value: object) -> float | None:
+    """把止损幅度归一为 (-1, 0) 负小数；-5.0 这类百分点值自动除 100。"""
+    f = _as_finite_float(value)
+    if f is None or f >= 0:
+        return None
+    if -100.0 < f <= -1.0:
+        f = round(f / 100.0, 6)
+    if not (-1.0 < f < 0.0):
+        return None
+    return f
+
+
+def normalize_take_pct(value: object) -> float | None:
+    """把止盈幅度归一为 (0, 5.0] 正小数；10.0 这类百分点值自动除 100。"""
+    f = _as_finite_float(value)
+    if f is None or f <= 0:
+        return None
+    if 1.0 <= f <= 500.0:
+        f = round(f / 100.0, 6)
+    if not (0.0 < f <= 5.0):
+        return None
+    return f
 
 
 def parse_llm_json_object(raw: str) -> dict[str, object]:
@@ -67,7 +92,7 @@ def parse_llm_json_object(raw: str) -> dict[str, object]:
 
 
 def normalize_plan_indicators(indicators: Mapping[str, object]) -> dict[str, object]:
-    """摊平嵌套 ``indicators``，并把 stop_pct / stop_price 别名写成 plan_stop_*。"""
+    """摊平嵌套 ``indicators``，补齐止损/止盈别名并归一百分点单位。"""
     out: dict[str, object] = {}
     nested = indicators.get("indicators")
     if isinstance(nested, dict):
@@ -81,6 +106,9 @@ def normalize_plan_indicators(indicators: Mapping[str, object]) -> dict[str, obj
             if alias in out:
                 out["plan_stop_pct"] = out[alias]
                 break
+    norm_stop = normalize_stop_pct(out.get("plan_stop_pct"))
+    if norm_stop is not None:
+        out["plan_stop_pct"] = norm_stop
     if _as_finite_float(out.get("plan_stop_price")) is None:
         for alias in _STOP_PRICE_ALIASES[1:]:
             if alias in out:
@@ -91,6 +119,14 @@ def normalize_plan_indicators(indicators: Mapping[str, object]) -> dict[str, obj
             if alias in out:
                 out["plan_take_price"] = out[alias]
                 break
+    if _as_finite_float(out.get("plan_take_pct")) is None:
+        for alias in _TAKE_PCT_ALIASES[1:]:
+            if alias in out:
+                out["plan_take_pct"] = out[alias]
+                break
+    norm_take = normalize_take_pct(out.get("plan_take_pct"))
+    if norm_take is not None:
+        out["plan_take_pct"] = norm_take
     return out
 
 
@@ -100,13 +136,49 @@ def indicators_have_entry_stop(indicators: dict[str, object]) -> bool:
     接受 ``stop_pct`` / ``stop_price`` 别名；嵌套在 ``indicators`` 里的字段也会摊平。
     """
     ind = normalize_plan_indicators(indicators)
-    pct = _as_finite_float(ind.get("plan_stop_pct"))
-    if pct is not None and pct < 0:
+    pct = normalize_stop_pct(ind.get("plan_stop_pct"))
+    if pct is not None:
         return True
     price = _as_finite_float(ind.get("plan_stop_price"))
     if price is not None and price > 0:
         return True
     return False
+
+
+def indicators_have_entry_take(indicators: dict[str, object]) -> bool:
+    """buy 落库前（多因子）：须有可解析数值止盈（price>0 或 pct>0）。"""
+    ind = normalize_plan_indicators(indicators)
+    price = _as_finite_float(ind.get("plan_take_price"))
+    if price is not None and price > 0:
+        return True
+    pct = normalize_take_pct(ind.get("plan_take_pct"))
+    return pct is not None
+
+
+def resolve_plan_prices(
+    indicators: Mapping[str, object],
+    *,
+    entry_price: float = 0.0,
+) -> tuple[float | None, float | None, float | None, str | None]:
+    """从快照提取结构化计划，并按入场价把百分比折算为具体止损/止盈价。"""
+    ind = normalize_plan_indicators(indicators)
+    sp = _as_finite_float(ind.get("plan_stop_price"))
+    if sp is not None and sp <= 0:
+        sp = None
+    spct = normalize_stop_pct(ind.get("plan_stop_pct"))
+    tp = _as_finite_float(ind.get("plan_take_price"))
+    if tp is not None and tp <= 0:
+        tp = None
+    tpct = normalize_take_pct(ind.get("plan_take_pct"))
+    if entry_price > 0:
+        if sp is None and spct is not None:
+            sp = round(entry_price * (1.0 + spct), 4)
+        elif spct is None and sp is not None and sp < entry_price:
+            spct = round((sp - entry_price) / entry_price, 4)
+        if tp is None and tpct is not None:
+            tp = round(entry_price * (1.0 + tpct), 4)
+    raw_th = str(ind.get("plan_thesis") or "").strip()
+    return sp, spct, tp, (raw_th if raw_th else None)
 
 
 # 宏观事件硬闸注入的内部键（``ai_tools._gate_entry`` 写入，LLM 不该自己填）

@@ -458,9 +458,10 @@ PAPERTRADE_DECISION_PROMPT = (
    独报 cash 当总资产）
 1.5 papertrade_position_list → 拿**含现价与入场计划的持仓列表**（current_price /
    market_value / unrealized_pnl / quote_source / **plan_stop_price** /
-   **plan_stop_pct** / **plan_take_price** / **plan_thesis**）
+   **plan_stop_pct** / **plan_take_price** / **plan_thesis** /
+   **plan_updated_at** / **plan_rev_count**）
    - 持仓表已持久化记录买入时的结构化止损/止盈计划，回看持仓时**直接读取本工具返回的
-     plan_stop_price / plan_stop_pct 即可**，无需依赖大段 snapshot 倒查！
+     plan_stop_price / plan_stop_pct / plan_take_price 即可**，无需依赖大段 snapshot 倒查！
    - 工具内部已自动刷报价（60s TTL 内存复用 + 东财 push2）；你**不需要**
      再单独调 get_single_stock 拿 f43——既慢又重复。
    - quote_source 字段语义：
@@ -468,23 +469,34 @@ PAPERTRADE_DECISION_PROMPT = (
        "db"   = DB 有缓存但超过 60s，估值偏旧但有数据
        "cost" = 从未刷过价（首次建仓刚 upsert 时），用 avg_cost 兜底显示
 
-1.6 **持仓入场计划回看（有持仓时必做 · 卖出一致性）**
-   对每只持仓，在评估卖/持之前：
-   a. **优先直接以 1.5 ``papertrade_position_list`` 返回的 ``plan_stop_price`` /
-      ``plan_stop_pct`` / ``plan_take_price`` / ``plan_thesis`` 为准**；
-   b. 若持仓中上述计划字段均为空（历史老数据），再通过
-      ``papertrade_trade_list(stock_code=该股, limit=10)``（snapshot）或
-      ``papertrade_decision_list(stock_code=该股, limit=10)``（indicators）补查一次；
-   c. 仍无任何计划时才记「未写结构化计划」，由模式默认止损兜底。
+1.6 **持仓计划核对与极低频审视（有持仓时必做 · 卖出一致性）**
+   对每只持仓，在评估卖/持之前按以下三步处理：
+   a. **第一步（执行优先）**：直接以 1.5 返回的 ``plan_stop_price`` / ``plan_stop_pct`` /
+      ``plan_take_price`` / ``plan_thesis`` 核对现价。若已触发止损或止盈，直接进入卖出评估，
+      **严禁临阵改计划逃避止损或抬高止盈逃避落袋**。
+   b. **第二步（老仓补缺）**：若历史持仓缺失 ``plan_take_price`` 或 ``plan_stop_price``
+      （为空），先确认 1.5 无值后再可查一次 ``papertrade_trade_list`` / ``papertrade_decision_list``；
+      确实未设的，结合当前成本、现价、日线支撑/压力位与宏观档位，调用
+      ``papertrade_position_plan_update(revision_type="backfill", ...)`` 一次性补全结构化止损/止盈，
+      避免长期无止盈裸奔。
+   c. **第三步（审视修订 · 极低意愿 · 默认不动）**：若持仓**已有完整止损/止盈计划**，
+      **绝大多数心跳（>95%）都不应修改计划**；常规盘中波动、指标小幅变化或情绪起伏一律按原计划执行。
+      只有当原计划相对当前仓位、浮盈亏与宏观环境已**绝对不合适**，且满足以下 3 类强条件之一时，
+      才允许调 ``papertrade_position_plan_update``（系统带跨日冷却、≥2% 台阶与方向硬闸）：
+      - ``trail_stop``（浮盈保护）：浮盈已达 +8% 以上、原止损仍远在成本下方，可将止损**单向上移**至
+        成本附近（保本）或日线 MA20 / 关键支撑位，避免大幅浮盈坐过山车；
+      - ``macro_tighten``（宏观/风险收紧）：宏观档位明显恶化（如中性→防御）或行业出现新 risk_off
+        重大事件但尚未破位清仓，允许上移止损或下调过高的止盈目标；
+      - ``take_adjust``（台阶突破）：放量有效突破原压力结构且有新基本面/事件催化，原止盈明显失真
+        （现价距原止盈 <2% 时硬闸禁止上调）。
+      若 ``plan_rev_count`` 已 ≥2 或 ``plan_updated_at`` 较近，说明该仓已多次修订，更应保持克制。
    **卖出纪律**：
-   - 若有止损/止盈价或幅度，本轮 **先按该计划核对现价**，再谈技术/事件改判；
    - 未触发计划止损却因「本轮重新算了一个完全不同的止损位」而卖 = **禁止**
-     （除非出现新的硬风控：模式默认止损线、总回撤熔断、T+1/跌停无法成交等）；
-   - 若要**收紧/放宽**原计划，reason 必须写清：原计划是什么 → 新证据是什么 →
-     为何覆盖；不得 silently 换一套数字。
+     （除非出现新的硬风控：模式默认止损线、总回撤熔断、宏观降档/逻辑证伪覆盖）；
+   - 严禁放宽止损（代码硬闸直接拒绝）；若要覆盖原计划卖出，reason 必须写清：
+     原计划是什么 → 新证据是什么 → 为何覆盖；不得 silently 换一套数字。
    - 模式默认止损（balanced 约 -8% / aggressive -12% / conservative -5%，相对成本）
-     仅在**没有**可解析入场计划时作为兜底，或作为「不得更松」的硬底线
-     （计划止损更宽时，仍受模式硬止损约束）。
+     作为「不得更松」的硬底线（计划止损不得宽于模式硬止损）。
 
 == Phase 2：候选池合入 ==
 2. papertrade_watchlist_list + papertrade_agent_pool_list
@@ -612,14 +624,17 @@ PAPERTRADE_DECISION_PROMPT = (
         方式同上，改写 hold 决策。
    b. papertrade_trade_insert 写流水（成功则持仓已改，返回 position_qty）
       snapshot JSON 顶层写 plan_stop_pct(<0) 或 plan_stop_price(>0)
-      （也接受 stop_pct / stop_price）。**A 股 T+1 拦截（仅 sell）**：若返回
+      （也接受 stop_pct / stop_price），多因子盘同时写 plan_take_price(>0) 或
+      plan_take_pct(>0)（系统会自动按均价折算成 plan_take_price 落库）。
+      **A 股 T+1 拦截（仅 sell）**：若返回
       "⚠️ A 股 T+1 拦截：xxx"，说明该股今天已有买入，锁定股数不可卖——
       **此时立刻停止本轮该股票的后续步骤，不要再调 6c**，改走 step 7
       （只写一条 hold 决策，reason 里写清楚 T+1 拦截原因），或换一只
       非今日买入的标的重新从 6a 开始。
    c. papertrade_decision_insert 写决策（不要调 position_upsert 改股数）
       - **buy 时 indicators 必须带入场计划 + 宏观档位**（见 decision_insert 字段规约）：
-        plan_entry / plan_stop_pct 或 plan_stop_price（必填其一）/ 可选 plan_take_* /
+        plan_entry / plan_stop_pct 或 plan_stop_price（必填其一）/
+        多因子盘必填 plan_take_price 或 plan_take_pct /
         plan_thesis；**macro_regime**（进攻/中性/防御）与 **macro_note**（≥8 字）必填。
         papertrade_trade_insert 的 snapshot **写同一份 JSON**（两个工具都过同一道闸），
         便于后续只查流水也能回看。
